@@ -1,0 +1,53 @@
+     FF00             (         echo.asm):00001         CONBASE  EQU   $FF00      ; base address for console
+     FF00             (         echo.asm):00002         CONDATA  EQU   CONBASE    ; TX write / RX read
+     FF01             (         echo.asm):00003         CONSTAT  EQU   CONBASE+1  ; status
+     0001             (         echo.asm):00004         TXRDY    EQU   $01        ; status bit0
+     0002             (         echo.asm):00005         RXRDY    EQU   $02        ; status bit1
+                      (         echo.asm):00006         
+                      (         echo.asm):00007                 ORG   $E000
+E000 108EFF00         (         echo.asm):00008         START   LDY   #CONBASE
+E004 8EE039           (         echo.asm):00009                 LDX   #PROMPT
+                      (         echo.asm):00010         ; print prompt
+E007 E680             (         echo.asm):00011         PLOOP   LDB   ,X+
+E009 2704             (         echo.asm):00012                 BEQ   MAIN
+E00B 8D1E             (         echo.asm):00013                 BSR   TXB
+E00D 20F8             (         echo.asm):00014                 BRA   PLOOP
+                      (         echo.asm):00015         ; main echo loop
+E00F                  (         echo.asm):00016         MAIN    ; wait for a byte (poll RXRDY)
+E00F B6FF01           (         echo.asm):00017         RWAIT   LDA   CONSTAT
+E012 8502             (         echo.asm):00018                 BITA  #RXRDY
+E014 27F9             (         echo.asm):00019                 BEQ   RWAIT
+                      (         echo.asm):00020         
+                      (         echo.asm):00021                 ; read one byte
+E016 F6FF00           (         echo.asm):00022                 LDB   CONDATA
+                      (         echo.asm):00023         
+                      (         echo.asm):00024                 ; if CR, emit CR+LF
+E019 C10D             (         echo.asm):00025                 CMPB  #$0D
+E01B 2704             (         echo.asm):00026                 BEQ   CRLF
+                      (         echo.asm):00027         
+                      (         echo.asm):00028                 ; else echo the byte
+E01D 8D0C             (         echo.asm):00029                 BSR   TXB
+E01F 20EE             (         echo.asm):00030                 BRA   MAIN
+                      (         echo.asm):00031         
+E021 C60D             (         echo.asm):00032         CRLF    LDB   #$0D
+E023 8D06             (         echo.asm):00033                 BSR   TXB
+E025 C60A             (         echo.asm):00034                 LDB   #$0A
+E027 8D02             (         echo.asm):00035                 BSR   TXB
+E029 20E4             (         echo.asm):00036                 BRA   MAIN
+                      (         echo.asm):00037         
+                      (         echo.asm):00038         ; transmit B (poll TXRDY then write)
+E02B 3402             (         echo.asm):00039         TXB     PSHS  A
+E02D B6FF01           (         echo.asm):00040         TWAIT   LDA   CONSTAT
+E030 8501             (         echo.asm):00041                 BITA  #TXRDY
+E032 27F9             (         echo.asm):00042                 BEQ   TWAIT
+E034 F7FF00           (         echo.asm):00043                 STB   CONDATA
+E037 3582             (         echo.asm):00044                 PULS  A,PC
+                      (         echo.asm):00045         
+E039 5479706520736F6D (         echo.asm):00046         PROMPT  FCC   "Type something (CR=newline): "
+     657468696E672028
+     43523D6E65776C69
+     6E65293A20
+E056 0D0A00           (         echo.asm):00047                 FCB   $0D,$0A,0
+                      (         echo.asm):00048         
+                      (         echo.asm):00049                 ORG   $FFFE
+FFFE E000             (         echo.asm):00050                 FDB   START

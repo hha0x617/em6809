@@ -1,5 +1,6 @@
 [package]
 name = "mc6809emu"
+default-run = "mc6809emu"
 version = "0.1.0"
 edition = "2021"
 authors = ["hha0x617 <hha0x617@gmail.com>"]
@@ -8,7 +9,17 @@ repository = "https://github.com/hhagiwara/mc6809emu"
 homepage = "https://github.com/hhagiwara/mc6809emu"
 license = "MIT OR Apache-2.0"
 
+[features]
+# Enable the GUI register viewer (`--features gui`)
+gui = ["eframe", "winit", "egui_extras"]
+
+[dependencies.eframe]
+version = "0.27"
+optional = true
+
 [dependencies]
+winit = { version = "0.29", optional = true }
+egui_extras = { version = "0.27", optional = true }
 
 [lib]
 name = "mc6809emu"

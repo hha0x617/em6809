@@ -14,6 +14,27 @@ use mc6809emu::io::{ConsoleDev, IoBus};
 use mc6809emu::loader::{self, ImageFormat, LoadedImage};
 use mc6809emu::mmu::Mc6829;
 
+// GUI register viewer (no-op unless built with `--features gui`)
+mod regview;
+
+fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
+    ranges.sort_by_key(|(s, _)| *s);
+    let mut out: Vec<(u16, u16)> = Vec::new();
+    for (s, e) in ranges.into_iter() {
+        if out.is_empty() {
+            out.push((s, e));
+        } else {
+            let (last_s, last_e) = out.last_mut().unwrap();
+            if s <= *last_e { // overlap or touch
+                if e > *last_e { *last_e = e; }
+            } else {
+                out.push((s, e));
+            }
+        }
+    }
+    out
+}
+
 fn print_usage() {
     println!("mc6809emu - MC6809 software emulator\n");
     println!("Usage:\n  mc6809emu <image> [options]\n");
@@ -28,7 +49,7 @@ fn print_usage() {
     println!("  --dump-regs               Dump registers");
     println!("  --dump-mem 0xADDR LEN     Dump memory range");
     println!("  --dump-mem-ascii 0xA LEN  Dump ASCII view");
-    println!("  --disasm 0xADDR LEN       Disassemble range");
+    println!("  --disasm [ADDR] [LEN]     Disassemble range (ADDR defaults to program start PC; LEN defaults to program size if both omitted, or 64 if only ADDR given; numbers accept 0x, 0o, 0b or decimal)");
     println!("  --hex                     Use hex-style disassembly");
     println!("  --bp 0xADDR               Breakpoint (repeatable)");
     println!("\nConsole I/O:");
@@ -64,6 +85,34 @@ fn print_usage() {
 fn parse_hex(s: &str) -> Option<u16> {
     let t = s.trim_start_matches("0x");
     u16::from_str_radix(t, 16).ok()
+}
+
+fn parse_num_u16_any(s: &str) -> Option<u16> {
+    let sl = s.trim();
+    let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
+        (16, rest)
+    } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
+        (8, rest)
+    } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
+        (2, rest)
+    } else {
+        (10, sl)
+    };
+    u32::from_str_radix(digits, base).ok().and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None })
+}
+
+fn parse_num_usize_any(s: &str) -> Option<usize> {
+    let sl = s.trim();
+    let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
+        (16, rest)
+    } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
+        (8, rest)
+    } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
+        (2, rest)
+    } else {
+        (10, sl)
+    };
+    usize::from_str_radix(digits, base).ok()
 }
 
 fn parse_escapes(s: &str) -> Vec<u8> {
@@ -220,7 +269,8 @@ fn main() {
     let mut dump_mem: Option<(u16, usize)> = None;
     let mut dump_mem_ascii: Option<(u16, usize)> = None;
     let mut print_cycles = false;
-    let mut disasm_req: Option<(u16, usize)> = None;
+    // Disassembler request: (optional start address, optional length)
+    let mut disasm_req: Option<(Option<u16>, Option<usize>)> = None;
     let mut disasm_hex = false;
     let mut breakpoints: Vec<u16> = Vec::new();
     let mut run_forever: bool = false; // --run: execute until Ctrl+C
@@ -302,11 +352,23 @@ fn main() {
                 }
             }
             "--disasm" => {
-                if let (Some(addr), Some(len)) = (args.next(), args.next()) {
-                    if let (Some(a), Ok(l)) = (parse_hex(&addr), len.parse::<usize>()) {
-                        disasm_req = Some((a, l));
+                // Accept zero, one, or two params; autodetect bases (0x, 0o, 0b, or decimal)
+                let mut addr_opt: Option<u16> = None;
+                let mut len_opt: Option<usize> = None;
+                if let Some(peek) = args.peek() {
+                    if !peek.starts_with("--") {
+                        let tok = args.next().unwrap();
+                        // First positional is address; allow decimal too
+                        addr_opt = parse_num_u16_any(&tok).or_else(|| parse_num_usize_any(&tok).and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None }));
                     }
                 }
+                if let Some(peek) = args.peek() {
+                    if !peek.starts_with("--") {
+                        let tok = args.next().unwrap();
+                        len_opt = parse_num_usize_any(&tok);
+                    }
+                }
+                disasm_req = Some((addr_opt, len_opt));
             }
             "--hex" => {
                 disasm_hex = true;
@@ -659,8 +721,50 @@ fn main() {
         }
     }
 
-    if dump_regs {
-        debug::dump_registers(&cpu);
+    // Compute and report program start and sizes (loaded bytes vs PC-containing span)
+    let mut loaded_bytes_sum: usize = 0;
+    for (s, e) in &loaded.loaded_ranges {
+        loaded_bytes_sum = loaded_bytes_sum.saturating_add(e.wrapping_sub(*s) as usize);
+    }
+    let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+    let mut pc_span: Option<(u16, u16)> = None;
+    for (s, e) in &spans {
+        if *s <= cpu.r.pc && cpu.r.pc < *e { pc_span = Some((*s, *e)); break; }
+    }
+    if let Some((s, e)) = pc_span {
+        let span_bytes: usize = e.wrapping_sub(s) as usize; // e is exclusive
+        println!(
+            "Program: start ${:04X}, loaded {} bytes, span ${:04X}..${:04X} ({} bytes)",
+            cpu.r.pc, loaded_bytes_sum, s, e.wrapping_sub(1), span_bytes
+        );
+    } else {
+        // Fallback: print overall min..max if PC not within any span
+        let (mut min_start, mut max_end) = (u16::MAX, 0u16);
+        for (s, e) in &spans {
+            if *s < min_start { min_start = *s; }
+            if *e > max_end { max_end = *e; }
+        }
+        let span_bytes: usize = max_end.wrapping_sub(min_start) as usize;
+        println!(
+            "Program: start ${:04X}, loaded {} bytes, span ${:04X}..${:04X} ({} bytes)",
+            cpu.r.pc, loaded_bytes_sum, min_start, max_end.wrapping_sub(1), span_bytes
+        );
+    }
+
+    // If GUI is enabled and --dump-regs is set, launch the register viewer.
+    // The viewer API is a no-op in non-GUI builds.
+    let reg_viewer = if dump_regs {
+        Some(regview::Viewer::spawn("MC6809 Registers"))
+    } else {
+        None
+    };
+
+    // Keep legacy immediate dump only for headless (non-GUI) builds.
+    #[cfg(not(feature = "gui"))]
+    {
+        if dump_regs {
+            debug::dump_registers(&cpu);
+        }
     }
     if let Some((addr, len)) = dump_mem {
         debug::dump_memory_bus(bus.as_mut(), addr, len);
@@ -669,7 +773,18 @@ fn main() {
         debug::dump_memory_ascii(bus.as_mut(), addr, len);
     }
 
-    if let Some((mut pc, total_len)) = disasm_req {
+    if let Some((addr_opt, len_opt)) = disasm_req {
+        let mut pc: u16 = addr_opt.unwrap_or(cpu.r.pc);
+        // Default length for --disasm when omitted:
+        // choose the coalesced span that contains the chosen start PC
+        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+        let span_for_pc = spans.iter().find(|(s, e)| *s <= pc && pc < *e).copied();
+        let default_full_len = span_for_pc.map(|(s, e)| e.wrapping_sub(s) as usize).unwrap_or(64);
+        let total_len: usize = match (addr_opt, len_opt) {
+            (None, None) => default_full_len,
+            (Some(_), None) => 64,
+            (_, Some(n)) => n,
+        };
         let mut processed: usize = 0;
         while processed < total_len {
             let (consumed, text) = if disasm_hex {
@@ -740,7 +855,7 @@ fn main() {
         } else {
             None
         };
-        while !STOP_REQUESTED.load(Ordering::SeqCst) {
+        'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
             if let Some(ref rxch) = rx {
                 if let Ok(v) = rxch.try_recv() {
                     if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
@@ -765,6 +880,29 @@ fn main() {
                 println!("{:04X}: {}", cpu.r.pc, text);
             }
             cpu.step(bus.as_mut(), false);
+
+            // Update register viewer and handle Pause/Step control
+            if let Some(viewer) = &reg_viewer {
+                let snap = regview::RegSnapshot {
+                    a: cpu.r.a,
+                    b: cpu.r.b,
+                    d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                    x: cpu.r.x,
+                    y: cpu.r.y,
+                    u: cpu.r.u,
+                    s: cpu.r.s,
+                    dp: cpu.r.dp,
+                    pc: cpu.r.pc,
+                    cc: cpu.r.cc,
+                };
+                viewer.push(snap);
+                while viewer.should_pause() {
+                    if STOP_REQUESTED.load(Ordering::SeqCst) {
+                        break 'run_loop;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             if let Some(ref mut seq) = boot_seq {
                 seq.on_post_step(bus.as_mut(), mmu_regs_base);
             }

@@ -27,6 +27,7 @@ PC initialization priority:
 - `--step`: Step mode
 - `--disasm <RANGE>`: Disassemble (e.g., `0xE000:0xE100`)
 - `--hex <RANGE>`: Hex dump (e.g., `0xE000:0xE040`)
+- `--dump-regs`: When built with `--features gui`, opens a live register window with Pause/Resume
 
 I/O (see console_io.md for details)
 

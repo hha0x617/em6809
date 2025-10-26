@@ -35,6 +35,7 @@ mc6809emu is a software emulator for the MC6809. It provides a run-oriented CLI,
 - OS‑9/NitrOS‑9 guide: `docs/en/os9_guide.md`
 - Troubleshooting: `docs/en/troubleshooting.md`
 - Instruction coverage: `docs/en/instruction_status.md`
+ - Register viewer integration (GUI): `docs/en/regview_integration.md`
 
 ## Links
 
