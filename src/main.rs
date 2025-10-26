@@ -15,9 +15,50 @@ use mc6809emu::bootscript::{parse_boot_script, BootSequencer, emit_boot_template
 use mc6809emu::debug;
 
 fn print_usage() {
-    eprintln!(
-        "Usage: mc6809emu <image> [--format bin|srec] [--base 0xADDR] [--pc 0xADDR] [--trace] [--step N] [--dump-regs] [--dump-mem 0xADDR LEN]"
-    );
+    println!("mc6809emu - MC6809 software emulator\n");
+    println!("Usage:\n  mc6809emu <image> [options]\n");
+    println!("Image Options:");
+    println!("  --format bin|srec         Input format override");
+    println!("  --base 0xADDR             Base address for raw binary");
+    println!("  --pc 0xADDR               Override reset PC");
+    println!("\nExecution / Debug:");
+    println!("  --trace                   Trace instructions");
+    println!("  --step N                  Execute N steps (required to run)\n  --cycles                 Print cycle count at end");
+    println!("  --run                     Run until Ctrl+C (ignores --step)");
+    println!("  --dump-regs               Dump registers");
+    println!("  --dump-mem 0xADDR LEN     Dump memory range");
+    println!("  --dump-mem-ascii 0xA LEN  Dump ASCII view");
+    println!("  --disasm 0xADDR LEN       Disassemble range");
+    println!("  --hex                     Use hex-style disassembly");
+    println!("  --bp 0xADDR               Breakpoint (repeatable)");
+    println!("\nConsole I/O:");
+    println!("  --console 0xADDR          Attach console device at base (e.g., 0xFF00)");
+    println!("  --console-in STRING       Prefeed input (supports \\r, \\n, \\t, \\\\)");
+    println!("  --console-stdin           Read from stdin (Ctrl+C to stop)");
+    println!("  --console-out PATH        Mirror output to file");
+    println!("  --console-flush-every N   Flush every N chars (also flush on newline)");
+    println!("  --console-echo            Local echo on RX read (default OFF)");
+    println!("  --console-rx-wm N         RX IRQ watermark (if used)");
+    println!("  --console-irq-hold N      IRQ hold cycles");
+    println!("\nMMU / Presets:");
+    println!("  --mmu                     Use MC6829 MMU backend");
+    println!("  --mmu-phys BYTES          Physical size (e.g., 1048576)");
+    println!("  --mmu-reg-base 0xA        MMU regs base address");
+    println!("  --mmu-task N              Task register");
+    println!("  --mmu-idmap               Identity map current task");
+    println!("  --mmu-map P=F             Map page P to frame F (hex or dec)");
+    println!("  --mmu-map-file PATH       Apply map/config from file");
+    println!("  --preset NAME             Apply preset (also enables --mmu)");
+    println!("  --preset-list             List presets and exit");
+    println!("  --mmu-mode sys|user       Set initial MMU mode");
+    println!("  --protect-vectors         Write-protect vectors");
+    println!("  --prot 0xNN               Protection control byte");
+    println!("  --attr PG=0xNN            Attribute for page PG");
+    println!("\nBoot Scripts:");
+    println!("  --boot-script PATH        Apply boot script");
+    println!("  --emit-boot-template N    Write N.boot template and exit");
+    println!("\nGeneral:");
+    println!("  -h, --help                Show this help and exit");
 }
 
 fn parse_hex(s: &str) -> Option<u16> {
@@ -25,8 +66,102 @@ fn parse_hex(s: &str) -> Option<u16> {
     u16::from_str_radix(t, 16).ok()
 }
 
+fn parse_escapes(s: &str) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
+    let mut it = s.bytes().peekable();
+    while let Some(b) = it.next() {
+        if b == b'\\' {
+            match it.peek().copied() {
+                Some(b'r') => { out.push(0x0D); it.next(); }
+                Some(b'n') => { out.push(0x0A); it.next(); }
+                Some(b't') => { out.push(0x09); it.next(); }
+                Some(b'\\') => { out.push(b'\\'); it.next(); }
+                _ => { out.push(b); }
+            }
+        } else {
+            out.push(b);
+        }
+    }
+    out
+}
+
+#[cfg(windows)]
+mod console_mode {
+    type DWORD = u32;
+    type HANDLE = *mut core::ffi::c_void;
+    const STD_INPUT_HANDLE: DWORD = -10i32 as u32;
+    const ENABLE_ECHO_INPUT: DWORD = 0x0004;
+    const ENABLE_LINE_INPUT: DWORD = 0x0002;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(nStdHandle: DWORD) -> HANDLE;
+        fn GetConsoleMode(hConsoleHandle: HANDLE, lpMode: *mut DWORD) -> i32;
+        fn SetConsoleMode(hConsoleHandle: HANDLE, dwMode: DWORD) -> i32;
+    }
+
+    pub fn enter_raw() -> Option<DWORD> {
+        unsafe {
+            let h = GetStdHandle(STD_INPUT_HANDLE);
+            if h.is_null() { return None; }
+            let mut mode: DWORD = 0;
+            if GetConsoleMode(h, &mut mode as *mut DWORD) == 0 { return None; }
+            // Disable echo and line-buffered input so reads return per key
+            let new_mode = mode & !ENABLE_ECHO_INPUT & !ENABLE_LINE_INPUT;
+            if SetConsoleMode(h, new_mode) == 0 { return None; }
+            Some(mode)
+        }
+    }
+
+    pub fn restore_stdin_mode(prev: DWORD) {
+        unsafe {
+            let h = GetStdHandle(STD_INPUT_HANDLE);
+            if !h.is_null() { let _ = SetConsoleMode(h, prev); }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod console_mode {
+    pub type Dummy = ();
+    pub fn enter_raw() -> Option<()> { None }
+    pub fn restore_stdin_mode(_: ()) {}
+}
+
+use std::sync::atomic::{AtomicBool, Ordering};
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+mod signals {
+    use super::STOP_REQUESTED;
+    type BOOL = i32;
+    type DWORD = u32;
+    #[allow(non_camel_case_types)]
+    type PHANDLER_ROUTINE = Option<unsafe extern "system" fn(ctrl: DWORD) -> BOOL>;
+    const CTRL_C_EVENT: DWORD = 0;
+    #[link(name = "kernel32")]
+    extern "system" { fn SetConsoleCtrlHandler(h: PHANDLER_ROUTINE, add: i32) -> i32; }
+    unsafe extern "system" fn handler(ctrl: DWORD) -> BOOL {
+        if ctrl == CTRL_C_EVENT { STOP_REQUESTED.store(true, super::Ordering::SeqCst); return 1; }
+        0
+    }
+    pub fn install() { unsafe { let _ = SetConsoleCtrlHandler(Some(handler), 1); } }
+}
+
+#[cfg(not(windows))]
+mod signals {
+    use super::STOP_REQUESTED;
+    extern "C" fn h(_sig: i32) { STOP_REQUESTED.store(true, super::Ordering::SeqCst); }
+    extern "C" { fn signal(sig: i32, handler: extern "C" fn(i32)) -> extern "C" fn(i32); }
+    pub fn install() { unsafe { let _ = signal(2, h); } } // SIGINT=2
+}
+
 fn main() {
-    let mut args = env::args().skip(1);
+    let mut args = env::args().skip(1).peekable();
+    // Help early-exit
+    if let Some(first) = args.peek() {
+        if first == "--help" || first == "-h" { print_usage(); return; }
+    }
     let Some(image_path) = args.next() else { print_usage(); return; };
 
     let mut format: Option<ImageFormat> = None;
@@ -41,6 +176,7 @@ fn main() {
     let mut disasm_req: Option<(u16, usize)> = None;
     let mut disasm_hex = false;
     let mut breakpoints: Vec<u16> = Vec::new();
+    let mut run_forever: bool = false; // --run: execute until Ctrl+C
     let mut use_mmu = false;
     let mut mmu_phys: usize = 1<<20; // 1MiB default
     let mut mmu_regs_base: u16 = 0xFFA0;
@@ -62,6 +198,7 @@ fn main() {
     let mut console_out_path: Option<String> = None;
     let mut console_tee_stderr: bool = false;
     let mut console_flush_every: Option<usize> = None;
+    let mut console_local_echo: bool = false; // default OFF
     let mut emit_boot_template_name: Option<String> = None;
 
     while let Some(arg) = args.next() {
@@ -86,6 +223,7 @@ fn main() {
             "--step" => {
                 if let Some(v) = args.next() { steps = v.parse::<usize>().ok(); }
             }
+            "--run" => { run_forever = true; }
             "--dump-regs" => dump_regs = true,
             "--dump-mem" => {
                 if let Some(addr) = args.next() { 
@@ -135,6 +273,7 @@ fn main() {
             "--console-out" => { if let Some(v) = args.next() { console_out_path = Some(v); } }
             "--console-tee-stderr" => { console_tee_stderr = true; }
             "--console-flush-every" => { if let Some(v) = args.next() { if let Ok(n) = v.parse::<usize>() { console_flush_every = Some(n); } } }
+            "--console-echo" => { console_local_echo = true; }
             "--console-rx-wm" => { if let Some(v) = args.next() { if let Ok(n) = v.parse::<usize>() { console_rx_wm = Some(n); } } }
             "--console-irq-hold" => { if let Some(v) = args.next() { if let Ok(n) = v.parse::<u32>() { console_irq_hold = Some(n); } } }
             "--mmu-map-file" => { if let Some(v) = args.next() { mmu_map_file = Some(v); } }
@@ -182,7 +321,11 @@ fn main() {
             let mut con = ConsoleDev::new(base);
             if let Some(wm) = console_rx_wm { con.set_rx_watermark(wm); }
             if let Some(h) = console_irq_hold { con.set_irq_hold_cycles(h); }
-            if let Some(s) = &console_in { con.feed_bytes(s.as_bytes()); }
+            if let Some(s) = &console_in { let bytes = parse_escapes(s); con.feed_bytes(&bytes); }
+            if let Some(p) = &console_out_path { con.set_out_file(p); }
+            if console_tee_stderr { con.set_tee_stderr(true); }
+            if let Some(n) = console_flush_every { con.set_flush_every(n); }
+            if console_local_echo { con.set_local_echo(true); }
             iobus.add_device(con);
             Box::new(iobus)
         } else { Box::new(mmu) }
@@ -193,10 +336,11 @@ fn main() {
             let mut con = ConsoleDev::new(base);
             if let Some(wm) = console_rx_wm { con.set_rx_watermark(wm); }
             if let Some(h) = console_irq_hold { con.set_irq_hold_cycles(h); }
-            if let Some(s) = &console_in { con.feed_bytes(s.as_bytes()); }
+            if let Some(s) = &console_in { let bytes = parse_escapes(s); con.feed_bytes(&bytes); }
             if let Some(p) = &console_out_path { con.set_out_file(p); }
             if console_tee_stderr { con.set_tee_stderr(true); }
             if let Some(n) = console_flush_every { con.set_flush_every(n); }
+            if console_local_echo { con.set_local_echo(true); }
             iobus.add_device(con);
             Box::new(iobus)
         } else { Box::new(mem) }
@@ -244,11 +388,15 @@ fn main() {
     // Boot script
     let mut boot_seq: Option<BootSequencer> = if let Some(p) = &boot_script_path { match std::fs::read_to_string(p){ Ok(s)=> match parse_boot_script(&s){ Ok(v)=> Some(BootSequencer::new(v)), Err(e)=>{ eprintln!("Boot script parse error: {}", e); None } }, Err(e)=>{ eprintln!("Failed to read boot script {}: {}", p, e); None } } } else { None };
 
-    if steps.is_some() || trace || !breakpoints.is_empty() {
-        let mut remaining = steps.unwrap_or(usize::MAX);
+    if run_forever || steps.is_some() || trace || !breakpoints.is_empty() {
+        signals::install();
+        // If --run, ignore --step and run until Ctrl+C
+        let mut remaining = if run_forever { usize::MAX } else { steps.unwrap_or(usize::MAX) };
         // Generic stdin feeder for dyn Bus path, feeding IoBus<Memory|Mc6829>
+        // On Windows, switch stdin to raw (no echo, no line input) so keystrokes are delivered immediately
+        let prev_mode = if console_stdin { console_mode::enter_raw() } else { None };
         let rx = if console_stdin { use std::io::Read; use std::sync::mpsc; use std::thread; let (tx, rx)=mpsc::channel::<Vec<u8>>(); thread::spawn(move || { let mut stdin=std::io::stdin(); let mut buf=[0u8;256]; loop { match stdin.read(&mut buf){ Ok(0)=>break, Ok(n)=>{ let _=tx.send(buf[..n].to_vec()); }, Err(_)=>break } } }); Some(rx) } else { None };
-        while remaining > 0 {
+        while !STOP_REQUESTED.load(Ordering::SeqCst) {
             if let Some(ref rxch) = rx { if let Ok(v) = rxch.try_recv() { if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } } }
             if let Some(ref mut seq) = boot_seq { seq.on_pre_step(bus.as_mut(), mmu_regs_base, cpu.r.pc, &mut cpu); }
             if trace {
@@ -257,12 +405,17 @@ fn main() {
             }
             cpu.step(bus.as_mut(), false);
             if let Some(ref mut seq) = boot_seq { seq.on_post_step(bus.as_mut(), mmu_regs_base); }
-            remaining = remaining.saturating_sub(1);
+            if !run_forever {
+                remaining = remaining.saturating_sub(1);
+                if remaining == 0 { break; }
+            }
             if !breakpoints.is_empty() && breakpoints.contains(&cpu.r.pc) {
                 println!("Breakpoint hit at {:04X}", cpu.r.pc);
                 break;
             }
         }
+        // Restore console mode (Windows) if we disabled echo
+        if let Some(prev) = prev_mode { #[cfg(windows)] { console_mode::restore_stdin_mode(prev); } }
     }
 
     if print_cycles {

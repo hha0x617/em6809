@@ -23,6 +23,9 @@ pub struct ConsoleDev {
     tee_stderr: bool,
     flush_every: Option<usize>,
     flush_count: usize,
+    local_echo: bool,
+    utf8_buf: Vec<u8>,
+    utf8_need: usize,
 }
 
 impl ConsoleDev {
@@ -38,6 +41,9 @@ impl ConsoleDev {
             tee_stderr: false,
             flush_every: None,
             flush_count: 0,
+            local_echo: false,
+            utf8_buf: Vec::with_capacity(8),
+            utf8_need: 0,
         }
     }
     pub fn feed_bytes(&mut self, bytes: &[u8]) { for &b in bytes { self.rx.push_back(b); } }
@@ -50,6 +56,43 @@ impl ConsoleDev {
     }
     pub fn set_tee_stderr(&mut self, on: bool) { self.tee_stderr = on; }
     pub fn set_flush_every(&mut self, n: usize) { self.flush_every = if n > 0 { Some(n) } else { None }; self.flush_count = 0; }
+    pub fn set_local_echo(&mut self, on: bool) { self.local_echo = on; }
+
+    fn push_stdout_byte(&mut self, b: u8) {
+        // Mirror raw byte to file (unmodified)
+        if let Some(f) = self.out_file.as_mut() { let _ = f.write_all(&[b]); }
+        // ASCII fast path
+        if b < 0x80 && self.utf8_need == 0 {
+            print!("{}", b as char);
+        } else {
+            // Determine expected length if starting sequence
+            if self.utf8_need == 0 {
+                self.utf8_need = match b {
+                    0xC0..=0xDF => 2,
+                    0xE0..=0xEF => 3,
+                    0xF0..=0xF7 => 4,
+                    _ => 1,
+                };
+            }
+            self.utf8_buf.push(b);
+            if self.utf8_buf.len() >= self.utf8_need.max(1) {
+                let s = String::from_utf8_lossy(&self.utf8_buf);
+                print!("{}", s);
+                self.utf8_buf.clear();
+                self.utf8_need = 0;
+            }
+        }
+        // Flush policy
+        let mut need_flush = b == b'\n';
+        if let Some(n) = self.flush_every {
+            self.flush_count = self.flush_count.wrapping_add(1);
+            if self.flush_count % n == 0 { need_flush = true; }
+        }
+        if need_flush {
+            let _ = std::io::stdout().flush();
+            if let Some(f) = self.out_file.as_mut() { let _ = f.flush(); }
+        }
+    }
 }
 
 impl Device for ConsoleDev {
@@ -58,7 +101,11 @@ impl Device for ConsoleDev {
         let off = addr.wrapping_sub(self.base);
         match off {
             0 => { // RXDATA
-                if let Some(b) = self.rx.pop_front() { b } else { 0x00 }
+                if let Some(b) = self.rx.pop_front() {
+                    // Optional local echo to TX path
+                    if self.local_echo { self.push_stdout_byte(b); }
+                    b
+                } else { 0x00 }
             }
             1 => { // STATUS
                 let txrdy = 0x01u8; // always ready
@@ -78,19 +125,7 @@ impl Device for ConsoleDev {
                 if self.tee_stderr {
                     let _ = writeln!(std::io::stderr(), "[console-tx] addr={:04X} data={:02X}", addr, data);
                 }
-                print!("{}", data as char);
-                // Write to optional mirror file
-                if let Some(f) = self.out_file.as_mut() { let _ = f.write_all(&[data]); }
-                // Decide when to flush: on newline, or every N bytes if configured
-                let mut need_flush = data == b'\n';
-                if let Some(n) = self.flush_every {
-                    self.flush_count = self.flush_count.wrapping_add(1);
-                    if self.flush_count % n == 0 { need_flush = true; }
-                }
-                if need_flush {
-                    let _ = std::io::stdout().flush();
-                    if let Some(f) = self.out_file.as_mut() { let _ = f.flush(); }
-                }
+                self.push_stdout_byte(data);
             }
             2 => { // CTRL
                 self.ctrl = data;
