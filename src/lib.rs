@@ -1,9 +1,9 @@
-pub mod cpu;
+pub mod bootscript;
 pub mod bus;
-pub mod loader;
+pub mod config;
+pub mod cpu;
 pub mod debug;
 pub mod disasm;
-pub mod mmu;
 pub mod io;
-pub mod config;
-pub mod bootscript;
+pub mod loader;
+pub mod mmu;

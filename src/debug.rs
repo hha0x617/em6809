@@ -1,5 +1,5 @@
+use crate::bus::{Bus, Memory};
 use crate::cpu::Cpu;
-use crate::bus::{Memory, Bus};
 
 pub fn dump_registers(cpu: &Cpu) {
     let r = &cpu.r;
@@ -22,7 +22,9 @@ pub fn dump_memory(mem: &Memory, start: u16, len: usize) {
     let mut addr = start as usize;
     for chunk in bytes.chunks(16) {
         print!("{:04X}:", addr as u16);
-        for b in chunk { print!(" {:02X}", b); }
+        for b in chunk {
+            print!(" {:02X}", b);
+        }
         println!("");
         addr += chunk.len();
     }
@@ -54,12 +56,20 @@ pub fn dump_memory_ascii<B: Bus + ?Sized>(bus: &mut B, start: u16, len: usize) {
             bytes[i] = bus.read8(addr.wrapping_add(i as u16));
         }
         print!("{:04X}:", addr);
-        for i in 0..line { print!(" {:02X}", bytes[i]); }
-        for _ in line..16 { print!("   "); }
+        for i in 0..line {
+            print!(" {:02X}", bytes[i]);
+        }
+        for _ in line..16 {
+            print!("   ");
+        }
         print!("  |");
         for i in 0..line {
             let c = bytes[i];
-            let ch = if (0x20..=0x7E).contains(&c) { c as char } else { '.' };
+            let ch = if (0x20..=0x7E).contains(&c) {
+                c as char
+            } else {
+                '.'
+            };
             print!("{}", ch);
         }
         println!("|");

@@ -1,5 +1,5 @@
 use mc6809emu::bus::{Bus, Memory};
-use mc6809emu::io::{IoBus, ConsoleDev};
+use mc6809emu::io::{ConsoleDev, IoBus};
 
 #[test]
 fn console_rx_tx_status() {
@@ -35,7 +35,7 @@ fn console_rx_irq_watermark() {
     con.set_rx_watermark(2);
     con.feed_bytes(b"A");
     bus.add_device(con);
-    let (_n,_f,irq1) = bus.irq_lines();
+    let (_n, _f, irq1) = bus.irq_lines();
     assert!(!irq1, "Below watermark should not assert IRQ");
     // feed second byte
     // Find device and feed again via write directly on IoBus
@@ -49,6 +49,6 @@ fn console_rx_irq_watermark() {
     // Enable RX IRQ
     mc6809emu::io::Device::write8(&mut con2, 0xFF02, 0x01);
     bus2.add_device(con2);
-    let (_n2,_f2,irq2) = bus2.irq_lines();
+    let (_n2, _f2, irq2) = bus2.irq_lines();
     assert!(irq2, "At/above watermark should assert IRQ");
 }
