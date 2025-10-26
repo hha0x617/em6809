@@ -463,6 +463,36 @@ impl Cpu {
                     let hi = bus.read8(addr) as u16; let lo = bus.read8(addr.wrapping_add(1)) as u16; let v=(hi<<8)|lo;
                     let _ = self.sub16_flags(self.r.y, v);
                     consumed = 6; if trace { println!("{:04X}: 10 BC {:04X} CMPY ${:04X}", pc0, addr, addr); }
+                } else if sub == 0xCE { // LDS #imm16
+                    let imm = self.fetch16(bus);
+                    self.r.s = imm;
+                    self.set_nz16(self.r.s);
+                    self.r.cc &= !V;
+                    consumed = 4; if trace { println!("{:04X}: 10 CE {:04X} LDS #${:04X}", pc0, imm, imm); }
+                } else if sub == 0xDE { // LDS <dir
+                    let zp = self.fetch8(bus);
+                    let addr = self.ea_direct(zp);
+                    let hi = bus.read8(addr) as u16; let lo = bus.read8(addr.wrapping_add(1)) as u16; self.r.s=(hi<<8)|lo;
+                    self.set_nz16(self.r.s); self.r.cc &= !V; consumed=5; if trace { println!("{:04X}: 10 DE {:02X} LDS <${:02X}", pc0, zp, zp); }
+                } else if sub == 0xEE { // LDS indexed
+                    let (ea, addcyc, desc) = self.ea_indexed(bus);
+                    let hi=bus.read8(ea) as u16; let lo=bus.read8(ea.wrapping_add(1)) as u16; self.r.s=(hi<<8)|lo;
+                    self.set_nz16(self.r.s); self.r.cc &= !V; consumed=5+addcyc; if trace { println!("{:04X}: 10 EE ..    LDS {}", pc0, desc); }
+                } else if sub == 0xFE { // LDS extended
+                    let addr = self.ea_extended(bus);
+                    let hi=bus.read8(addr) as u16; let lo=bus.read8(addr.wrapping_add(1)) as u16; self.r.s=(hi<<8)|lo; self.set_nz16(self.r.s); self.r.cc &= !V; consumed=6; if trace { println!("{:04X}: 10 FE {:04X} LDS ${:04X}", pc0, addr, addr); }
+                } else if sub == 0xDF { // STS <dir
+                    let zp = self.fetch8(bus);
+                    let addr=self.ea_direct(zp);
+                    bus.write8(addr, (self.r.s>>8) as u8); bus.write8(addr.wrapping_add(1), (self.r.s&0xFF) as u8);
+                    self.set_nz16(self.r.s); self.r.cc &= !V; consumed=5; if trace { println!("{:04X}: 10 DF {:02X} STS <${:02X}", pc0, zp, zp); }
+                } else if sub == 0xEF { // STS indexed
+                    let (ea, addcyc, desc) = self.ea_indexed(bus);
+                    bus.write8(ea,(self.r.s>>8) as u8); bus.write8(ea.wrapping_add(1),(self.r.s&0xFF) as u8);
+                    self.set_nz16(self.r.s); self.r.cc &= !V; consumed=5+addcyc; if trace { println!("{:04X}: 10 EF ..    STS {}", pc0, desc); }
+                } else if sub == 0xFF { // STS extended
+                    let addr = self.ea_extended(bus);
+                    bus.write8(addr,(self.r.s>>8) as u8); bus.write8(addr.wrapping_add(1),(self.r.s&0xFF) as u8); self.set_nz16(self.r.s); self.r.cc &= !V; consumed=6; if trace { println!("{:04X}: 10 FF {:04X} STS ${:04X}", pc0, addr, addr); }
                 } else if let Some(taken) = self.cond_eval(sub) {
                     let off = self.fetch16(bus) as i16;
                     if taken {
@@ -531,12 +561,20 @@ impl Cpu {
                     consumed = 20; if trace { println!("{:04X}: 11 3F   SWI3", pc0); }
                 } else if sub == 0x83 { // CMPU #imm16
                     let imm = self.fetch16(bus); let _ = self.sub16_flags(self.r.u, imm); consumed = 5; if trace { println!("{:04X}: 11 83 {:04X} CMPU #${:04X}", pc0, imm, imm); }
+                } else if sub == 0x8C { // CMPS #imm16
+                    let imm = self.fetch16(bus); let _ = self.sub16_flags(self.r.s, imm); consumed = 5; if trace { println!("{:04X}: 11 8C {:04X} CMPS #${:04X}", pc0, imm, imm); }
                 } else if sub == 0x93 { // CMPU <dir
                     let zp = self.fetch8(bus); let addr=self.ea_direct(zp); let hi=bus.read8(addr) as u16; let lo=bus.read8(addr.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.u, v); consumed=5; if trace { println!("{:04X}: 11 93 {:02X} CMPU <${:02X}", pc0, zp, zp); }
+                } else if sub == 0x9C { // CMPS <dir
+                    let zp = self.fetch8(bus); let addr=self.ea_direct(zp); let hi=bus.read8(addr) as u16; let lo=bus.read8(addr.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.s, v); consumed=5; if trace { println!("{:04X}: 11 9C {:02X} CMPS <${:02X}", pc0, zp, zp); }
                 } else if sub == 0xA3 { // CMPU indexed
                     let (ea, addcyc, desc)=self.ea_indexed(bus); let hi=bus.read8(ea) as u16; let lo=bus.read8(ea.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.u, v); consumed=5+addcyc; if trace { println!("{:04X}: 11 A3 ..    CMPU {}", pc0, desc); }
+                } else if sub == 0xAC { // CMPS indexed
+                    let (ea, addcyc, desc)=self.ea_indexed(bus); let hi=bus.read8(ea) as u16; let lo=bus.read8(ea.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.s, v); consumed=5+addcyc; if trace { println!("{:04X}: 11 AC ..    CMPS {}", pc0, desc); }
                 } else if sub == 0xB3 { // CMPU extended
                     let addr=self.ea_extended(bus); let hi=bus.read8(addr) as u16; let lo=bus.read8(addr.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.u, v); consumed=6; if trace { println!("{:04X}: 11 B3 {:04X} CMPU ${:04X}", pc0, addr, addr); }
+                } else if sub == 0xBC { // CMPS extended
+                    let addr=self.ea_extended(bus); let hi=bus.read8(addr) as u16; let lo=bus.read8(addr.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.s, v); consumed=6; if trace { println!("{:04X}: 11 BC {:04X} CMPS ${:04X}", pc0, addr, addr); }
                 } else {
                     consumed = 1; if trace { println!("{:04X}: 11 {:02X}   UNIMPL-PFX", pc0, sub); }
                 }
@@ -703,6 +741,83 @@ impl Cpu {
                     consumed = 2;
                 }
                 if trace { println!("{:04X}: 27 {:02X}   BEQ {}", pc0, offb, if zero {"taken"} else {"not"}); }
+            }
+            0x21 => { // BRN (never)
+                let offb = self.fetch8(bus);
+                consumed = 2;
+                if trace { println!("{:04X}: 21 {:02X}   BRN not", pc0, offb); }
+            }
+            0x22 => { // BHI
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x22).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 22 {:02X}   BHI {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x23 => { // BLS
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x23).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 23 {:02X}   BLS {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x24 => { // BCC/BHS
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x24).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 24 {:02X}   BCC {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x25 => { // BCS/BLO
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x25).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 25 {:02X}   BCS {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x28 => { // BVC
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x28).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 28 {:02X}   BVC {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x29 => { // BVS
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x29).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 29 {:02X}   BVS {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x2A => { // BPL
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x2A).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 2A {:02X}   BPL {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x2B => { // BMI
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x2B).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 2B {:02X}   BMI {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x2C => { // BGE
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x2C).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 2C {:02X}   BGE {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x2D => { // BLT
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x2D).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 2D {:02X}   BLT {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x2E => { // BGT
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x2E).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 2E {:02X}   BGT {}", pc0, offb, if take {"taken"} else {"not"}); }
+            }
+            0x2F => { // BLE
+                let offb = self.fetch8(bus);
+                let take = self.cond_eval(0x2F).unwrap();
+                if take { let off=(offb as i8) as i16; self.r.pc=(self.r.pc as i16).wrapping_add(off) as u16; consumed=3; } else { consumed=2; }
+                if trace { println!("{:04X}: 2F {:02X}   BLE {}", pc0, offb, if take {"taken"} else {"not"}); }
             }
             0x17 => { // LBSR relative 16
                 let off = self.fetch16(bus) as i16;

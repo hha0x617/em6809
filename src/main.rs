@@ -368,7 +368,20 @@ fn main() {
 
     let mut cpu = Cpu::new();
     cpu.reset(bus.as_mut());
-    if let Some(pc) = force_pc.or(loaded.entry) { cpu.set_pc(pc); }
+    // Prefer reset vector. Only override with --pc or SREC entry if vector looks invalid.
+    let reset_pc = cpu.r.pc;
+    if let Some(pc) = force_pc {
+        cpu.set_pc(pc);
+    } else if let Some(entry) = loaded.entry {
+        if reset_pc == 0x0000 || reset_pc == 0xFFFF {
+            cpu.set_pc(entry);
+        }
+    } else if reset_pc == 0x0000 || reset_pc == 0xFFFF {
+        // Fallback: if vector is invalid and no SREC entry, start at first loaded range
+        if let Some((&(start,_))) = loaded.loaded_ranges.iter().min_by_key(|(s,_)| *s) {
+            cpu.set_pc(start);
+        }
+    }
 
     if dump_regs { debug::dump_registers(&cpu); }
     if let Some((addr, len)) = dump_mem { debug::dump_memory_bus(bus.as_mut(), addr, len); }
