@@ -2,13 +2,14 @@
 name = "mc6809emu"
 version = "0.1.0"
 edition = "2021"
-authors = ["Codex CLI"]
+authors = ["hha0x617 <hha0x617@gmail.com>"]
 description = "MC6809 software emulator (cycle-counted core)"
-license = "MIT"
+repository = "https://github.com/hhagiwara/mc6809emu"
+homepage = "https://github.com/hhagiwara/mc6809emu"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 
 [lib]
 name = "mc6809emu"
 path = "src/lib.rs"
-

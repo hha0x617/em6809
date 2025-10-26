@@ -1,42 +1,39 @@
 # Repository Guidelines
 
-## Project Structure & Modules
-- `src/`: Core emulator code (CPU, bus/memory, I/O, CLI `main`).
-- `include/` or `src/`: Public headers for core modules.
-- `tests/`: Unit tests (e.g., `test_cpu_*.cpp`, `test_bus_*.cpp`).
-- `assets/roms/`: Sample ROMs and test fixtures (do not commit proprietary ROMs).
-- `docs/`: Notes, architecture sketches, and developer references.
+## Project Structure
+- `src/`: Rust sources (`cpu.rs`, `bus.rs`, `io.rs`, `disasm.rs`, `main.rs`, etc.)
+- `samples/`: Example programs and traces (e.g., `samples/traces/trace_all.asm`)
+- `docs/`: Documentation (e.g., `docs/instruction_status.md`)
+- `tests/`: Rust tests
 
-## Build, Test, and Development
-- CMake (preferred if `CMakeLists.txt` exists):
-  - Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`
-  - Build: `cmake --build build -j`
-  - Test: `ctest --test-dir build -j`
-- Make (if `Makefile` exists):
-  - Build: `make -j`
-  - Test: `make test`
-- Run locally:
-  - `./build/mc6809emu --rom assets/roms/example.rom --clock 1MHz` (adjust binary/flags per build output).
+## Build, Run, Format
+- Build: `cargo build` (Rust 1.70+ recommended)
+- Run: `cargo run -- <image> [options]`
+- Format: `cargo fmt --all`
+- Lint (optional): `cargo clippy --all-targets`
 
-## Coding Style & Naming
-- Indentation: 4 spaces, no tabs. Prefer C++17 (or C11 for C modules).
-- Files: lowercase with underscores (e.g., `cpu_core.cpp`, `address_bus.h`).
-- Names: `snake_case` for functions/variables; `PascalCase` for types; `UPPER_SNAKE_CASE` for constants/macros.
-- Formatting: use repo `.clang-format` if present; otherwise `clang-format -i` on changed files.
+## Key CLI Options (recent additions)
+- `--help`: print detailed usage
+- `--run`: run until Ctrl+C (ignores `--step`)
+- Disassembler: `--disasm 0xADDR LEN`, `--hex` (bytes + text)
+- Console: `--console 0xADDR`, `--console-in "escapes"`, `--console-stdin`,
+  `--console-out PATH`, `--console-flush-every N`, `--console-echo`, `--console-tee-stderr`
+- PC init order: `--pc` > reset vector (FFFE/FFFF, if valid) > SREC entry (if vector invalid) > first loaded range
+
+## Coding Style
+- Rust edition 2021, 4-space indent
+- Prefer `snake_case` for items; keep naming consistent with existing modules
+- Disasm output style: `#${..}` for immediates, `${..}` for addresses, `±off,REG` (or `[,REG]`) for indexed; long/short branches show `offset -> $target`
 
 ## Testing Guidelines
-- Framework: GoogleTest via CTest if configured; otherwise minimal unit tests in `tests/`.
-- Naming: one component per file (e.g., `test_cpu_flags.cpp`).
-- Coverage: add tests for new opcodes, addressing modes, and timing-sensitive paths.
-- Run: `ctest --test-dir build -j` (or `make test`).
+- Start with targeted tests for modified modules, then broader tests
+- For CPU/ISA changes, add/extend trace samples in `samples/traces/`
+- Run: `cargo test`
 
 ## Commit & Pull Request Guidelines
-- Commits: use Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`). Imperative mood, concise subject, context in body.
-- PRs: link related issues, summarize behavior changes, list test coverage, and include relevant screenshots or CLI output.
-- Keep PRs small and focused; add notes on performance/timing changes to the CPU core.
+- Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`)
+- Keep PRs focused; include trace snippets or `--hex --trace` diffs for emulator changes
 
-## Security & Configuration Tips
-- Do not commit licensed ROMs or firmware. Add unknown ROMs to `.gitignore`.
-- Prefer relative paths and config flags over hardcoded absolute paths.
-- Validate inputs: ROM size, entry points, and memory-mapped I/O ranges.
-
+## Security & Data
+- Do not commit licensed ROMs; use `samples/` and synthetic S19 for tests
+- Validate inputs (ROM size, entry points, memory ranges)
