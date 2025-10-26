@@ -893,6 +893,10 @@ pub fn disasm_one<B: Bus + ?Sized>(bus: &mut B, pc: u16) -> (u16, String) {
                     let imm = r16(bus, pc.wrapping_add(2));
                     (4, format!("CMPY #{}", fmt_hex16(imm)))
                 }
+                0x9C => {
+                    let zp = r8(bus, pc.wrapping_add(2));
+                    (3, format!("CMPY <{}", fmt_hex8(zp)))
+                }
                 0x9E => {
                     let zp = r8(bus, pc.wrapping_add(2));
                     (3, format!("LDY <{}", fmt_hex8(zp)))
@@ -905,6 +909,10 @@ pub fn disasm_one<B: Bus + ?Sized>(bus: &mut B, pc: u16) -> (u16, String) {
                     let (add, idx) = decode_indexed(bus, pc.wrapping_add(2));
                     (2 + add, format!("LDY {}", idx))
                 }
+                0xAC => {
+                    let (add, idx) = decode_indexed(bus, pc.wrapping_add(2));
+                    (2 + add, format!("CMPY {}", idx))
+                }
                 0xAF => {
                     let (add, idx) = decode_indexed(bus, pc.wrapping_add(2));
                     (2 + add, format!("STY {}", idx))
@@ -912,6 +920,10 @@ pub fn disasm_one<B: Bus + ?Sized>(bus: &mut B, pc: u16) -> (u16, String) {
                 0xBE => {
                     let addr = r16(bus, pc.wrapping_add(2));
                     (4, format!("LDY {}", fmt_hex16(addr)))
+                }
+                0xBC => {
+                    let addr = r16(bus, pc.wrapping_add(2));
+                    (4, format!("CMPY {}", fmt_hex16(addr)))
                 }
                 0xBF => {
                     let addr = r16(bus, pc.wrapping_add(2));
