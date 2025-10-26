@@ -375,7 +375,7 @@ impl Cpu {
     pub fn step<B: Bus + ?Sized>(&mut self, bus: &mut B, trace: bool) -> u32 {
         let pc0 = self.r.pc;
         let op = self.fetch8(bus);
-        let mut consumed: u32 = 0;
+        let consumed: u32;
         match op {
             0x10 => { // prefix for long conditional branches / SWI2 / CMPD / Y-reg ops
                 let sub = self.fetch8(bus);
@@ -518,8 +518,13 @@ impl Cpu {
                 if sub == 0x3F { // SWI3
                     self.r.cc |= E;
                     self.push8(bus, self.r.cc);
+                    self.push8(bus, self.r.a);
+                    self.push8(bus, self.r.b);
+                    self.push8(bus, self.r.dp);
+                    self.push16(bus, self.r.x);
+                    self.push16(bus, self.r.y);
+                    self.push16(bus, self.r.u);
                     self.push16(bus, self.r.pc);
-                    self.r.cc &= !E;
                     self.r.cc |= I | F;
                     let hi = bus.read8(0xFFF0) as u16; let lo = bus.read8(0xFFF1) as u16;
                     self.r.pc = (hi<<8)|lo;
@@ -573,26 +578,7 @@ impl Cpu {
                 let addr = self.ea_extended(bus); let hi=bus.read8(addr) as u16; let lo=bus.read8(addr.wrapping_add(1)) as u16; let v=(hi<<8)|lo; let _=self.sub16_flags(self.r.x, v);
                 consumed = 5; if trace { println!("{:04X}: BC {:04X} CMPX ${:04X}", pc0, addr, addr); }
             }
-            0x11 => { // SWI3 or extended prefix
-                let sub = self.fetch8(bus);
-                if sub == 0x3F { // SWI3
-                    self.r.cc |= E;
-                    self.push8(bus, self.r.cc);
-                    self.push8(bus, self.r.a);
-                    self.push8(bus, self.r.b);
-                    self.push8(bus, self.r.dp);
-                    self.push16(bus, self.r.x);
-                    self.push16(bus, self.r.y);
-                    self.push16(bus, self.r.u);
-                    self.push16(bus, self.r.pc);
-                    self.r.cc |= I | F;
-                    let hi = bus.read8(0xFFF0) as u16; let lo = bus.read8(0xFFF1) as u16;
-                    self.r.pc = (hi<<8)|lo;
-                    consumed = 20; if trace { println!("{:04X}: 11 3F   SWI3", pc0); }
-                } else {
-                    consumed = 1; if trace { println!("{:04X}: 11 {:02X}   UNIMPL-PFX", pc0, sub); }
-                }
-            }
+            // duplicate 0x11 handler removed; handled above
             0x1E => { // EXG
                 let pb = self.fetch8(bus);
                 let src = pb >> 4; let dst = pb & 0x0F;
@@ -705,6 +691,18 @@ impl Cpu {
                     consumed = 2;
                 }
                 if trace { println!("{:04X}: 26 {:02X}   BNE {}", pc0, offb, if !zero {"taken"} else {"not"}); }
+            }
+            0x27 => { // BEQ relative
+                let offb = self.fetch8(bus);
+                let zero = (self.r.cc & Z) != 0;
+                if zero {
+                    let off = (offb as i8) as i16;
+                    self.r.pc = (self.r.pc as i16).wrapping_add(off) as u16;
+                    consumed = 3;
+                } else {
+                    consumed = 2;
+                }
+                if trace { println!("{:04X}: 27 {:02X}   BEQ {}", pc0, offb, if zero {"taken"} else {"not"}); }
             }
             0x17 => { // LBSR relative 16
                 let off = self.fetch16(bus) as i16;

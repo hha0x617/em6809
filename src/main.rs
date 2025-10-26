@@ -10,7 +10,7 @@ use mc6809emu::loader::{self, ImageFormat, LoadedImage};
 use mc6809emu::disasm::disasm_one;
 use mc6809emu::mmu::Mc6829;
 use mc6809emu::io::{IoBus, ConsoleDev};
-use mc6809emu::config::{apply_mmu_config_from_str, apply_preset, list_presets};
+use mc6809emu::config::{apply_mmu_config_from_str, apply_preset};
 use mc6809emu::bootscript::{parse_boot_script, BootSequencer, emit_boot_template};
 use mc6809emu::debug;
 
@@ -59,6 +59,9 @@ fn main() {
     let mut console_rx_wm: Option<usize> = None;
     let mut console_irq_hold: Option<u32> = None;
     let mut boot_script_path: Option<String> = None;
+    let mut console_out_path: Option<String> = None;
+    let mut console_tee_stderr: bool = false;
+    let mut console_flush_every: Option<usize> = None;
     let mut emit_boot_template_name: Option<String> = None;
 
     while let Some(arg) = args.next() {
@@ -129,6 +132,9 @@ fn main() {
             "--console" => { if let Some(v) = args.next() { console_base = parse_hex(&v); } }
             "--console-in" => { if let Some(v) = args.next() { console_in = Some(v); } }
             "--console-stdin" => { console_stdin = true; }
+            "--console-out" => { if let Some(v) = args.next() { console_out_path = Some(v); } }
+            "--console-tee-stderr" => { console_tee_stderr = true; }
+            "--console-flush-every" => { if let Some(v) = args.next() { if let Ok(n) = v.parse::<usize>() { console_flush_every = Some(n); } } }
             "--console-rx-wm" => { if let Some(v) = args.next() { if let Ok(n) = v.parse::<usize>() { console_rx_wm = Some(n); } } }
             "--console-irq-hold" => { if let Some(v) = args.next() { if let Ok(n) = v.parse::<u32>() { console_irq_hold = Some(n); } } }
             "--mmu-map-file" => { if let Some(v) = args.next() { mmu_map_file = Some(v); } }
@@ -188,6 +194,9 @@ fn main() {
             if let Some(wm) = console_rx_wm { con.set_rx_watermark(wm); }
             if let Some(h) = console_irq_hold { con.set_irq_hold_cycles(h); }
             if let Some(s) = &console_in { con.feed_bytes(s.as_bytes()); }
+            if let Some(p) = &console_out_path { con.set_out_file(p); }
+            if console_tee_stderr { con.set_tee_stderr(true); }
+            if let Some(n) = console_flush_every { con.set_flush_every(n); }
             iobus.add_device(con);
             Box::new(iobus)
         } else { Box::new(mem) }
@@ -243,7 +252,7 @@ fn main() {
             if let Some(ref rxch) = rx { if let Ok(v) = rxch.try_recv() { if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } } }
             if let Some(ref mut seq) = boot_seq { seq.on_pre_step(bus.as_mut(), mmu_regs_base, cpu.r.pc, &mut cpu); }
             if trace {
-                let (len, text) = if disasm_hex { mc6809emu::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc) } else { disasm_one(bus.as_mut(), cpu.r.pc) };
+                let (_len, text) = if disasm_hex { mc6809emu::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc) } else { disasm_one(bus.as_mut(), cpu.r.pc) };
                 println!("{:04X}: {}", cpu.r.pc, text);
             }
             cpu.step(bus.as_mut(), false);

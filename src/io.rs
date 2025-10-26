@@ -1,6 +1,8 @@
 use crate::bus::Bus;
 use std::any::Any;
 use std::collections::VecDeque;
+use std::fs::File;
+use std::io::Write;
 
 pub trait Device {
     fn contains(&self, addr: u16) -> bool;
@@ -17,15 +19,37 @@ pub struct ConsoleDev {
     rx_wm: usize,
     irq_hold_cycles: u32,
     irq_countdown: u32,
+    out_file: Option<File>,
+    tee_stderr: bool,
+    flush_every: Option<usize>,
+    flush_count: usize,
 }
 
 impl ConsoleDev {
-    pub fn new(base: u16) -> Self { Self { base, rx: VecDeque::new(), ctrl: 0, rx_wm: 1, irq_hold_cycles: 0, irq_countdown: 0 } }
+    pub fn new(base: u16) -> Self {
+        Self {
+            base,
+            rx: VecDeque::new(),
+            ctrl: 0,
+            rx_wm: 1,
+            irq_hold_cycles: 0,
+            irq_countdown: 0,
+            out_file: None,
+            tee_stderr: false,
+            flush_every: None,
+            flush_count: 0,
+        }
+    }
     pub fn feed_bytes(&mut self, bytes: &[u8]) { for &b in bytes { self.rx.push_back(b); } }
     pub fn set_rx_watermark(&mut self, wm: usize) { self.rx_wm = wm.max(1); }
     pub fn set_irq_hold_cycles(&mut self, n: u32) { self.irq_hold_cycles = n; }
     pub fn set_ctrl(&mut self, v: u8) { self.ctrl = v; }
     pub fn set_firq(&mut self, on: bool) { if on { self.ctrl |= 0x10; } else { self.ctrl &= !0x10; } }
+    pub fn set_out_file(&mut self, path: &str) {
+        if let Ok(f) = File::create(path) { self.out_file = Some(f); }
+    }
+    pub fn set_tee_stderr(&mut self, on: bool) { self.tee_stderr = on; }
+    pub fn set_flush_every(&mut self, n: usize) { self.flush_every = if n > 0 { Some(n) } else { None }; self.flush_count = 0; }
 }
 
 impl Device for ConsoleDev {
@@ -50,8 +74,23 @@ impl Device for ConsoleDev {
         let off = addr.wrapping_sub(self.base);
         match off {
             0 => { // TXDATA: print ASCII
-                // Print without newline; flush is line-buffered by default
+                // Print and flush to ensure visibility in buffered consoles
+                if self.tee_stderr {
+                    let _ = writeln!(std::io::stderr(), "[console-tx] addr={:04X} data={:02X}", addr, data);
+                }
                 print!("{}", data as char);
+                // Write to optional mirror file
+                if let Some(f) = self.out_file.as_mut() { let _ = f.write_all(&[data]); }
+                // Decide when to flush: on newline, or every N bytes if configured
+                let mut need_flush = data == b'\n';
+                if let Some(n) = self.flush_every {
+                    self.flush_count = self.flush_count.wrapping_add(1);
+                    if self.flush_count % n == 0 { need_flush = true; }
+                }
+                if need_flush {
+                    let _ = std::io::stdout().flush();
+                    if let Some(f) = self.out_file.as_mut() { let _ = f.flush(); }
+                }
             }
             2 => { // CTRL
                 self.ctrl = data;
