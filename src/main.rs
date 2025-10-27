@@ -2,6 +2,7 @@
 
 use std::env;
 use std::fs;
+use std::path::Path;
 
 use mc6809emu::bootscript::{emit_boot_template, parse_boot_script, BootSequencer};
 use mc6809emu::bus::Bus;
@@ -24,7 +25,7 @@ fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
         if out.is_empty() {
             out.push((s, e));
         } else {
-            let (last_s, last_e) = out.last_mut().unwrap();
+            let (_last_s, last_e) = out.last_mut().unwrap();
             if s <= *last_e { // overlap or touch
                 if e > *last_e { *last_e = e; }
             } else {
@@ -46,6 +47,7 @@ fn print_usage() {
     println!("  --trace                   Trace instructions");
     println!("  --step N                  Execute N steps (required to run)\n  --cycles                 Print cycle count at end");
     println!("  --run                     Run until Ctrl+C (ignores --step)");
+    println!("  --paused                  Start paused at program entry (overrides --run/--step/--trace/breakpoints until resumed)");
     println!("  --dump-regs               Dump registers");
     println!("  --dump-mem 0xADDR LEN     Dump memory range");
     println!("  --dump-mem-ascii 0xA LEN  Dump ASCII view");
@@ -265,6 +267,7 @@ fn main() {
     let mut force_pc: Option<u16> = None;
     let mut trace = false;
     let mut steps: Option<usize> = None;
+    let mut paused_start: bool = false;
     let mut dump_regs = false;
     let mut dump_mem: Option<(u16, usize)> = None;
     let mut dump_mem_ascii: Option<(u16, usize)> = None;
@@ -331,6 +334,9 @@ fn main() {
             }
             "--run" => {
                 run_forever = true;
+            }
+            "--paused" => {
+                paused_start = true;
             }
             "--dump-regs" => dump_regs = true,
             "--dump-mem" => {
@@ -754,7 +760,12 @@ fn main() {
     // If GUI is enabled and --dump-regs is set, launch the register viewer.
     // The viewer API is a no-op in non-GUI builds.
     let reg_viewer = if dump_regs {
-        Some(regview::Viewer::spawn("MC6809 Registers"))
+        // Try to load a companion .lst file for display in the viewer
+        let lst_path_opt = {
+            let lst_path = Path::new(&image_path).with_extension("lst");
+            if lst_path.exists() { Some(lst_path) } else { None }
+        };
+        Some(regview::Viewer::spawn("MC6809 Registers", lst_path_opt))
     } else {
         None
     };
@@ -818,7 +829,28 @@ fn main() {
         None
     };
 
-    if run_forever || steps.is_some() || trace || !breakpoints.is_empty() {
+    // If --paused is specified, still enter the run loop so Pause/Step controls work,
+    // but start in paused state and gate before executing any instruction.
+    if paused_start {
+        if let Some(viewer) = &reg_viewer {
+            viewer.set_paused(true);
+            let snap = regview::RegSnapshot {
+                a: cpu.r.a,
+                b: cpu.r.b,
+                d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                x: cpu.r.x,
+                y: cpu.r.y,
+                u: cpu.r.u,
+                s: cpu.r.s,
+                dp: cpu.r.dp,
+                pc: cpu.r.pc,
+                cc: cpu.r.cc,
+            };
+            viewer.push(snap);
+        }
+    }
+
+    if run_forever || steps.is_some() || trace || !breakpoints.is_empty() || paused_start {
         signals::install();
         // If --run, ignore --step and run until Ctrl+C
         let mut remaining = if run_forever {
@@ -856,6 +888,29 @@ fn main() {
             None
         };
         'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
+            // Pre-step pause gating so initial pause prevents executing first instruction
+            if let Some(viewer) = &reg_viewer {
+                // Push current snapshot for initial/highlight updates while paused
+                let snap = regview::RegSnapshot {
+                    a: cpu.r.a,
+                    b: cpu.r.b,
+                    d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                    x: cpu.r.x,
+                    y: cpu.r.y,
+                    u: cpu.r.u,
+                    s: cpu.r.s,
+                    dp: cpu.r.dp,
+                    pc: cpu.r.pc,
+                    cc: cpu.r.cc,
+                };
+                viewer.push(snap);
+                while viewer.should_pause() {
+                    if STOP_REQUESTED.load(Ordering::SeqCst) {
+                        break 'run_loop;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             if let Some(ref rxch) = rx {
                 if let Ok(v) = rxch.try_recv() {
                     if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
@@ -881,7 +936,7 @@ fn main() {
             }
             cpu.step(bus.as_mut(), false);
 
-            // Update register viewer and handle Pause/Step control
+            // Update register viewer after executing instruction
             if let Some(viewer) = &reg_viewer {
                 let snap = regview::RegSnapshot {
                     a: cpu.r.a,
@@ -896,12 +951,6 @@ fn main() {
                     cc: cpu.r.cc,
                 };
                 viewer.push(snap);
-                while viewer.should_pause() {
-                    if STOP_REQUESTED.load(Ordering::SeqCst) {
-                        break 'run_loop;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
             }
             if let Some(ref mut seq) = boot_seq {
                 seq.on_post_step(bus.as_mut(), mmu_regs_base);

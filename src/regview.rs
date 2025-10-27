@@ -30,27 +30,73 @@ mod gui {
     use super::*;
     use eframe::{egui, App};
     use egui_extras::{Column, TableBuilder};
+    use memmap2::Mmap;
+    use std::fs::File;
+    use std::path::PathBuf;
 
     pub struct RegApp {
         pub snap: Arc<Mutex<RegSnapshot>>,
         pub paused: Arc<AtomicBool>,
         pub step_requests: Arc<AtomicUsize>,
+        pub lst_mmap: Option<Arc<Mmap>>,
     }
 
     impl App for RegApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            // Right side: listing in its own scroll area and panel (so only listing scrolls)
+            if let Some(m) = &self.lst_mmap {
+                egui::SidePanel::right("lst_panel")
+                    .resizable(true)
+                    .default_width(877.0) // ~3/4 of 1170px window width (1:3 ratio)
+                    .show(ctx, |ui| {
+                        ui.heading("Listing (.lst)");
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .stick_to_right(true)
+                            .show(ui, |ui| {
+                                let paused = self.paused.load(Ordering::SeqCst);
+                                let cur_pc = self.snap.lock().map(|g| g.pc).unwrap_or(0);
+                                let pc_hex = format!("{:04X}", cur_pc);
+                                // Iterate lines and highlight the one whose address token matches PC when paused.
+                                let render_lines = |ui: &mut egui::Ui, text: &str| {
+                                    for line in text.lines() {
+                                        if paused {
+                                            let ltrim = line.trim_start();
+                                            let mut token = ltrim.split_whitespace().next().unwrap_or("");
+                                            if token.ends_with(':') { token = &token[..token.len()-1]; }
+                                            if token.eq_ignore_ascii_case(&pc_hex) {
+                                                ui.label(
+                                                    egui::RichText::new(line)
+                                                        .monospace()
+                                                        .background_color(egui::Color32::from_rgb(255, 0, 0)),
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                        ui.label(egui::RichText::new(line).monospace());
+                                    }
+                                };
+                                match std::str::from_utf8(&m[..]) {
+                                    Ok(s) => render_lines(ui, s),
+                                    Err(_) => {
+                                        let cow = String::from_utf8_lossy(&m[..]);
+                                        render_lines(ui, cow.as_ref());
+                                    }
+                                }
+                            });
+                    });
+            }
+
+            // Left/center: registers and controls (no scrolling)
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui.heading("MC6809 Registers");
-
                 let s = *self.snap.lock().unwrap();
-
+                ui.heading("MC6809 Registers");
                 ui.horizontal(|ui| {
                     if self.paused.load(Ordering::SeqCst) {
                         if ui.button("Resume").clicked() {
                             self.paused.store(false, Ordering::SeqCst);
                         }
                         if ui.button("Step").clicked() {
-                            // Ensure paused and request a single step
                             self.paused.store(true, Ordering::SeqCst);
                             self.step_requests.fetch_add(1, Ordering::SeqCst);
                         }
@@ -59,21 +105,18 @@ mod gui {
                             self.paused.store(true, Ordering::SeqCst);
                         }
                         if ui.button("Step").clicked() {
-                            // Enter paused state and request one step
                             self.paused.store(true, Ordering::SeqCst);
                             self.step_requests.fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 });
-
                 ui.separator();
-                // Table-like layout for registers
                 TableBuilder::new(ui)
                     .striped(true)
                     .resizable(false)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::auto().at_least(40.0)) // Reg
-                    .column(Column::remainder()) // Value
+                    .column(Column::auto().at_least(40.0))
+                    .column(Column::remainder())
                     .header(22.0, |mut header| {
                         header.col(|ui| {
                             ui.strong("Reg");
@@ -117,7 +160,6 @@ mod gui {
                             });
                         }
 
-                        // CC flags as a single row, with lowercase for cleared bits
                         let flags = [
                             ('E', 0b1000_0000u8),
                             ('F', 0b0100_0000u8),
@@ -137,19 +179,18 @@ mod gui {
                             row.col(|ui| {
                                 ui.monospace("CC");
                                 let rect = ui.max_rect();
-                            let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
-                            ui.painter().rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                                let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                                ui.painter().rect_stroke(rect, egui::Rounding::same(0.0), stroke);
                             });
                             row.col(|ui| {
                                 ui.monospace(cc_text);
                                 let rect = ui.max_rect();
-                            let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
-                            ui.painter().rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                                let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                                ui.painter().rect_stroke(rect, egui::Rounding::same(0.0), stroke);
                             });
                         });
                     });
 
-                // Refresh at ~60 FPS for smooth updates
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
             });
         }
@@ -159,26 +200,33 @@ mod gui {
         pub snapshot: Arc<Mutex<RegSnapshot>>,
         pub paused: Arc<AtomicBool>,
         pub step_requests: Arc<AtomicUsize>,
+        pub lst_mmap: Option<Arc<Mmap>>,
         _handle: std::thread::JoinHandle<()>,
     }
 
     impl RegView {
-        pub fn spawn(title: &str) -> Self {
+        pub fn spawn(title: &str, lst_path: Option<PathBuf>) -> Self {
             let snapshot = Arc::new(Mutex::new(RegSnapshot::default()));
             let paused = Arc::new(AtomicBool::new(false));
             let step_requests = Arc::new(AtomicUsize::new(0));
+            let lst_mmap: Option<Arc<Mmap>> = lst_path.and_then(|p| {
+                if let Ok(f) = File::open(p) {
+                    unsafe { Mmap::map(&f).ok() }.map(Arc::new)
+                } else { None }
+            });
 
             let snap_clone = Arc::clone(&snapshot);
             let paused_clone = Arc::clone(&paused);
             let step_requests_clone = Arc::clone(&step_requests);
+            let lst_clone = lst_mmap.as_ref().map(Arc::clone);
             let title = title.to_string();
 
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
                 native_options.viewport = eframe::egui::ViewportBuilder::default()
-                    .with_inner_size(eframe::egui::vec2(360.0, 340.0))
-                    .with_min_inner_size(eframe::egui::vec2(320.0, 300.0))
+                    .with_inner_size(eframe::egui::vec2(1170.0, 600.0))
+                    .with_min_inner_size(eframe::egui::vec2(780.0, 360.0))
                     .with_resizable(true);
                 // On Windows, winit requires the event loop to be created on the main thread by default.
                 // Allow creating it on this background thread to avoid a panic.
@@ -189,11 +237,11 @@ mod gui {
                         builder.with_any_thread(true);
                     }));
                 }
-                let app = RegApp { snap: snap_clone, paused: paused_clone, step_requests: step_requests_clone };
+                let app = RegApp { snap: snap_clone, paused: paused_clone, step_requests: step_requests_clone, lst_mmap: lst_clone };
                 let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
             });
 
-            Self { snapshot, paused, step_requests, _handle: handle }
+            Self { snapshot, paused, step_requests, lst_mmap, _handle: handle }
         }
 
         pub fn push(&self, s: RegSnapshot) {
@@ -204,6 +252,10 @@ mod gui {
 
         pub fn is_paused(&self) -> bool {
             self.paused.load(Ordering::SeqCst)
+        }
+
+        pub fn set_paused(&self, v: bool) {
+            self.paused.store(v, Ordering::SeqCst)
         }
 
         /// Returns true if the CPU loop should pause before executing the next instruction.
@@ -228,6 +280,7 @@ mod gui {
 #[cfg(not(feature = "gui"))]
 mod nogui {
     use super::*;
+    use std::path::PathBuf;
 
     pub struct Viewer {
         // No-op placeholder for non-GUI builds
@@ -235,10 +288,11 @@ mod nogui {
     }
 
     impl Viewer {
-        pub fn spawn(_title: &str) -> Self { Self { _p: () } }
+        pub fn spawn(_title: &str, _lst_path: Option<PathBuf>) -> Self { Self { _p: () } }
         pub fn push(&self, _s: RegSnapshot) {}
         pub fn is_paused(&self) -> bool { false }
         pub fn should_pause(&self) -> bool { false }
+        pub fn set_paused(&self, _v: bool) {}
     }
 }
 
