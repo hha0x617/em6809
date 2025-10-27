@@ -1,5 +1,5 @@
-use mc6809emu::bus::Memory;
-use mc6809emu::cpu::Cpu;
+use em6809::bus::Memory;
+use em6809::cpu::Cpu;
 
 // Helper to get 16-bit D from A/B
 fn d(cpu: &Cpu) -> u16 {

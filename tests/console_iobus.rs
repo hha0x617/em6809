@@ -1,5 +1,5 @@
-use mc6809emu::bus::{Bus, Memory};
-use mc6809emu::io::{ConsoleDev, IoBus};
+use em6809::bus::{Bus, Memory};
+use em6809::io::{ConsoleDev, IoBus};
 
 #[test]
 fn console_rx_tx_status() {
@@ -47,7 +47,7 @@ fn console_rx_irq_watermark() {
     con2.set_rx_watermark(2);
     con2.feed_bytes(b"AB");
     // Enable RX IRQ
-    mc6809emu::io::Device::write8(&mut con2, 0xFF02, 0x01);
+    em6809::io::Device::write8(&mut con2, 0xFF02, 0x01);
     bus2.add_device(con2);
     let (_n2, _f2, irq2) = bus2.irq_lines();
     assert!(irq2, "At/above watermark should assert IRQ");

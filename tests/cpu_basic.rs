@@ -1,5 +1,5 @@
-use mc6809emu::bus::Memory;
-use mc6809emu::cpu::Cpu; // if binary crate, expose modules via lib or use path
+use em6809::bus::Memory;
+use em6809::cpu::Cpu; // if binary crate, expose modules via lib or use path
 
 #[test]
 fn lda_imm_cycles() {

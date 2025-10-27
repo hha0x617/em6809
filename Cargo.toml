@@ -1,6 +1,6 @@
 [package]
-name = "mc6809emu"
-default-run = "mc6809emu"
+name = "em6809"
+default-run = "em6809"
 version = "0.1.0"
 edition = "2021"
 authors = ["hha0x617 <hha0x617@gmail.com>"]
@@ -23,5 +23,5 @@ egui_extras = { version = "0.27", optional = true }
 memmap2 = { version = "0.9", optional = true }
 
 [lib]
-name = "mc6809emu"
+name = "em6809"
 path = "src/lib.rs"

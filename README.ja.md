@@ -1,10 +1,10 @@
 このアプリケーションは、vibe codingワークフローの一環として、AIツール: Codex CLI の支援を受けて生成されました。
 
-# mc6809emu
+# em6809
 
 ## 概要
 
-mc6809emu は MC6809 のソフトウェアエミュレータです。実行用 CLI、詳細なコンソール I/O、分岐先の可視化を含むトレース/逆アセンブルを備え、OS‑9/NitrOS‑9 のブート検証にも活用できます。
+em6809 は MC6809 のソフトウェアエミュレータです。実行用 CLI、詳細なコンソール I/O、分岐先の可視化を含むトレース/逆アセンブルを備え、OS‑9/NitrOS‑9 のブート検証にも活用できます。
 
 ## インストール
 
@@ -14,11 +14,11 @@ mc6809emu は MC6809 のソフトウェアエミュレータです。実行用 C
 ## Quick Start
 
 - Hello World を実行:
-  - `target/release/mc6809emu samples/hello/hello.s19 --run --format srec --console 0xFF00`
+  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00`
 - ヘルプ表示:
-  - `target/release/mc6809emu --help`
+  - `target/release/em6809 --help`
 - PC を指定して開始:
-  - `target/release/mc6809emu samples/hello/hello.s19 --run --format srec --console 0xFF00 --pc 0xE000`
+  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00 --pc 0xE000`
 
 ## 基本ユースケース
 

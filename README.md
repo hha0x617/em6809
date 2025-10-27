@@ -1,10 +1,10 @@
 This application was generated with the assistance of AI tools: Codex CLI as part of the vibe coding workflow.
 
-# mc6809emu
+# em6809
 
 ## Overview
 
-mc6809emu is a software emulator for the MC6809. It provides a run-oriented CLI, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. It can be used to boot and validate OS‑9/NitrOS‑9 setups.
+em6809 is a software emulator for the MC6809. It provides a run-oriented CLI, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. It can be used to boot and validate OS‑9/NitrOS‑9 setups.
 
 ## Install
 
@@ -14,11 +14,11 @@ mc6809emu is a software emulator for the MC6809. It provides a run-oriented CLI,
 ## Quick Start
 
 - Run Hello World (until Ctrl+C):
-  - `target/release/mc6809emu samples/hello/hello.s19 --run --format srec --console 0xFF00`
+  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00`
 - Show help:
-  - `target/release/mc6809emu --help`
+  - `target/release/em6809 --help`
 - Start from an explicit PC:
-  - `target/release/mc6809emu samples/hello/hello.s19 --run --format srec --console 0xFF00 --pc 0xE000`
+  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00 --pc 0xE000`
 
 ## Common Use Cases
 

@@ -4,16 +4,16 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use mc6809emu::bootscript::{emit_boot_template, parse_boot_script, BootSequencer};
-use mc6809emu::bus::Bus;
-use mc6809emu::bus::{self, Memory};
-use mc6809emu::config::{apply_mmu_config_from_str, apply_preset};
-use mc6809emu::cpu::Cpu;
-use mc6809emu::debug;
-use mc6809emu::disasm::disasm_one;
-use mc6809emu::io::{ConsoleDev, IoBus};
-use mc6809emu::loader::{self, ImageFormat, LoadedImage};
-use mc6809emu::mmu::Mc6829;
+use em6809::bootscript::{emit_boot_template, parse_boot_script, BootSequencer};
+use em6809::bus::Bus;
+use em6809::bus::{self, Memory};
+use em6809::config::{apply_mmu_config_from_str, apply_preset};
+use em6809::cpu::Cpu;
+use em6809::debug;
+use em6809::disasm::disasm_one;
+use em6809::io::{ConsoleDev, IoBus};
+use em6809::loader::{self, ImageFormat, LoadedImage};
+use em6809::mmu::Mc6829;
 
 // GUI register viewer (no-op unless built with `--features gui`)
 mod regview;
@@ -37,8 +37,8 @@ fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
 }
 
 fn print_usage() {
-    println!("mc6809emu - MC6809 software emulator\n");
-    println!("Usage:\n  mc6809emu <image> [options]\n");
+    println!("em6809 - MC6809 software emulator\n");
+    println!("Usage:\n  em6809 <image> [options]\n");
     println!("Image Options:");
     println!("  --format bin|srec         Input format override");
     println!("  --base 0xADDR             Base address for raw binary");
@@ -523,7 +523,7 @@ fn main() {
                 }
             }
             "--preset-list" => {
-                println!("Presets: {}", mc6809emu::config::list_presets().join(", "));
+                println!("Presets: {}", em6809::config::list_presets().join(", "));
                 return;
             }
             "--boot-script" => {
@@ -799,7 +799,7 @@ fn main() {
         let mut processed: usize = 0;
         while processed < total_len {
             let (consumed, text) = if disasm_hex {
-                mc6809emu::disasm::disasm_one_hex(bus.as_mut(), pc)
+                em6809::disasm::disasm_one_hex(bus.as_mut(), pc)
             } else {
                 disasm_one(bus.as_mut(), pc)
             };
@@ -928,7 +928,7 @@ fn main() {
             }
             if trace {
                 let (_len, text) = if disasm_hex {
-                    mc6809emu::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc)
+                    em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc)
                 } else {
                     disasm_one(bus.as_mut(), cpu.r.pc)
                 };

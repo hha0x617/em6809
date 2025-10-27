@@ -1,6 +1,6 @@
-use mc6809emu::bus::{Bus, Memory};
-use mc6809emu::io::{ConsoleDev, Device, IoBus};
-use mc6809emu::mmu::Mc6829;
+use em6809::bus::{Bus, Memory};
+use em6809::io::{ConsoleDev, Device, IoBus};
+use em6809::mmu::Mc6829;
 
 #[test]
 fn mmu_write_protect_raises_irq() {
