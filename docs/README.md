@@ -17,3 +17,7 @@ This project maintains English as the primary documentation. Japanese docs are p
   - OS‑9/NitrOS‑9 ガイド: `ja/os9_guide.md`
   - トラブルシューティング: `ja/troubleshooting.md`
   - 命令カバレッジ: `ja/instruction_status.md`
+
+## Project TODOs
+
+- High‑level TODOs / Future work: `TODO.md`

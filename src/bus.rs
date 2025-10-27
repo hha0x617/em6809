@@ -48,3 +48,66 @@ impl Bus for Memory {
         self
     }
 }
+
+// Wrapper bus that tracks writes within an optional span for event-driven updates
+pub struct WriteTrack {
+    inner: Box<dyn Bus>,
+    dirty_addrs: Vec<u16>,
+    span: Option<(u16, u16)>, // track writes only if addr in [start, end)
+}
+
+impl WriteTrack {
+    pub fn new(inner: Box<dyn Bus>, span: Option<(u16, u16)>) -> Self {
+        Self {
+            inner,
+            dirty_addrs: Vec::new(),
+            span,
+        }
+    }
+    pub fn set_span(&mut self, span: Option<(u16, u16)>) {
+        self.span = span;
+    }
+    pub fn take_dirty_addrs(&mut self) -> Vec<u16> {
+        let mut out = Vec::new();
+        std::mem::swap(&mut out, &mut self.dirty_addrs);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+    pub fn inner_any_mut(&mut self) -> &mut dyn Any {
+        self.inner.as_any_mut()
+    }
+}
+
+impl Bus for WriteTrack {
+    fn read8(&mut self, addr: u16) -> u8 {
+        self.inner.read8(addr)
+    }
+    fn read8_fetch(&mut self, addr: u16) -> u8 {
+        self.inner.read8_fetch(addr)
+    }
+    fn write8(&mut self, addr: u16, data: u8) {
+        if let Some((s, e)) = self.span {
+            if s <= e {
+                if addr >= s && addr < e {
+                    self.dirty_addrs.push(addr);
+                }
+            } else {
+                // wrapped span (shouldn't happen for program spans, but handle generically)
+                if addr >= s || addr < e {
+                    self.dirty_addrs.push(addr);
+                }
+            }
+        } else {
+            // track all
+            self.dirty_addrs.push(addr);
+        }
+        self.inner.write8(addr, data)
+    }
+    fn irq_lines(&mut self) -> (bool, bool, bool) {
+        self.inner.irq_lines()
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}

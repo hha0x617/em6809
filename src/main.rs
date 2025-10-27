@@ -26,8 +26,11 @@ fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
             out.push((s, e));
         } else {
             let (_last_s, last_e) = out.last_mut().unwrap();
-            if s <= *last_e { // overlap or touch
-                if e > *last_e { *last_e = e; }
+            if s <= *last_e {
+                // overlap or touch
+                if e > *last_e {
+                    *last_e = e;
+                }
             } else {
                 out.push((s, e));
             }
@@ -100,7 +103,9 @@ fn parse_num_u16_any(s: &str) -> Option<u16> {
     } else {
         (10, sl)
     };
-    u32::from_str_radix(digits, base).ok().and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None })
+    u32::from_str_radix(digits, base)
+        .ok()
+        .and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None })
 }
 
 fn parse_num_usize_any(s: &str) -> Option<usize> {
@@ -365,7 +370,15 @@ fn main() {
                     if !peek.starts_with("--") {
                         let tok = args.next().unwrap();
                         // First positional is address; allow decimal too
-                        addr_opt = parse_num_u16_any(&tok).or_else(|| parse_num_usize_any(&tok).and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None }));
+                        addr_opt = parse_num_u16_any(&tok).or_else(|| {
+                            parse_num_usize_any(&tok).and_then(|v| {
+                                if v <= 0xFFFF {
+                                    Some(v as u16)
+                                } else {
+                                    None
+                                }
+                            })
+                        });
                     }
                 }
                 if let Some(peek) = args.peek() {
@@ -735,25 +748,40 @@ fn main() {
     let spans = coalesce_ranges(loaded.loaded_ranges.clone());
     let mut pc_span: Option<(u16, u16)> = None;
     for (s, e) in &spans {
-        if *s <= cpu.r.pc && cpu.r.pc < *e { pc_span = Some((*s, *e)); break; }
+        if *s <= cpu.r.pc && cpu.r.pc < *e {
+            pc_span = Some((*s, *e));
+            break;
+        }
     }
     if let Some((s, e)) = pc_span {
         let span_bytes: usize = e.wrapping_sub(s) as usize; // e is exclusive
         println!(
             "Program: start ${:04X}, loaded {} bytes, span ${:04X}..${:04X} ({} bytes)",
-            cpu.r.pc, loaded_bytes_sum, s, e.wrapping_sub(1), span_bytes
+            cpu.r.pc,
+            loaded_bytes_sum,
+            s,
+            e.wrapping_sub(1),
+            span_bytes
         );
     } else {
         // Fallback: print overall min..max if PC not within any span
         let (mut min_start, mut max_end) = (u16::MAX, 0u16);
         for (s, e) in &spans {
-            if *s < min_start { min_start = *s; }
-            if *e > max_end { max_end = *e; }
+            if *s < min_start {
+                min_start = *s;
+            }
+            if *e > max_end {
+                max_end = *e;
+            }
         }
         let span_bytes: usize = max_end.wrapping_sub(min_start) as usize;
         println!(
             "Program: start ${:04X}, loaded {} bytes, span ${:04X}..${:04X} ({} bytes)",
-            cpu.r.pc, loaded_bytes_sum, min_start, max_end.wrapping_sub(1), span_bytes
+            cpu.r.pc,
+            loaded_bytes_sum,
+            min_start,
+            max_end.wrapping_sub(1),
+            span_bytes
         );
     }
 
@@ -763,9 +791,47 @@ fn main() {
         // Try to load a companion .lst file for display in the viewer
         let lst_path_opt = {
             let lst_path = Path::new(&image_path).with_extension("lst");
-            if lst_path.exists() { Some(lst_path) } else { None }
+            if lst_path.exists() {
+                Some(lst_path)
+            } else {
+                None
+            }
         };
-        Some(regview::Viewer::spawn("MC6809 Registers", lst_path_opt))
+        // Always generate a hex-style disassembly of the span for GUI toggle and fallback
+        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+        let span_for_pc = spans
+            .iter()
+            .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+            .copied();
+        let (start, end) = if let Some((s, e)) = span_for_pc {
+            (s, e)
+        } else if let Some((s, e)) = spans.first().copied() {
+            (s, e)
+        } else {
+            (cpu.r.pc, cpu.r.pc)
+        };
+        let lst_fallback_text: Option<String> = if start != end {
+            let mut cur = start;
+            let mut out = String::new();
+            let mut processed: usize = 0;
+            let total_len: usize = end.wrapping_sub(start) as usize;
+            while processed < total_len {
+                let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                use core::fmt::Write as _;
+                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                let step = core::cmp::max(consumed as usize, 1);
+                processed += step;
+                cur = cur.wrapping_add(step as u16);
+            }
+            Some(out)
+        } else {
+            None
+        };
+        Some(regview::Viewer::spawn(
+            "MC6809 Registers",
+            lst_path_opt,
+            lst_fallback_text,
+        ))
     } else {
         None
     };
@@ -790,7 +856,9 @@ fn main() {
         // choose the coalesced span that contains the chosen start PC
         let spans = coalesce_ranges(loaded.loaded_ranges.clone());
         let span_for_pc = spans.iter().find(|(s, e)| *s <= pc && pc < *e).copied();
-        let default_full_len = span_for_pc.map(|(s, e)| e.wrapping_sub(s) as usize).unwrap_or(64);
+        let default_full_len = span_for_pc
+            .map(|(s, e)| e.wrapping_sub(s) as usize)
+            .unwrap_or(64);
         let total_len: usize = match (addr_opt, len_opt) {
             (None, None) => default_full_len,
             (Some(_), None) => 64,
@@ -858,6 +926,7 @@ fn main() {
         } else {
             steps.unwrap_or(usize::MAX)
         };
+        let mut run_until_target: Option<u16> = None;
         // Generic stdin feeder for dyn Bus path, feeding IoBus<Memory|Mc6829>
         // On Windows, switch stdin to raw (no echo, no line input) so keystrokes are delivered immediately
         let prev_mode = if console_stdin {
@@ -887,6 +956,7 @@ fn main() {
         } else {
             None
         };
+        // Event-driven updates based on write tracking
         'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
             // Pre-step pause gating so initial pause prevents executing first instruction
             if let Some(viewer) = &reg_viewer {
@@ -904,15 +974,67 @@ fn main() {
                     cc: cpu.r.cc,
                 };
                 viewer.push(snap);
+                // While paused, also process GUI commands so right-click actions take effect immediately
                 while viewer.should_pause() {
                     if STOP_REQUESTED.load(Ordering::SeqCst) {
                         break 'run_loop;
                     }
+                    // Handle queued commands even while paused
+                    while let Some(cmd) = viewer.take_command() {
+                        match cmd {
+                            regview::Command::SetPc(a) => {
+                                cpu.set_pc(a);
+                                // push updated snapshot
+                                let snap2 = regview::RegSnapshot {
+                                    a: cpu.r.a,
+                                    b: cpu.r.b,
+                                    d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                    x: cpu.r.x,
+                                    y: cpu.r.y,
+                                    u: cpu.r.u,
+                                    s: cpu.r.s,
+                                    dp: cpu.r.dp,
+                                    pc: cpu.r.pc,
+                                    cc: cpu.r.cc,
+                                };
+                                viewer.push(snap2);
+                                // refresh listing for current PC span
+                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                if let Some((start, end)) = spans
+                                    .iter()
+                                    .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                    .copied()
+                                {
+                                    let mut cur = start;
+                                    let mut out = String::new();
+                                    let mut processed: usize = 0;
+                                    let total_len: usize = end.wrapping_sub(start) as usize;
+                                    while processed < total_len {
+                                        let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                        use core::fmt::Write as _;
+                                        let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                        let step = core::cmp::max(consumed as usize, 1);
+                                        processed += step;
+                                        cur = cur.wrapping_add(step as u16);
+                                    }
+                                    viewer.update_hex_listing(out);
+                                }
+                            }
+                            regview::Command::RunUntil(a) => {
+                                run_until_target = Some(a);
+                                viewer.set_paused(false);
+                                // break pause loop to resume execution immediately
+                                break;
+                            }
+                        }
+                    }
+                    // Small sleep to avoid busy-waiting when still paused
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             }
             if let Some(ref rxch) = rx {
                 if let Ok(v) = rxch.try_recv() {
+                    // Support possibly wrapped bus (WriteTrack)
                     if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
                     {
                         io_mem.feed_console_input(&v);
@@ -920,6 +1042,15 @@ fn main() {
                         bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
                     {
                         io_mmu.feed_console_input(&v);
+                    } else if let Some(wt) =
+                        bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
+                    {
+                        let inner_any = wt.inner_any_mut();
+                        if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                            io_mem.feed_console_input(&v);
+                        } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                            io_mmu.feed_console_input(&v);
+                        }
                     }
                 }
             }
@@ -951,9 +1082,158 @@ fn main() {
                     cc: cpu.r.cc,
                 };
                 viewer.push(snap);
+                // Handle viewer commands (context menu actions)
+                while let Some(cmd) = viewer.take_command() {
+                    match cmd {
+                        regview::Command::SetPc(a) => {
+                            cpu.set_pc(a);
+                            // push updated snapshot immediately to reflect PC change
+                            let snap2 = regview::RegSnapshot {
+                                a: cpu.r.a,
+                                b: cpu.r.b,
+                                d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                x: cpu.r.x,
+                                y: cpu.r.y,
+                                u: cpu.r.u,
+                                s: cpu.r.s,
+                                dp: cpu.r.dp,
+                                pc: cpu.r.pc,
+                                cc: cpu.r.cc,
+                            };
+                            viewer.push(snap2);
+                            // Also refresh listing pane to reflect current PC span and highlight
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
+                            if let Some((start, end)) = span_for_pc {
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                let total_len: usize = end.wrapping_sub(start) as usize;
+                                while processed < total_len {
+                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                                viewer.update_hex_listing(out);
+                            }
+                        }
+                        regview::Command::RunUntil(a) => {
+                            run_until_target = Some(a);
+                            viewer.set_paused(false);
+                            // Proactively refresh listing so panes reflect latest selection
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
+                            if let Some((start, end)) = span_for_pc {
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                let total_len: usize = end.wrapping_sub(start) as usize;
+                                while processed < total_len {
+                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                                viewer.update_hex_listing(out);
+                            }
+                        }
+                    }
+                }
+                // Event-driven recompute of HEX disassembly when tracked writes occurred
+                if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
+                    let (policy, win_len) = viewer.get_span_policy();
+                    if policy == 0 {
+                        // Full span tracking
+                        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                        let span_for_pc = spans
+                            .iter()
+                            .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                            .copied();
+                        let (start, end) = if let Some((s, e)) = span_for_pc {
+                            (s, e)
+                        } else if let Some((s, e)) = spans.first().copied() {
+                            (s, e)
+                        } else {
+                            (cpu.r.pc, cpu.r.pc)
+                        };
+                        wt.set_span(if start != end {
+                            Some((start, end))
+                        } else {
+                            None
+                        });
+                        let dirty = wt.take_dirty_addrs();
+                        if !dirty.is_empty() && start != end {
+                            let mut cur = start;
+                            let mut out = String::new();
+                            let mut processed: usize = 0;
+                            let total_len: usize = end.wrapping_sub(start) as usize;
+                            while processed < total_len {
+                                let (consumed, text) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                use core::fmt::Write as _;
+                                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                let step = core::cmp::max(consumed as usize, 1);
+                                processed += step;
+                                cur = cur.wrapping_add(step as u16);
+                            }
+                            viewer.update_hex_listing(out);
+                            viewer.force_hex_view();
+                        }
+                    } else {
+                        // PC window: track all writes, re-disassemble around changed addresses only
+                        wt.set_span(None);
+                        let mut dirty = wt.take_dirty_addrs();
+                        if !dirty.is_empty() {
+                            dirty.sort_unstable();
+                            dirty.dedup();
+                            let back = 8usize;
+                            let half = win_len.saturating_sub(1) / 2;
+                            let mut replacements: Vec<(u16, String)> = Vec::new();
+                            for &addr in &dirty {
+                                let start = addr.wrapping_sub((back as u16).max(half as u16));
+                                let mut cur = start;
+                                let mut processed: usize = 0;
+                                let total_len: usize = win_len.max(32);
+                                while processed < total_len {
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    let line = format!("{:04X}: {}", cur, text);
+                                    replacements.push((cur, line));
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                            }
+                            if !replacements.is_empty() {
+                                viewer.update_hex_lines(replacements);
+                                viewer.force_hex_view();
+                            }
+                        }
+                    }
+                }
             }
             if let Some(ref mut seq) = boot_seq {
                 seq.on_post_step(bus.as_mut(), mmu_regs_base);
+            }
+            // Auto-pause when run-until target reached
+            if let Some(tgt) = run_until_target {
+                if cpu.r.pc == tgt {
+                    if let Some(viewer) = &reg_viewer {
+                        viewer.set_paused(true);
+                    }
+                    run_until_target = None;
+                }
             }
             if !run_forever {
                 remaining = remaining.saturating_sub(1);

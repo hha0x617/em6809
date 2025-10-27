@@ -1161,5 +1161,11 @@ pub fn disasm_one_hex<B: Bus + ?Sized>(bus: &mut B, pc: u16) -> (u16, String) {
         }
         bytes.push_str(&format!("{:02X}", b));
     }
-    (len, format!("{: <9} {}", bytes, text))
+    // Ensure a sufficiently wide bytes column so mnemonics align nicely.
+    // MC6809 max instruction length is small (<= 5 bytes typically), so pad generously.
+    const BYTES_COL_MIN_WIDTH: usize = 20;
+    (
+        len,
+        format!("{: <width$} {}", bytes, text, width = BYTES_COL_MIN_WIDTH),
+    )
 }

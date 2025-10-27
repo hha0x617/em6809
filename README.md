@@ -35,7 +35,16 @@ em6809 is a software emulator for the MC6809. It provides a run-oriented CLI, ri
 - OS‑9/NitrOS‑9 guide: `docs/en/os9_guide.md`
 - Troubleshooting: `docs/en/troubleshooting.md`
 - Instruction coverage: `docs/en/instruction_status.md`
- - Register viewer integration (GUI): `docs/en/regview_integration.md`
+- Register viewer integration (GUI): `docs/en/regview_integration.md`
+- Environment variables (GUI): see `docs/en/regview_integration.md#environment-variables`
+
+### Recent GUI viewer enhancements
+
+- Listing fallback when `.lst` is missing (auto‑generated hex disassembly).
+- Hex view toggle and Follow PC highlight with auto‑scroll.
+- Event‑driven re‑disassembly for self‑modifying code (Full span / PC window modes).
+- Right‑click context menu on listing lines: Run to here, Set PC to this address, Cancel.
+- Hover highlight on listing lines; panes refresh immediately after context actions.
 
 ## Links
 

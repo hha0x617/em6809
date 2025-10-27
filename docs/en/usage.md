@@ -50,3 +50,10 @@ I/O (see console_io.md for details)
   - `... --console-stdin --console-echo ON`
 
 For deeper I/O control see console_io.md; for debugging/tracing see tracing.md; for OS‑9 integration see os9_guide.md.
+
+## Environment variables
+
+The following variables affect the GUI register viewer (when building with `--features gui`). See `docs/en/regview_integration.md` for details.
+
+- `EM6809_GUI_FONT`: Path to a TTF/OTF/TTC font to prefer (helps render Japanese glyphs).
+- `EM6809_LANG`: Force listing context‑menu labels to Japanese (`ja`) or English (`en`); auto‑detected when unset.
