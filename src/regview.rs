@@ -80,6 +80,15 @@ mod gui {
         pub fonts_applied: bool,
         pub use_japanese: bool,
         pub last_pc_for_scroll: u16,
+        // Memory view state
+        pub mem_follow_pc: Arc<AtomicBool>,
+        pub mem_window_len: Arc<AtomicUsize>,
+        pub mem_window_start: Arc<AtomicUsize>,  // u16 widened
+        pub mem_buf: Arc<Mutex<(u16, Vec<u8>)>>, // current window snapshot
+        pub mem_hl: Arc<Mutex<Option<(u16, usize)>>>, // highlight range
+        pub mem_utf8: Arc<AtomicBool>,
+        pub mem_jump_text: String,
+        pub mem_len_text: String,
     }
 
     impl App for RegApp {
@@ -88,16 +97,17 @@ mod gui {
             if !self.fonts_applied {
                 if let Some(bytes) = &self.ja_font {
                     let mut defs = egui::FontDefinitions::default();
-                    defs.font_data.insert("ja".to_owned(), egui::FontData::from_owned((**bytes).clone()));
+                    defs.font_data.insert(
+                        "ja".to_owned(),
+                        egui::FontData::from_owned((**bytes).clone()),
+                    );
                     // Proportional: prefer JP font first so menu/headings render Japanese nicely
-                    defs
-                        .families
+                    defs.families
                         .entry(egui::FontFamily::Proportional)
                         .or_default()
                         .insert(0, "ja".to_owned());
                     // Monospace: keep existing mono fonts first for alignment; append JP as fallback for CJK glyphs
-                    defs
-                        .families
+                    defs.families
                         .entry(egui::FontFamily::Monospace)
                         .or_default()
                         .push("ja".to_owned());
@@ -106,11 +116,167 @@ mod gui {
                 self.fonts_applied = true;
             }
 
+            // Memory pane (placed to the left of the listing pane by ordering two right panels)
+            egui::SidePanel::right("mem_panel")
+                .resizable(true)
+                .min_width(560.0)
+                .default_width(620.0)
+                .show(ctx, |ui| {
+                    let mut follow_pc = self.mem_follow_pc.load(Ordering::SeqCst);
+                    let _win_len = self.mem_window_len.load(Ordering::SeqCst);
+                    let mut start = self.mem_window_start.load(Ordering::SeqCst) as u16;
+                    ui.horizontal(|ui| {
+                        ui.heading(if self.use_japanese {
+                            "メモリ"
+                        } else {
+                            "Memory"
+                        });
+                        ui.separator();
+                        if ui
+                            .checkbox(
+                                &mut follow_pc,
+                                if self.use_japanese {
+                                    "PC追従"
+                                } else {
+                                    "Follow PC"
+                                },
+                            )
+                            .clicked()
+                        {
+                            self.mem_follow_pc.store(follow_pc, Ordering::SeqCst);
+                        }
+                        let mut utf8 = self.mem_utf8.load(Ordering::SeqCst);
+                        if ui.checkbox(&mut utf8, "UTF-8").clicked() {
+                            self.mem_utf8.store(utf8, Ordering::SeqCst);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(if self.use_japanese { "開始" } else { "Start" });
+                        let te = egui::TextEdit::singleline(&mut self.mem_jump_text)
+                            .desired_width(80.0)
+                            .hint_text("0x0000");
+                        // Disable editing of Start when following PC
+                        let start_resp = ui.add_enabled(!follow_pc, te);
+                        ui.label(if self.use_japanese { "長さ" } else { "Len" });
+                        let len_te = egui::TextEdit::singleline(&mut self.mem_len_text)
+                            .desired_width(64.0)
+                            .hint_text("256");
+                        let len_resp = ui.add(len_te);
+                        // Commit Start: only when not following PC, and either Enter while focused or focus lost
+                        if !follow_pc {
+                            if start_resp.has_focus() {
+                                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                                    if let Some(val) = parse_num_u16_any_gui(&self.mem_jump_text) {
+                                        start = val;
+                                        self.mem_window_start.store(val as usize, Ordering::SeqCst);
+                                        self.mem_jump_text = format!("0x{:04X}", val);
+                                    }
+                                }
+                            } else if start_resp.lost_focus() {
+                                if let Some(val) = parse_num_u16_any_gui(&self.mem_jump_text) {
+                                    start = val;
+                                    self.mem_window_start.store(val as usize, Ordering::SeqCst);
+                                    self.mem_jump_text = format!("0x{:04X}", val);
+                                }
+                            }
+                        }
+                        // Commit Len: Enter while focused or on focus loss
+                        if len_resp.has_focus() {
+                            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                                if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
+                                    let v = v.clamp(16, 4096);
+                                    self.mem_window_len.store(v, Ordering::SeqCst);
+                                    self.mem_len_text = format!("{}", v);
+                                }
+                            }
+                        } else if len_resp.lost_focus() {
+                            if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
+                                let v = v.clamp(16, 4096);
+                                self.mem_window_len.store(v, Ordering::SeqCst);
+                                self.mem_len_text = format!("{}", v);
+                            }
+                        }
+                        // Jump button removed; Enter/focus-out on Start commits address
+                        if ui
+                            .button(if self.use_japanese {
+                                "コピー"
+                            } else {
+                                "Copy"
+                            })
+                            .clicked()
+                        {
+                            let dump = if let Ok(g) = self.mem_buf.lock() {
+                                format_memory_dump((g.0, g.1.as_slice()))
+                            } else {
+                                String::new()
+                            };
+                            ui.output_mut(|o| o.copied_text = dump);
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let (s, bytes) = if let Ok(g) = self.mem_buf.lock() {
+                                (g.0, g.1.clone())
+                            } else {
+                                (0u16, Vec::new())
+                            };
+                            let hl = self.mem_hl.lock().ok().and_then(|g| *g);
+                            let (hl_start, hl_end) = if let Some((hs, hl)) = hl {
+                                let end = hs.wrapping_add(hl as u16);
+                                (Some(hs), Some(end))
+                            } else {
+                                (None, None)
+                            };
+                            let hl_color = egui::Color32::RED;
+                            let utf8_mode = self.mem_utf8.load(Ordering::SeqCst);
+                            let mut off: usize = 0;
+                            while off < bytes.len() {
+                                let chunk = &bytes[off..bytes.len().min(off + 16)];
+                                let addr = s.wrapping_add(off as u16);
+                                ui.scope(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(format!("{:04X}: ", addr));
+                                        // hex bytes
+                                        for (i, b) in chunk.iter().enumerate() {
+                                            let a = addr.wrapping_add(i as u16);
+                                            let in_hl = if let (Some(hs), Some(he)) = (hl_start, hl_end) {
+                                                if hs <= he { a >= hs && a < he } else { a >= hs || a < he }
+                                            } else { false };
+                                            let mut rt = egui::RichText::new(format!("{:02X}", b)).monospace();
+                                            if in_hl { rt = rt.background_color(hl_color); }
+                                            ui.add(egui::Label::new(rt));
+                                            if i != chunk.len() - 1 { ui.monospace(" "); }
+                                        }
+                                        // pad if fewer than 16 bytes
+                                        for _ in chunk.len()..16 { ui.monospace("   "); }
+                                        ui.monospace("| ");
+                                        // ascii / utf-8 view without spaces between characters
+                                        if utf8_mode {
+                                            let s = String::from_utf8_lossy(chunk);
+                                            ui.add(egui::Label::new(egui::RichText::new(s).monospace()));
+                                        } else {
+                                            let mut s = String::with_capacity(16);
+                                            for b in chunk.iter() {
+                                                let ch = if (0x20..=0x7E).contains(b) { *b as char } else { '.' };
+                                                s.push(ch);
+                                            }
+                                            ui.monospace(s);
+                                        }
+                                    });
+                                });
+                                off += 16;
+                            }
+                        });
+                });
+
             // Right side: listing in its own scroll area and panel (so only listing scrolls)
             if self.lst_mmap.is_some() || self.lst_text.is_some() {
                 egui::SidePanel::right("lst_panel")
                     .resizable(true)
-                    .default_width(877.0) // ~3/4 of 1170px window width (1:3 ratio)
+                    .default_width(820.0)
                     .show(ctx, |ui| {
                         let have_lst = self.lst_mmap.is_some();
                         let have_hex = self.lst_text.is_some();
@@ -409,6 +575,13 @@ mod gui {
         cmds: Arc<Mutex<Vec<Command>>>,
         ja_font: Option<Arc<Vec<u8>>>,
         _handle: std::thread::JoinHandle<()>,
+        // Memory view shared state
+        mem_follow_pc: Arc<AtomicBool>,
+        mem_window_len: Arc<AtomicUsize>,
+        mem_window_start: Arc<AtomicUsize>,
+        mem_buf: Arc<Mutex<(u16, Vec<u8>)>>,
+        mem_hl: Arc<Mutex<Option<(u16, usize)>>>,
+        mem_utf8: Arc<AtomicBool>,
     }
 
     impl RegView {
@@ -416,12 +589,18 @@ mod gui {
         fn is_japanese_locale() -> bool {
             if let Ok(v) = std::env::var("EM6809_LANG") {
                 let vl = v.to_lowercase();
-                if vl.starts_with("ja") { return true; }
-                if vl.starts_with("en") { return false; }
+                if vl.starts_with("ja") {
+                    return true;
+                }
+                if vl.starts_with("en") {
+                    return false;
+                }
             }
             for key in ["LC_ALL", "LC_MESSAGES", "LANG"].iter() {
                 if let Ok(v) = std::env::var(key) {
-                    if v.to_lowercase().starts_with("ja") { return true; }
+                    if v.to_lowercase().starts_with("ja") {
+                        return true;
+                    }
                 }
             }
             #[cfg(windows)]
@@ -434,7 +613,9 @@ mod gui {
                 let n = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
                 if n > 0 {
                     if let Ok(s) = String::from_utf16(&buf[..(n as usize - 1)]) {
-                        if s.to_lowercase().starts_with("ja") { return true; }
+                        if s.to_lowercase().starts_with("ja") {
+                            return true;
+                        }
                     }
                 }
             }
@@ -444,6 +625,7 @@ mod gui {
             title: &str,
             lst_path: Option<PathBuf>,
             lst_fallback_text: Option<String>,
+            initial_start: u16,
         ) -> Self {
             let snapshot = Arc::new(Mutex::new(RegSnapshot::default()));
             let paused = Arc::new(AtomicBool::new(false));
@@ -464,58 +646,78 @@ mod gui {
             let window_len = Arc::new(AtomicUsize::new(256));
             let cmds: Arc<Mutex<Vec<Command>>> = Arc::new(Mutex::new(Vec::new()));
 
+            // Memory view defaults
+            let mem_follow_pc = Arc::new(AtomicBool::new(true));
+            let mem_window_len = Arc::new(AtomicUsize::new(256));
+            let mem_window_start = Arc::new(AtomicUsize::new(initial_start as usize));
+            let mem_buf: Arc<Mutex<(u16, Vec<u8>)>> = Arc::new(Mutex::new((0, Vec::new())));
+            let mem_hl: Arc<Mutex<Option<(u16, usize)>>> = Arc::new(Mutex::new(None));
+            let mem_utf8 = Arc::new(AtomicBool::new(false));
+
             // Try to discover a Japanese-capable font from common system locations
             let ja_font: Option<Arc<Vec<u8>>> = {
                 if let Ok(p) = std::env::var("EM6809_GUI_FONT") {
                     if !p.is_empty() {
-                        if let Ok(b) = std::fs::read(&p) { Some(Arc::new(b)) } else { None }
-                    } else { None }
-                } else {
-                #[cfg(windows)]
-                {
-                    let candidates = [
-                        "C:/Windows/Fonts/Meiryo.ttc",
-                        "C:/Windows/Fonts/meiryo.ttc",
-                        "C:/Windows/Fonts/YuGothR.ttc",
-                        "C:/Windows/Fonts/YuGothM.ttc",
-                        "C:/Windows/Fonts/msgothic.ttc",
-                    ];
-                    let mut found: Option<Arc<Vec<u8>>> = None;
-                    for p in candidates.iter() {
-                        if let Ok(b) = std::fs::read(p) {
-                            found = Some(Arc::new(b));
-                            break;
+                        if let Ok(b) = std::fs::read(&p) {
+                            Some(Arc::new(b))
+                        } else {
+                            None
                         }
+                    } else {
+                        None
                     }
-                    found
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    let candidates = [
-                        "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
-                        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                        "/System/Library/Fonts/AppleGothic.ttf",
-                    ];
-                    let mut found: Option<Arc<Vec<u8>>> = None;
-                    for p in candidates.iter() {
-                        if let Ok(b) = std::fs::read(p) { found = Some(Arc::new(b)); break; }
+                } else {
+                    #[cfg(windows)]
+                    {
+                        let candidates = [
+                            "C:/Windows/Fonts/Meiryo.ttc",
+                            "C:/Windows/Fonts/meiryo.ttc",
+                            "C:/Windows/Fonts/YuGothR.ttc",
+                            "C:/Windows/Fonts/YuGothM.ttc",
+                            "C:/Windows/Fonts/msgothic.ttc",
+                        ];
+                        let mut found: Option<Arc<Vec<u8>>> = None;
+                        for p in candidates.iter() {
+                            if let Ok(b) = std::fs::read(p) {
+                                found = Some(Arc::new(b));
+                                break;
+                            }
+                        }
+                        found
                     }
-                    found
-                }
-                #[cfg(all(not(windows), not(target_os = "macos")))]
-                {
-                    let candidates = [
-                        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
-                        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                        "/usr/share/fonts/truetype/noto/NotoSansCJKjp-Regular.otf",
-                    ];
-                    let mut found: Option<Arc<Vec<u8>>> = None;
-                    for p in candidates.iter() {
-                        if let Ok(b) = std::fs::read(p) { found = Some(Arc::new(b)); break; }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let candidates = [
+                            "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+                            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                            "/System/Library/Fonts/AppleGothic.ttf",
+                        ];
+                        let mut found: Option<Arc<Vec<u8>>> = None;
+                        for p in candidates.iter() {
+                            if let Ok(b) = std::fs::read(p) {
+                                found = Some(Arc::new(b));
+                                break;
+                            }
+                        }
+                        found
                     }
-                    found
-                }
+                    #[cfg(all(not(windows), not(target_os = "macos")))]
+                    {
+                        let candidates = [
+                            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+                            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                            "/usr/share/fonts/truetype/noto/NotoSansCJKjp-Regular.otf",
+                        ];
+                        let mut found: Option<Arc<Vec<u8>>> = None;
+                        for p in candidates.iter() {
+                            if let Ok(b) = std::fs::read(p) {
+                                found = Some(Arc::new(b));
+                                break;
+                            }
+                        }
+                        found
+                    }
                 }
             };
 
@@ -533,12 +735,18 @@ mod gui {
             let title = title.to_string();
             let use_japanese = Self::is_japanese_locale();
 
+            let mem_follow_pc_thread = mem_follow_pc.clone();
+            let mem_window_len_thread = mem_window_len.clone();
+            let mem_window_start_thread = mem_window_start.clone();
+            let mem_buf_thread = mem_buf.clone();
+            let mem_hl_thread = mem_hl.clone();
+            let mem_utf8_thread = mem_utf8.clone();
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
                 native_options.viewport = eframe::egui::ViewportBuilder::default()
-                    .with_inner_size(eframe::egui::vec2(1170.0, 600.0))
-                    .with_min_inner_size(eframe::egui::vec2(780.0, 360.0))
+                    .with_inner_size(eframe::egui::vec2(1800.0, 700.0))
+                    .with_min_inner_size(eframe::egui::vec2(900.0, 400.0))
                     .with_resizable(true);
                 // On Windows, winit requires the event loop to be created on the main thread by default.
                 // Allow creating it on this background thread to avoid a panic.
@@ -564,6 +772,14 @@ mod gui {
                     fonts_applied: false,
                     use_japanese,
                     last_pc_for_scroll: 0,
+                    mem_follow_pc: mem_follow_pc_thread.clone(),
+                    mem_window_len: mem_window_len_thread.clone(),
+                    mem_window_start: mem_window_start_thread.clone(),
+                    mem_buf: mem_buf_thread.clone(),
+                    mem_hl: mem_hl_thread.clone(),
+                    mem_utf8: mem_utf8_thread.clone(),
+                    mem_jump_text: format!("0x{:04X}", initial_start),
+                    mem_len_text: format!("{}", mem_window_len_thread.load(Ordering::SeqCst)),
                 };
                 let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
             });
@@ -581,6 +797,12 @@ mod gui {
                 cmds,
                 ja_font,
                 _handle: handle,
+                mem_follow_pc,
+                mem_window_len,
+                mem_window_start,
+                mem_buf,
+                mem_hl,
+                mem_utf8,
             }
         }
 
@@ -634,6 +856,28 @@ mod gui {
         pub fn force_hex_view(&self) {
             self.use_hex.store(true, Ordering::SeqCst);
         }
+        // Memory view controls
+        pub fn get_memory_window(&self) -> (u16, usize, bool) {
+            (
+                self.mem_window_start.load(Ordering::SeqCst) as u16,
+                self.mem_window_len.load(Ordering::SeqCst),
+                self.mem_follow_pc.load(Ordering::SeqCst),
+            )
+        }
+        pub fn update_memory_window(&self, start: u16, bytes: Vec<u8>) {
+            if let Ok(mut g) = self.mem_buf.lock() {
+                *g = (start, bytes);
+            }
+        }
+        pub fn set_memory_highlight(&self, start: u16, len: usize) {
+            if let Ok(mut g) = self.mem_hl.lock() {
+                if len == 0 {
+                    *g = None;
+                } else {
+                    *g = Some((start, len));
+                }
+            }
+        }
         pub fn take_command(&self) -> Option<Command> {
             if let Ok(mut q) = self.cmds.lock() {
                 if !q.is_empty() {
@@ -668,6 +912,81 @@ mod gui {
     }
 
     pub use RegView as Viewer;
+
+    fn parse_num_u16_any_gui(s: &str) -> Option<u16> {
+        let sl = s.trim();
+        let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
+            (16, rest)
+        } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
+            (8, rest)
+        } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
+            (2, rest)
+        } else {
+            (10, sl)
+        };
+        u32::from_str_radix(digits, base).ok().and_then(|v| {
+            if v <= 0xFFFF {
+                Some(v as u16)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn parse_num_usize_any_gui(s: &str) -> Option<usize> {
+        let sl = s.trim();
+        let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
+            (16, rest)
+        } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
+            (8, rest)
+        } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
+            (2, rest)
+        } else {
+            (10, sl)
+        };
+        usize::from_str_radix(digits, base).ok()
+    }
+
+    fn format_memory_line(addr: u16, bytes: &[u8], _pc: u16) -> String {
+        use core::fmt::Write as _;
+        let mut s = String::with_capacity(80);
+        let _ = write!(&mut s, "{:04X}: ", addr);
+        for i in 0..16 {
+            if i < bytes.len() {
+                let _ = write!(&mut s, "{:02X} ", bytes[i]);
+            } else {
+                let _ = write!(&mut s, "   ");
+            }
+        }
+        let _ = write!(&mut s, " | ");
+        for i in 0..16 {
+            if i < bytes.len() {
+                let ch = bytes[i];
+                let c = if (0x20..=0x7E).contains(&ch) {
+                    ch as char
+                } else {
+                    '.'
+                };
+                let _ = write!(&mut s, "{}", c);
+            } else {
+                let _ = write!(&mut s, " ");
+            }
+        }
+        s
+    }
+
+    fn format_memory_dump((start, bytes): (u16, &[u8])) -> String {
+        let mut out = String::new();
+        let mut off = 0usize;
+        while off < bytes.len() {
+            let chunk = &bytes[off..bytes.len().min(off + 16)];
+            let line = format_memory_line(start.wrapping_add(off as u16), chunk, 0xFFFF);
+            out.push_str(&line);
+            out.push('\n');
+            off += 16;
+        }
+        out
+    }
 }
 
 #[cfg(not(feature = "gui"))]
@@ -691,6 +1010,7 @@ mod nogui {
             _title: &str,
             _lst_path: Option<PathBuf>,
             _lst_fallback_text: Option<String>,
+            _initial_start: u16,
         ) -> Self {
             Self { _p: () }
         }
@@ -708,7 +1028,14 @@ mod nogui {
             (0, 256)
         }
         pub fn force_hex_view(&self) {}
-        pub fn take_command(&self) -> Option<Command> { None }
+        pub fn get_memory_window(&self) -> (u16, usize, bool) {
+            (0, 256, true)
+        }
+        pub fn update_memory_window(&self, _start: u16, _bytes: Vec<u8>) {}
+        pub fn set_memory_highlight(&self, _start: u16, _len: usize) {}
+        pub fn take_command(&self) -> Option<Command> {
+            None
+        }
     }
 }
 

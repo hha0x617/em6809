@@ -831,6 +831,7 @@ fn main() {
             "MC6809 Registers",
             lst_path_opt,
             lst_fallback_text,
+            start,
         ))
     } else {
         None
@@ -974,6 +975,21 @@ fn main() {
                     cc: cpu.r.cc,
                 };
                 viewer.push(snap);
+                // Update memory pane based on current settings
+                {
+                    let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                    let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                    let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                    let mut a = eff_start;
+                    for _ in 0..mlen {
+                        buf.push(bus.as_mut().read8(a));
+                        a = a.wrapping_add(1);
+                    }
+                    viewer.update_memory_window(eff_start, buf);
+                    let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                    let clen = core::cmp::max(consumed as usize, 1);
+                    viewer.set_memory_highlight(cpu.r.pc, clen);
+                }
                 // While paused, also process GUI commands so right-click actions take effect immediately
                 while viewer.should_pause() {
                     if STOP_REQUESTED.load(Ordering::SeqCst) {
@@ -998,6 +1014,21 @@ fn main() {
                                     cc: cpu.r.cc,
                                 };
                                 viewer.push(snap2);
+                                // refresh memory view to reflect new PC
+                                let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                                let eff_start: u16 =
+                                    if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                                let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                                let mut a = eff_start;
+                                for _ in 0..mlen {
+                                    buf.push(bus.as_mut().read8(a));
+                                    a = a.wrapping_add(1);
+                                }
+                                viewer.update_memory_window(eff_start, buf);
+                                let (consumed, _) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                                let clen = core::cmp::max(consumed as usize, 1);
+                                viewer.set_memory_highlight(cpu.r.pc, clen);
                                 // refresh listing for current PC span
                                 let spans = coalesce_ranges(loaded.loaded_ranges.clone());
                                 if let Some((start, end)) = spans
@@ -1010,7 +1041,8 @@ fn main() {
                                     let mut processed: usize = 0;
                                     let total_len: usize = end.wrapping_sub(start) as usize;
                                     while processed < total_len {
-                                        let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                        let (consumed, text) =
+                                            em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                         use core::fmt::Write as _;
                                         let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
                                         let step = core::cmp::max(consumed as usize, 1);
@@ -1027,6 +1059,21 @@ fn main() {
                                 break;
                             }
                         }
+                    }
+                    // While paused, refresh memory pane based on current controls
+                    {
+                        let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                        let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                        let mut a = eff_start;
+                        for _ in 0..mlen {
+                            buf.push(bus.as_mut().read8(a));
+                            a = a.wrapping_add(1);
+                        }
+                        viewer.update_memory_window(eff_start, buf);
+                        let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                        let clen = core::cmp::max(consumed as usize, 1);
+                        viewer.set_memory_highlight(cpu.r.pc, clen);
                     }
                     // Small sleep to avoid busy-waiting when still paused
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1082,6 +1129,21 @@ fn main() {
                     cc: cpu.r.cc,
                 };
                 viewer.push(snap);
+                // Update memory pane after executing instruction
+                {
+                    let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                    let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                    let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                    let mut a = eff_start;
+                    for _ in 0..mlen {
+                        buf.push(bus.as_mut().read8(a));
+                        a = a.wrapping_add(1);
+                    }
+                    viewer.update_memory_window(eff_start, buf);
+                    let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                    let clen = core::cmp::max(consumed as usize, 1);
+                    viewer.set_memory_highlight(cpu.r.pc, clen);
+                }
                 // Handle viewer commands (context menu actions)
                 while let Some(cmd) = viewer.take_command() {
                     match cmd {
@@ -1113,7 +1175,8 @@ fn main() {
                                 let mut processed: usize = 0;
                                 let total_len: usize = end.wrapping_sub(start) as usize;
                                 while processed < total_len {
-                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
                                     let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
                                     let step = core::cmp::max(consumed as usize, 1);
@@ -1138,7 +1201,8 @@ fn main() {
                                 let mut processed: usize = 0;
                                 let total_len: usize = end.wrapping_sub(start) as usize;
                                 while processed < total_len {
-                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
                                     let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
                                     let step = core::cmp::max(consumed as usize, 1);
