@@ -1058,6 +1058,64 @@ fn main() {
                                 // break pause loop to resume execution immediately
                                 break;
                             }
+                            regview::Command::ApplyRegs(ns) => {
+                                cpu.r.a = ns.a;
+                                cpu.r.b = ns.b;
+                                cpu.r.x = ns.x;
+                                cpu.r.y = ns.y;
+                                cpu.r.u = ns.u;
+                                cpu.r.s = ns.s;
+                                cpu.r.dp = ns.dp;
+                                cpu.r.pc = ns.pc;
+                                cpu.r.cc = ns.cc;
+                                let snap2 = regview::RegSnapshot {
+                                    a: cpu.r.a,
+                                    b: cpu.r.b,
+                                    d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                    x: cpu.r.x,
+                                    y: cpu.r.y,
+                                    u: cpu.r.u,
+                                    s: cpu.r.s,
+                                    dp: cpu.r.dp,
+                                    pc: cpu.r.pc,
+                                    cc: cpu.r.cc,
+                                };
+                                viewer.push(snap2);
+                                // refresh memory view to reflect edits
+                                let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                                let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                                let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                                let mut a = eff_start;
+                                for _ in 0..mlen {
+                                    buf.push(bus.as_mut().read8(a));
+                                    a = a.wrapping_add(1);
+                                }
+                                viewer.update_memory_window(eff_start, buf);
+                                let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                                let clen = core::cmp::max(consumed as usize, 1);
+                                viewer.set_memory_highlight(cpu.r.pc, clen);
+                                // refresh listing for current PC span
+                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                if let Some((start, end)) = spans
+                                    .iter()
+                                    .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                    .copied()
+                                {
+                                    let mut cur = start;
+                                    let mut out = String::new();
+                                    let mut processed: usize = 0;
+                                    let total_len: usize = end.wrapping_sub(start) as usize;
+                                    while processed < total_len {
+                                        let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                        use core::fmt::Write as _;
+                                        let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                        let step = core::cmp::max(consumed as usize, 1);
+                                        processed += step;
+                                        cur = cur.wrapping_add(step as u16);
+                                    }
+                                    viewer.update_hex_listing(out);
+                                }
+                            }
                         }
                     }
                     // While paused, refresh memory pane based on current controls
@@ -1190,6 +1248,65 @@ fn main() {
                             run_until_target = Some(a);
                             viewer.set_paused(false);
                             // Proactively refresh listing so panes reflect latest selection
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
+                            if let Some((start, end)) = span_for_pc {
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                let total_len: usize = end.wrapping_sub(start) as usize;
+                                while processed < total_len {
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                                viewer.update_hex_listing(out);
+                            }
+                        }
+                        regview::Command::ApplyRegs(ns) => {
+                            cpu.r.a = ns.a;
+                            cpu.r.b = ns.b;
+                            cpu.r.x = ns.x;
+                            cpu.r.y = ns.y;
+                            cpu.r.u = ns.u;
+                            cpu.r.s = ns.s;
+                            cpu.r.dp = ns.dp;
+                            cpu.r.pc = ns.pc;
+                            cpu.r.cc = ns.cc;
+                            let snap2 = regview::RegSnapshot {
+                                a: cpu.r.a,
+                                b: cpu.r.b,
+                                d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                x: cpu.r.x,
+                                y: cpu.r.y,
+                                u: cpu.r.u,
+                                s: cpu.r.s,
+                                dp: cpu.r.dp,
+                                pc: cpu.r.pc,
+                                cc: cpu.r.cc,
+                            };
+                            viewer.push(snap2);
+                            // refresh memory view to reflect edits
+                            let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                            let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                            let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                            let mut a = eff_start;
+                            for _ in 0..mlen {
+                                buf.push(bus.as_mut().read8(a));
+                                a = a.wrapping_add(1);
+                            }
+                            viewer.update_memory_window(eff_start, buf);
+                            let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                            let clen = core::cmp::max(consumed as usize, 1);
+                            viewer.set_memory_highlight(cpu.r.pc, clen);
+                            // Also refresh listing pane to reflect current PC span and highlight
                             let spans = coalesce_ranges(loaded.loaded_ranges.clone());
                             let span_for_pc = spans
                                 .iter()

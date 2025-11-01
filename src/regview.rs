@@ -63,6 +63,7 @@ mod gui {
     pub enum Command {
         SetPc(u16),
         RunUntil(u16),
+        ApplyRegs(RegSnapshot),
     }
 
     pub struct RegApp {
@@ -89,6 +90,28 @@ mod gui {
         pub mem_utf8: Arc<AtomicBool>,
         pub mem_jump_text: String,
         pub mem_len_text: String,
+
+        // Editing state for registers and CC flags
+        pub edit_mode: bool,
+        pub edit_initialized: bool,
+        pub edit_a: String,
+        pub edit_b: String,
+        pub edit_d: String,
+        pub edit_x: String,
+        pub edit_y: String,
+        pub edit_u: String,
+        pub edit_s: String,
+        pub edit_dp: String,
+        pub edit_pc: String,
+        pub cc_e: bool,
+        pub cc_f: bool,
+        pub cc_h: bool,
+        pub cc_i: bool,
+        pub cc_n: bool,
+        pub cc_z: bool,
+        pub cc_v: bool,
+        pub cc_c: bool,
+        pub input_error: Option<String>,
     }
 
     impl App for RegApp {
@@ -114,6 +137,38 @@ mod gui {
                     ctx.set_fonts(defs);
                 }
                 self.fonts_applied = true;
+            }
+
+            // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
+            let editing = self.edit_mode;
+            // Initialize edit buffers from current snapshot the first time we enter editing mode
+            if editing {
+                if !self.edit_initialized {
+                    if let Ok(s) = self.snap.lock() {
+                        self.edit_a = format!("0x{:02X}", s.a);
+                        self.edit_b = format!("0x{:02X}", s.b);
+                        self.edit_d = format!("0x{:04X}", s.d);
+                        self.edit_x = format!("0x{:04X}", s.x);
+                        self.edit_y = format!("0x{:04X}", s.y);
+                        self.edit_u = format!("0x{:04X}", s.u);
+                        self.edit_s = format!("0x{:04X}", s.s);
+                        self.edit_dp = format!("0x{:02X}", s.dp);
+                        self.edit_pc = format!("0x{:04X}", s.pc);
+                        self.cc_e = (s.cc & 0x80) != 0;
+                        self.cc_f = (s.cc & 0x40) != 0;
+                        self.cc_h = (s.cc & 0x20) != 0;
+                        self.cc_i = (s.cc & 0x10) != 0;
+                        self.cc_n = (s.cc & 0x08) != 0;
+                        self.cc_z = (s.cc & 0x04) != 0;
+                        self.cc_v = (s.cc & 0x02) != 0;
+                        self.cc_c = (s.cc & 0x01) != 0;
+                    }
+                    self.input_error = None;
+                    self.edit_initialized = true;
+                }
+            } else if self.edit_initialized {
+                // When leaving editing mode, reset so we sync from latest snapshot next pause
+                self.edit_initialized = false;
             }
 
             // Memory pane (placed to the left of the listing pane by ordering two right panels)
@@ -417,7 +472,7 @@ mod gui {
                     });
             }
 
-            // Left/center: registers and controls (no scrolling)
+            // Left/center: registers and controls
             egui::CentralPanel::default().show(ctx, |ui| {
                 let s = *self.snap.lock().unwrap();
                 ui.heading("MC6809 Registers");
@@ -439,7 +494,89 @@ mod gui {
                             self.step_requests.fetch_add(1, Ordering::SeqCst);
                         }
                     }
+                    ui.separator();
+                    if self.edit_mode {
+                        if ui.button("Apply").clicked() {
+                            // Parse inputs; numbers accept 0x/0o/0b or decimal
+                            let parse8 = |s: &str| -> Option<u8> { parse_num_u16_any_gui(s).and_then(|v| if v <= 0xFF { Some(v as u8) } else { None }) };
+                            let parse16 = |s: &str| -> Option<u16> { parse_num_u16_any_gui(s) };
+                            let a_opt = parse8(&self.edit_a);
+                            let b_opt = parse8(&self.edit_b);
+                            let d_opt = parse16(&self.edit_d);
+                            let x_opt = parse16(&self.edit_x);
+                            let y_opt = parse16(&self.edit_y);
+                            let u_opt = parse16(&self.edit_u);
+                            let s_opt = parse16(&self.edit_s);
+                            let dp_opt = parse8(&self.edit_dp);
+                            let pc_opt = parse16(&self.edit_pc);
+                            let cc_val: u8 = (if self.cc_e { 0x80 } else { 0 })
+                                | (if self.cc_f { 0x40 } else { 0 })
+                                | (if self.cc_h { 0x20 } else { 0 })
+                                | (if self.cc_i { 0x10 } else { 0 })
+                                | (if self.cc_n { 0x08 } else { 0 })
+                                | (if self.cc_z { 0x04 } else { 0 })
+                                | (if self.cc_v { 0x02 } else { 0 })
+                                | (if self.cc_c { 0x01 } else { 0 });
+                            if a_opt.is_none() || b_opt.is_none() || x_opt.is_none() || y_opt.is_none() || u_opt.is_none() || s_opt.is_none() || dp_opt.is_none() || pc_opt.is_none() {
+                                self.input_error = Some("Invalid register value(s)".to_string());
+                            } else {
+                                // D takes precedence if provided
+                                let mut a = a_opt.unwrap();
+                                let mut b = b_opt.unwrap();
+                                if let Some(dv) = d_opt { a = (dv >> 8) as u8; b = dv as u8; }
+                                let snap = RegSnapshot {
+                                    a,
+                                    b,
+                                    d: (((a as u16) << 8) | (b as u16)),
+                                    x: x_opt.unwrap(),
+                                    y: y_opt.unwrap(),
+                                    u: u_opt.unwrap(),
+                                    s: s_opt.unwrap(),
+                                    dp: dp_opt.unwrap(),
+                                    pc: pc_opt.unwrap(),
+                                    cc: cc_val,
+                                };
+                                if let Ok(mut q) = self.cmds.lock() { q.push(Command::ApplyRegs(snap)); }
+                                self.input_error = None;
+                                // Leave editing mode after successful apply
+                                self.edit_mode = false;
+                                self.edit_initialized = false;
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            if let Ok(s2) = self.snap.lock() {
+                                self.edit_a = format!("0x{:02X}", s2.a);
+                                self.edit_b = format!("0x{:02X}", s2.b);
+                                self.edit_d = format!("0x{:04X}", s2.d);
+                                self.edit_x = format!("0x{:04X}", s2.x);
+                                self.edit_y = format!("0x{:04X}", s2.y);
+                                self.edit_u = format!("0x{:04X}", s2.u);
+                                self.edit_s = format!("0x{:04X}", s2.s);
+                                self.edit_dp = format!("0x{:02X}", s2.dp);
+                                self.edit_pc = format!("0x{:04X}", s2.pc);
+                                self.cc_e = (s2.cc & 0x80) != 0;
+                                self.cc_f = (s2.cc & 0x40) != 0;
+                                self.cc_h = (s2.cc & 0x20) != 0;
+                                self.cc_i = (s2.cc & 0x10) != 0;
+                                self.cc_n = (s2.cc & 0x08) != 0;
+                                self.cc_z = (s2.cc & 0x04) != 0;
+                                self.cc_v = (s2.cc & 0x02) != 0;
+                                self.cc_c = (s2.cc & 0x01) != 0;
+                            }
+                            self.input_error = None;
+                            self.edit_mode = false;
+                            self.edit_initialized = false;
+                        }
+                    } else {
+                        if ui.button("Edit").clicked() {
+                            self.edit_mode = true;
+                            self.edit_initialized = false;
+                        }
+                    }
                 });
+                if let Some(err) = &self.input_error {
+                    ui.colored_label(egui::Color32::RED, err);
+                }
                 ui.separator();
                 TableBuilder::new(ui)
                     .striped(true)
@@ -470,19 +607,9 @@ mod gui {
                         });
                     })
                     .body(|mut body| {
-                        let rows = [
-                            ("A", format!("${:02X}", s.a)),
-                            ("B", format!("${:02X}", s.b)),
-                            ("D", format!("${:04X}", s.d)),
-                            ("X", format!("${:04X}", s.x)),
-                            ("Y", format!("${:04X}", s.y)),
-                            ("U", format!("${:04X}", s.u)),
-                            ("S", format!("${:04X}", s.s)),
-                            ("DP", format!("${:02X}", s.dp)),
-                            ("PC", format!("${:04X}", s.pc)),
-                        ];
-                        for (name, val) in rows {
-                            body.row(20.0, |mut row| {
+                        // Editable rows while paused; otherwise show live snapshot values
+                        let mut add_row = |name: &str, edit: &mut String, hint: &str, show_val: String| {
+                            body.row(22.0, |mut row| {
                                 row.col(|ui| {
                                     ui.monospace(name);
                                     let rect = ui.max_rect();
@@ -497,7 +624,14 @@ mod gui {
                                     );
                                 });
                                 row.col(|ui| {
-                                    ui.monospace(val);
+                                    if editing {
+                                        let te = egui::TextEdit::singleline(edit)
+                                            .desired_width(100.0)
+                                            .hint_text(hint);
+                                        let _resp = ui.add(te);
+                                    } else {
+                                        ui.monospace(show_val);
+                                    }
                                     let rect = ui.max_rect();
                                     let stroke = egui::Stroke::new(
                                         1.0,
@@ -510,30 +644,19 @@ mod gui {
                                     );
                                 });
                             });
-                        }
+                        };
+                        add_row("A", &mut self.edit_a, "0x00", format!("${:02X}", s.a));
+                        add_row("B", &mut self.edit_b, "0x00", format!("${:02X}", s.b));
+                        add_row("D", &mut self.edit_d, "0x0000", format!("${:04X}", s.d));
+                        add_row("X", &mut self.edit_x, "0x0000", format!("${:04X}", s.x));
+                        add_row("Y", &mut self.edit_y, "0x0000", format!("${:04X}", s.y));
+                        add_row("U", &mut self.edit_u, "0x0000", format!("${:04X}", s.u));
+                        add_row("S", &mut self.edit_s, "0x0000", format!("${:04X}", s.s));
+                        add_row("DP", &mut self.edit_dp, "0x00", format!("${:02X}", s.dp));
+                        add_row("PC", &mut self.edit_pc, "0x0000", format!("${:04X}", s.pc));
 
-                        let flags = [
-                            ('E', 0b1000_0000u8),
-                            ('F', 0b0100_0000u8),
-                            ('H', 0b0010_0000u8),
-                            ('I', 0b0001_0000u8),
-                            ('N', 0b0000_1000u8),
-                            ('Z', 0b0000_0100u8),
-                            ('V', 0b0000_0010u8),
-                            ('C', 0b0000_0001u8),
-                        ];
-                        let mut cc_text = String::with_capacity(17);
-                        for (i, (ch, mask)) in flags.iter().enumerate() {
-                            if i > 0 {
-                                cc_text.push(' ');
-                            }
-                            if (s.cc & mask) != 0 {
-                                cc_text.push(*ch);
-                            } else {
-                                cc_text.push(ch.to_ascii_lowercase());
-                            }
-                        }
-                        body.row(20.0, |mut row| {
+                        // CC flags as toggles
+                        body.row(24.0, |mut row| {
                             row.col(|ui| {
                                 ui.monospace("CC");
                                 let rect = ui.max_rect();
@@ -541,21 +664,57 @@ mod gui {
                                     1.0,
                                     ui.visuals().widgets.noninteractive.bg_stroke.color,
                                 );
-                                ui.painter()
-                                    .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    egui::Rounding::same(0.0),
+                                    stroke,
+                                );
                             });
                             row.col(|ui| {
-                                ui.monospace(cc_text);
+                                if editing {
+                                    ui.horizontal(|ui| {
+                                        ui.toggle_value(&mut self.cc_e, "E");
+                                        ui.toggle_value(&mut self.cc_f, "F");
+                                        ui.toggle_value(&mut self.cc_h, "H");
+                                        ui.toggle_value(&mut self.cc_i, "I");
+                                        ui.toggle_value(&mut self.cc_n, "N");
+                                        ui.toggle_value(&mut self.cc_z, "Z");
+                                        ui.toggle_value(&mut self.cc_v, "V");
+                                        ui.toggle_value(&mut self.cc_c, "C");
+                                    });
+                                } else {
+                                    let flags = [
+                                        ('E', 0b1000_0000u8),
+                                        ('F', 0b0100_0000u8),
+                                        ('H', 0b0010_0000u8),
+                                        ('I', 0b0001_0000u8),
+                                        ('N', 0b0000_1000u8),
+                                        ('Z', 0b0000_0100u8),
+                                        ('V', 0b0000_0010u8),
+                                        ('C', 0b0000_0001u8),
+                                    ];
+                                    let mut cc_text = String::with_capacity(17);
+                                    for (i, (ch, mask)) in flags.iter().enumerate() {
+                                        if i > 0 { cc_text.push(' '); }
+                                        if (s.cc & mask) != 0 { cc_text.push(*ch); } else { cc_text.push(ch.to_ascii_lowercase()); }
+                                    }
+                                    ui.monospace(cc_text);
+                                }
                                 let rect = ui.max_rect();
                                 let stroke = egui::Stroke::new(
                                     1.0,
                                     ui.visuals().widgets.noninteractive.bg_stroke.color,
                                 );
-                                ui.painter()
-                                    .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    egui::Rounding::same(0.0),
+                                    stroke,
+                                );
                             });
                         });
                     });
+
+                // Error display moved next to the Edit/Apply controls at the top
 
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
             });
@@ -780,6 +939,26 @@ mod gui {
                     mem_utf8: mem_utf8_thread.clone(),
                     mem_jump_text: format!("0x{:04X}", initial_start),
                     mem_len_text: format!("{}", mem_window_len_thread.load(Ordering::SeqCst)),
+                    edit_mode: false,
+                    edit_initialized: false,
+                    edit_a: String::new(),
+                    edit_b: String::new(),
+                    edit_d: String::new(),
+                    edit_x: String::new(),
+                    edit_y: String::new(),
+                    edit_u: String::new(),
+                    edit_s: String::new(),
+                    edit_dp: String::new(),
+                    edit_pc: String::new(),
+                    cc_e: false,
+                    cc_f: false,
+                    cc_h: false,
+                    cc_i: false,
+                    cc_n: false,
+                    cc_z: false,
+                    cc_v: false,
+                    cc_c: false,
+                    input_error: None,
                 };
                 let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
             });
