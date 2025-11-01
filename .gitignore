@@ -1,0 +1,42 @@
+# Rust / Cargo
+target/
+**/target/
+**/*.rs.bk
+
+# Build artifacts
+*.rlib
+*.rmeta
+*.dSYM/
+
+# Distribution / packaging
+dist/
+
+# Coverage / profiling
+coverage/
+*.profraw
+*.profdata
+flamegraph.svg
+perf.data*
+perf-*.map
+
+# Logs and dumps
+*.log
+core
+core.*
+
+# Editors / IDEs
+.vscode/
+*.code-workspace
+.idea/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.swp
+*.swo
+*~
+
+# Environment / local config
+.env
