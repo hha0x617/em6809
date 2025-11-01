@@ -385,8 +385,12 @@ mod gui {
                                         let mut token = ltrim.split_whitespace().next().unwrap_or("");
                                         if token.ends_with(':') { token = &token[..token.len()-1]; }
                                         let addr_for_line: Option<u16> = if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
+                                        // Avoid highlighting macro definition lines even if they show a PC-like address
+                                        let upper = ltrim.to_ascii_uppercase();
+                                        let is_macro_line = upper.contains(" MACRO") || upper.contains(" ENDM") || upper.starts_with("MACRO ");
+                                        let is_pc_addr_token = addr_for_line.is_some() && token.eq_ignore_ascii_case(&pc_hex) && !is_macro_line;
                                         let (label_run_until, label_set_pc, label_cancel) = if self.use_japanese { ("ここまで実行", "PCの値を現在のアドレスに変更", "キャンセル") } else { ("Run to here", "Set PC to this address", "Cancel") };
-                                        if token.eq_ignore_ascii_case(&pc_hex) {
+                                        if is_pc_addr_token {
                                             let resp = ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(line)
