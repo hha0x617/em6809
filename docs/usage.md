@@ -1,15 +1,15 @@
-# 使用方法（CLI 全体）
+# 使い方（GUI モード）
 
-このドキュメントは、mc6809emu の主要な CLI オプションと、よく使うコマンド例を一覧でまとめたものです。詳細な入出力制御やトレース、OS‑9 連携の深掘りは別ドキュメントを参照してください。
+em6809 は GUI モードに統一されています。起動時に必ずウィンドウが開き、レジスタ/リスティング/メモリビューから操作できます（初期状態は一時停止）。
 
 ## 基本
 
 - ビルド: `cargo build --release`
-- 実行（S‑Record をロードして Ctrl+C まで走行）:
-  - `target/release/mc6809emu --run --srec path/to/rom.s19`
+- 実行（S‑Record/BIN をロードして GUI を開く）:
+  - `target/release/em6809 path/to/rom.s19 --format srec`
 - PC の明示指定:
-  - `target/release/mc6809emu --run --srec path/to/rom.s19 --pc 0xE000`
-- ヘルプ表示: `target/release/mc6809emu --help`
+  - `target/release/em6809 path/to/rom.s19 --format srec --pc 0xE000`
+- ヘルプ表示: `target/release/em6809 --help`
 
 PC 初期化の優先順位:
 
@@ -18,17 +18,24 @@ PC 初期化の優先順位:
 3. S‑Record のエントリ（ベクタが無効な場合）
 4. 最初にロードされたメモリレンジの先頭
 
-## 代表オプション
+## 主なオプション（GUI 前提）
 
-- `--run`: 連続実行（Ctrl+C で終了）
-- `--srec <FILE>`: S‑Record をロード（複数指定可）
-- `--pc <ADDR>`: 開始アドレスを強制指定
-- `--trace`: 実行トレースを出力（命令/レジスタ/分岐先）
-- `--step`: ステップ実行モード
-- `--disasm <RANGE>`: 逆アセンブル（例: `0xE000:0xE100`）
-- `--hex <RANGE>`: 16 進ダンプ（例: `0xE000:0xE040`）
+- 入力フォーマット/配置:
+  - `--format bin|srec` / `--base 0xADDR` / `--pc 0xADDR`
+- Console I/O（概要。詳細は console_io.md）:
+  - `--console 0xADDR`（例: `0xFF00`）
+  - `--console-stdin`, `--console-in <TEXT>`, `--console-out <FILE>`
+  - `--console-echo`, `--console-flush-every <N>`, `--console-tee-stderr`
+- MMU / プリセット:
+  - `--mmu`, `--mmu-phys`, `--mmu-reg-base`, `--mmu-task`, `--mmu-idmap`
+  - `--mmu-map P=F`, `--mmu-map-file PATH`, `--preset NAME`, `--preset-list`
+  - `--mmu-mode sys|user`, `--protect-vectors`, `--prot`, `--attr`
+- ブートスクリプト/テンプレート:
+  - `--boot-script PATH`, `--emit-boot-template NAME`
+- その他:
+  - `--cycles`（サイクル数出力）
 
-WSL2 + WSLg（Wayland）で GUI（`--features gui` + `--dump-regs`）を使う場合の設定例は `docs/troubleshooting.md` の「WSL2 / Linux の GUI について」を参照してください。
+WSL2 + WSLg（Wayland）のセットアップ手順・既知の注意点は `docs/troubleshooting.md` の「WSL2 / Linux の GUI について」を参照してください。
 
 入出力関連（概要。詳細は console_io.md）
 
@@ -41,14 +48,10 @@ WSL2 + WSLg（Wayland）で GUI（`--features gui` + `--dump-regs`）を使う�
 
 ## 簡単なレシピ
 
-- Hello World 実行:
-  - `target/release/mc6809emu --run --srec samples/hello_world.s19`
-- 逆アセンブルのみ:
-  - `target/release/mc6809emu --disasm 0xE000:0xE100`
-- トレースを見ながら実行:
-  - `target/release/mc6809emu --run --srec path/to/rom.s19 --trace`
-- 標準入力とエコー ON:
-  - `... --console-stdin --console-echo ON`
+- Hello World（GUI 表示・初期状態は一時停止）:
+  - `target/release/em6809 samples/hello_world.s19 --format srec`
+- 標準入力とエコー ON（Console 接続）:
+  - `... --console 0xFF00 --console-stdin --console-echo`
 
-より詳細な I/O 制御は console_io.md、デバッグ/トレースは tracing.md、OS‑9 連携は os9_guide.md を参照してください。
+詳細は console_io.md（I/O 制御）、tracing.md（リスティング/逆アセンブルの考え方）、os9_guide.md（OS‑9 連携）を参照してください。
 

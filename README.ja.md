@@ -11,21 +11,19 @@ em6809 は MC6809 のソフトウェアエミュレータです。実行用 CLI�
 - Rust（stable）を用意してビルド:
   - `cargo build --release`
 
-## Quick Start
+## クイックスタート（GUIのみ）
 
-- Hello World を実行:
-  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00`
+- 実行して GUI を開く（初期状態は一時停止）:
+  - `target/release/em6809 samples/hello/hello.s19 --format srec --console 0xFF00`
 - ヘルプ表示:
   - `target/release/em6809 --help`
 - PC を指定して開始:
-  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00 --pc 0xE000`
+  - `target/release/em6809 samples/hello/hello.s19 --format srec --console 0xFF00 --pc 0xE000`
 
 ## 基本ユースケース
 
-- トレースしながら実行: `... samples/hello/hello.s19 --run --format srec --console 0xFF00 --trace`
-- 逆アセンブル: `... --disasm 0xE000:0xE100`
-- 16 進ダンプ: `... --hex 0xE000:0xE040`
-- 標準入力/エコー: `... samples/echo/echo.s19 --run --console-stdin --console-flush-every 1 --console 0xFF00`
+- 標準入力/エコー: `... samples/echo/echo.s19 --console 0xFF00 --console-stdin --console-echo`
+  （逆アセンブル/メモリ/トレースは GUI ウィンドウ内で操作します）
 
 ## ドキュメント
 

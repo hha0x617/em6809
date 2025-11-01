@@ -9,8 +9,6 @@ use em6809::bus::Bus;
 use em6809::bus::{self, Memory};
 use em6809::config::{apply_mmu_config_from_str, apply_preset};
 use em6809::cpu::Cpu;
-use em6809::debug;
-use em6809::disasm::disasm_one;
 use em6809::io::{ConsoleDev, IoBus};
 use em6809::loader::{self, ImageFormat, LoadedImage};
 use em6809::mmu::Mc6829;
@@ -47,16 +45,10 @@ fn print_usage() {
     println!("  --base 0xADDR             Base address for raw binary");
     println!("  --pc 0xADDR               Override reset PC");
     println!("\nExecution / Debug:");
-    println!("  --trace                   Trace instructions");
-    println!("  --step N                  Execute N steps (required to run)\n  --cycles                 Print cycle count at end");
-    println!("  --run                     Run until Ctrl+C (ignores --step)");
-    println!("  --paused                  Start paused at program entry (overrides --run/--step/--trace/breakpoints until resumed)");
-    println!("  --dump-regs               Dump registers");
-    println!("  --dump-mem 0xADDR LEN     Dump memory range");
-    println!("  --dump-mem-ascii 0xA LEN  Dump ASCII view");
-    println!("  --disasm [ADDR] [LEN]     Disassemble range (ADDR defaults to program start PC; LEN defaults to program size if both omitted, or 64 if only ADDR given; numbers accept 0x, 0o, 0b or decimal)");
-    println!("  --hex                     Use hex-style disassembly");
-    println!("  --bp 0xADDR               Breakpoint (repeatable)");
+    println!("  --cycles                  Print cycle count at end");
+    // Paused is default in GUI-only mode
+    println!("  (GUI-only) Disasm/Memory/Trace are available in the window UI");
+    // --run and --bp removed in GUI-only mode
     println!("\nConsole I/O:");
     println!("  --console 0xADDR          Attach console device at base (e.g., 0xFF00)");
     println!("  --console-in STRING       Prefeed input (supports \\r, \\n, \\t, \\\\)");
@@ -92,35 +84,7 @@ fn parse_hex(s: &str) -> Option<u16> {
     u16::from_str_radix(t, 16).ok()
 }
 
-fn parse_num_u16_any(s: &str) -> Option<u16> {
-    let sl = s.trim();
-    let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-        (16, rest)
-    } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
-        (8, rest)
-    } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
-        (2, rest)
-    } else {
-        (10, sl)
-    };
-    u32::from_str_radix(digits, base)
-        .ok()
-        .and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None })
-}
-
-fn parse_num_usize_any(s: &str) -> Option<usize> {
-    let sl = s.trim();
-    let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-        (16, rest)
-    } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
-        (8, rest)
-    } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
-        (2, rest)
-    } else {
-        (10, sl)
-    };
-    usize::from_str_radix(digits, base).ok()
-}
+// Removed unused numeric parsers (GUI-only mode)
 
 fn parse_escapes(s: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(s.len());
@@ -295,18 +259,12 @@ fn main() {
     let mut format: Option<ImageFormat> = None;
     let mut base: Option<u16> = None;
     let mut force_pc: Option<u16> = None;
-    let mut trace = false;
-    let mut steps: Option<usize> = None;
-    let mut paused_start: bool = false;
-    let mut dump_regs = false;
-    let mut dump_mem: Option<(u16, usize)> = None;
-    let mut dump_mem_ascii: Option<(u16, usize)> = None;
+    // GUI-only: trace/step removed; pause is default
+    let paused_start: bool = true;
+    // GUI-only: legacy CUI dump flags removed
     let mut print_cycles = false;
-    // Disassembler request: (optional start address, optional length)
-    let mut disasm_req: Option<(Option<u16>, Option<usize>)> = None;
-    let mut disasm_hex = false;
-    let mut breakpoints: Vec<u16> = Vec::new();
-    let mut run_forever: bool = false; // --run: execute until Ctrl+C
+    // GUI-only: legacy CUI disasm request removed
+    // GUI-only: --run and --bp removed
     let mut use_mmu = false;
     let mut mmu_phys: usize = 1 << 20; // 1MiB default
     let mut mmu_regs_base: u16 = 0xFFA0;
@@ -355,75 +313,15 @@ fn main() {
                     force_pc = parse_hex(&v);
                 }
             }
-            "--trace" => trace = true,
             "--cycles" => print_cycles = true,
-            "--step" => {
-                if let Some(v) = args.next() {
-                    steps = v.parse::<usize>().ok();
-                }
-            }
-            "--run" => {
-                run_forever = true;
-            }
-            "--paused" => {
-                paused_start = true;
-            }
-            "--dump-regs" => dump_regs = true,
-            "--dump-mem" => {
-                if let Some(addr) = args.next() {
-                    if let Some(len) = args.next() {
-                        if let (Some(a), Ok(l)) = (parse_hex(&addr), len.parse::<usize>()) {
-                            dump_mem = Some((a, l));
-                        }
-                    }
-                }
-            }
-            "--dump-mem-ascii" => {
-                if let Some(addr) = args.next() {
-                    if let Some(len) = args.next() {
-                        if let (Some(a), Ok(l)) = (parse_hex(&addr), len.parse::<usize>()) {
-                            dump_mem_ascii = Some((a, l));
-                        }
-                    }
-                }
-            }
-            "--disasm" => {
-                // Accept zero, one, or two params; autodetect bases (0x, 0o, 0b, or decimal)
-                let mut addr_opt: Option<u16> = None;
-                let mut len_opt: Option<usize> = None;
-                if let Some(peek) = args.peek() {
-                    if !peek.starts_with("--") {
-                        let tok = args.next().unwrap();
-                        // First positional is address; allow decimal too
-                        addr_opt = parse_num_u16_any(&tok).or_else(|| {
-                            parse_num_usize_any(&tok).and_then(|v| {
-                                if v <= 0xFFFF {
-                                    Some(v as u16)
-                                } else {
-                                    None
-                                }
-                            })
-                        });
-                    }
-                }
-                if let Some(peek) = args.peek() {
-                    if !peek.starts_with("--") {
-                        let tok = args.next().unwrap();
-                        len_opt = parse_num_usize_any(&tok);
-                    }
-                }
-                disasm_req = Some((addr_opt, len_opt));
-            }
-            "--hex" => {
-                disasm_hex = true;
-            }
-            "--bp" => {
-                if let Some(v) = args.next() {
-                    if let Some(a) = parse_hex(&v) {
-                        breakpoints.push(a);
-                    }
-                }
-            }
+            // --run removed in GUI-only mode
+            // --paused is default in GUI-only mode; ignore if present
+            "--paused" => {}
+            "--dump-regs" => { /* ignored in GUI-only mode */ }
+            "--dump-mem" => { let _ = (args.next(), args.next()); /* ignored */ }
+            "--dump-mem-ascii" => { let _ = (args.next(), args.next()); /* ignored */ }
+            "--disasm" => { /* removed in GUI-only mode */ }
+            // --bp removed in GUI-only mode
             "--mmu" => use_mmu = true,
             "--mmu-phys" => {
                 if let Some(v) = args.next() {
@@ -810,10 +708,10 @@ fn main() {
         );
     }
 
-    // If GUI is enabled and --dump-regs is set, prepare the register viewer.
+    // Always prepare the register viewer (GUI-only app).
     // On Windows we spawn it on a background thread.
     // On Unix/macOS we prepare it and run on the main thread later.
-    let reg_viewer = if dump_regs {
+    let reg_viewer = {
         // Try to load a companion .lst file for display in the viewer
         let lst_path_opt = {
             let lst_path = Path::new(&image_path).with_extension("lst");
@@ -853,69 +751,30 @@ fn main() {
         } else {
             None
         };
-        #[cfg(all(feature = "gui", not(windows)))]
+        #[cfg(not(windows))]
         {
-            Some(regview::Viewer::create(
-                "MC6809 Registers",
+        Some(regview::Viewer::create(
+                "em6809 - MC6809 Software Emulator",
                 lst_path_opt,
                 lst_fallback_text,
                 start,
             ))
         }
-        #[cfg(any(not(feature = "gui"), windows))]
+        #[cfg(windows)]
         {
             Some(regview::Viewer::spawn(
-                "MC6809 Registers",
+                "em6809 - MC6809 Software Emulator",
                 lst_path_opt,
                 lst_fallback_text,
                 start,
             ))
         }
-    } else {
-        None
     };
 
-    // Keep legacy immediate dump only for headless (non-GUI) builds.
-    #[cfg(not(feature = "gui"))]
-    {
-        if dump_regs {
-            debug::dump_registers(&cpu);
-        }
-    }
-    if let Some((addr, len)) = dump_mem {
-        debug::dump_memory_bus(bus.as_mut(), addr, len);
-    }
-    if let Some((addr, len)) = dump_mem_ascii {
-        debug::dump_memory_ascii(bus.as_mut(), addr, len);
-    }
+    // Always GUI: legacy headless register dump removed.
+    // GUI-only: CUI dumps suppressed; consider wiring these to GUI actions.
 
-    if let Some((addr_opt, len_opt)) = disasm_req {
-        let mut pc: u16 = addr_opt.unwrap_or(cpu.r.pc);
-        // Default length for --disasm when omitted:
-        // choose the coalesced span that contains the chosen start PC
-        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-        let span_for_pc = spans.iter().find(|(s, e)| *s <= pc && pc < *e).copied();
-        let default_full_len = span_for_pc
-            .map(|(s, e)| e.wrapping_sub(s) as usize)
-            .unwrap_or(64);
-        let total_len: usize = match (addr_opt, len_opt) {
-            (None, None) => default_full_len,
-            (Some(_), None) => 64,
-            (_, Some(n)) => n,
-        };
-        let mut processed: usize = 0;
-        while processed < total_len {
-            let (consumed, text) = if disasm_hex {
-                em6809::disasm::disasm_one_hex(bus.as_mut(), pc)
-            } else {
-                disasm_one(bus.as_mut(), pc)
-            };
-            println!("{:04X}: {}", pc, text);
-            pc = pc.wrapping_add(consumed);
-            processed += consumed as usize;
-        }
-        return;
-    }
+    // GUI-only: --disasm no longer prints/returns; the viewer provides listing/disasm.
 
     // Boot script
     let mut boot_seq: Option<BootSequencer> = if let Some(p) = &boot_script_path {
@@ -957,21 +816,20 @@ fn main() {
         }
     }
 
-    // On Unix/macOS with GUI regs enabled, run GUI on the main thread and move CPU loop to a worker.
-    #[cfg(all(feature = "gui", not(windows)))]
-    if dump_regs {
+    // On Unix/macOS, run GUI on the main thread and move CPU loop to a worker (GUI-only).
+    #[cfg(not(windows))]
+    {
         if let Some(viewer_main) = &reg_viewer {
+            // Ensure SIGINT (Ctrl+C) is handled process-wide before starting GUI/worker
+            signals::install();
             use std::thread;
             let viewer_cpu = viewer_main.clone();
             // Move ownership of emulator state into CPU worker thread
             let mut cpu_worker = cpu;
             let mut bus_worker = bus;
             let _loaded_img = loaded;
-            let run_forever_flag = run_forever;
-            let steps_opt = steps;
-            let trace_flag = trace;
-            let disasm_hex_flag = disasm_hex;
-            let breakpoints_vec = breakpoints.clone();
+            // GUI-only: no step/trace controls
+            // no hex/trace toggles or CLI breakpoints in GUI-only mode
             let paused_start_flag = paused_start;
             let console_stdin_flag = console_stdin;
             let _console_rx_wm_opt = console_rx_wm;
@@ -986,12 +844,7 @@ fn main() {
             let print_cycles_flag = print_cycles;
             let cpu_handle = thread::spawn(move || {
                 // Everything below mirrors the normal run loop path
-                signals::install();
-                let mut remaining = if run_forever_flag {
-                    usize::MAX
-                } else {
-                    steps_opt.unwrap_or(usize::MAX)
-                };
+                // no remaining step counter in GUI-only mode
                 let mut run_until_target: Option<u16> = None;
                 let prev_mode = if console_stdin_flag {
                     console_mode::enter_raw()
@@ -1008,7 +861,14 @@ fn main() {
                         loop {
                             match stdin.read(&mut buf) {
                                 Ok(0) => break,
-                                Ok(n) => { let _ = tx.send(buf[..n].to_vec()); }
+                                Ok(n) => {
+                                    // Detect Ctrl+C (ETX=0x03) in raw mode and request shutdown
+                                    if buf[..n].iter().copied().any(|b| b == 0x03) {
+                                        STOP_REQUESTED.store(true, Ordering::SeqCst);
+                                        break;
+                                    }
+                                    let _ = tx.send(buf[..n].to_vec());
+                                }
                                 Err(_) => break,
                             }
                         }
@@ -1077,37 +937,37 @@ fn main() {
 
                     if let Some(ref rxch) = rx { if let Ok(v) = rxch.try_recv() { if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } } } }
                     if let Some(ref mut seq) = boot_seq { seq.on_pre_step(bus_worker.as_mut(), mmu_regs_base_copy, cpu_worker.r.pc, &mut cpu_worker); }
-                    if trace_flag { let (_len, text) = if disasm_hex_flag { em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc) } else { disasm_one(bus_worker.as_mut(), cpu_worker.r.pc) }; println!("{:04X}: {}", cpu_worker.r.pc, text); }
+                    // trace printing removed in GUI-only mode
                     cpu_worker.step(bus_worker.as_mut(), false);
                     if viewer_cpu.is_paused() == false { let snap = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc }; viewer_cpu.push(snap); }
                     if let Some(ref mut seq) = boot_seq { seq.on_post_step(bus_worker.as_mut(), mmu_regs_base_copy); }
                     if let Some(tgt) = run_until_target { if cpu_worker.r.pc == tgt { viewer_cpu.set_paused(true); run_until_target = None; } }
-                    if !run_forever_flag { remaining = remaining.saturating_sub(1); if remaining == 0 { break; } }
-                    if !breakpoints_vec.is_empty() && breakpoints_vec.contains(&cpu_worker.r.pc) { println!("Breakpoint hit at {:04X}", cpu_worker.r.pc); break; }
+                    // no step counter; no CLI breakpoints in GUI-only mode
                 }
                 if let Some(prev) = prev_mode { console_mode::restore_stdin_mode(prev); }
                 // print cycles
                 if print_cycles_flag { println!("cycles: {}", cpu_worker.cycles); }
             });
 
+            // Watch for Ctrl+C (SIGINT) and proactively request GUI close
+            let viewer_close = viewer_main.clone();
+            let _sig_watch = thread::spawn(move || {
+                while !STOP_REQUESTED.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                viewer_close.request_close();
+            });
             // Run GUI on main thread (blocks until closed)
-            eprintln!("[regview] Launching GUI on main thread (Unix)");
-            viewer_main.run_blocking("MC6809 Registers");
-            eprintln!("[regview] GUI closed; stopping CPU worker");
+            viewer_main.run_blocking("em6809 - MC6809 Software Emulator");
             STOP_REQUESTED.store(true, Ordering::SeqCst);
             let _ = cpu_handle.join();
             return;
         }
     }
 
-    if run_forever || steps.is_some() || trace || !breakpoints.is_empty() || paused_start {
+    if true {
         signals::install();
-        // If --run, ignore --step and run until Ctrl+C
-        let mut remaining = if run_forever {
-            usize::MAX
-        } else {
-            steps.unwrap_or(usize::MAX)
-        };
+        // GUI-only: no --step; run until Ctrl+C / GUI close / breakpoints
         let mut run_until_target: Option<u16> = None;
         // Generic stdin feeder for dyn Bus path, feeding IoBus<Memory|Mc6829>
         // On Windows, switch stdin to raw (no echo, no line input) so keystrokes are delivered immediately
@@ -1352,14 +1212,7 @@ fn main() {
             if let Some(ref mut seq) = boot_seq {
                 seq.on_pre_step(bus.as_mut(), mmu_regs_base, cpu.r.pc, &mut cpu);
             }
-            if trace {
-                let (_len, text) = if disasm_hex {
-                    em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc)
-                } else {
-                    disasm_one(bus.as_mut(), cpu.r.pc)
-                };
-                println!("{:04X}: {}", cpu.r.pc, text);
-            }
+            // trace printing removed in GUI-only mode
             cpu.step(bus.as_mut(), false);
 
             // Update register viewer after executing instruction
@@ -1606,16 +1459,8 @@ fn main() {
                     run_until_target = None;
                 }
             }
-            if !run_forever {
-                remaining = remaining.saturating_sub(1);
-                if remaining == 0 {
-                    break;
-                }
-            }
-            if !breakpoints.is_empty() && breakpoints.contains(&cpu.r.pc) {
-                println!("Breakpoint hit at {:04X}", cpu.r.pc);
-                break;
-            }
+            // no step counter in GUI-only mode
+            // no CLI breakpoints in GUI-only mode
         }
         // Restore console mode if we switched to raw
         if let Some(prev) = prev_mode {

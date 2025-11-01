@@ -50,7 +50,6 @@ impl RegSnapshot {
     }
 }
 
-#[cfg(feature = "gui")]
 mod gui {
     use super::*;
     use eframe::{egui, App};
@@ -1477,62 +1476,5 @@ mod gui {
     }
 }
 
-#[cfg(not(feature = "gui"))]
-mod nogui {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[derive(Clone, Copy, Debug)]
-    pub enum Command {
-        SetPc(u16),
-        RunUntil(u16),
-    }
-
-    pub struct Viewer {
-        // No-op placeholder for non-GUI builds
-        _p: (),
-    }
-
-    impl Viewer {
-        pub fn spawn(
-            _title: &str,
-            _lst_path: Option<PathBuf>,
-            _lst_fallback_text: Option<String>,
-            _initial_start: u16,
-        ) -> Self {
-            Self { _p: () }
-        }
-        pub fn push(&self, _s: RegSnapshot) {}
-        pub fn is_paused(&self) -> bool {
-            false
-        }
-        pub fn should_pause(&self) -> bool {
-            false
-        }
-        pub fn set_paused(&self, _v: bool) {}
-        pub fn update_hex_listing(&self, _s: String) {}
-        pub fn update_hex_lines(&self, _items: Vec<(u16, String)>) {}
-        pub fn get_span_policy(&self) -> (usize, usize) {
-            (0, 256)
-        }
-        pub fn force_hex_view(&self) {}
-        pub fn get_memory_window(&self) -> (u16, usize, bool) {
-            (0, 256, true)
-        }
-        pub fn update_memory_window(&self, _start: u16, _bytes: Vec<u8>) {}
-        pub fn set_memory_highlight(&self, _start: u16, _len: usize) {}
-        pub fn take_command(&self) -> Option<Command> {
-            None
-        }
-    }
-}
-
-// Re-export the viewer type depending on feature
-#[cfg(feature = "gui")]
 pub use gui::Command;
-#[cfg(feature = "gui")]
 pub use gui::Viewer;
-#[cfg(not(feature = "gui"))]
-pub use nogui::Command;
-#[cfg(not(feature = "gui"))]
-pub use nogui::Viewer;

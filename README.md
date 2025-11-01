@@ -11,21 +11,19 @@ em6809 is a software emulator for the MC6809. It provides a run-oriented CLI, ri
 - Build with Rust (stable):
   - `cargo build --release`
 
-## Quick Start
+## Quick Start (GUI-only)
 
-- Run Hello World (until Ctrl+C):
-  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00`
+- Run and open GUI (paused by default):
+  - `target/release/em6809 samples/hello/hello.s19 --format srec --console 0xFF00`
 - Show help:
   - `target/release/em6809 --help`
 - Start from an explicit PC:
-  - `target/release/em6809 samples/hello/hello.s19 --run --format srec --console 0xFF00 --pc 0xE000`
+  - `target/release/em6809 samples/hello/hello.s19 --format srec --console 0xFF00 --pc 0xE000`
 
 ## Common Use Cases
 
-- Run with trace: `... samples/hello/hello.s19 --run --format srec --console 0xFF00 --trace`
-- Disassemble a range: `... --disasm 0xE000:0xE100`
-- Hex dump a range: `... --hex 0xE000:0xE040`
-- Attach stdin with local echo: `... samples/echo/echo.s19 --run --console-stdin --console-flush-every 1 --console 0xFF00`
+- Attach stdin with local echo: `... samples/echo/echo.s19 --console 0xFF00 --console-stdin --console-echo`
+  (Disasm/Memory/Trace are available in the GUI window)
 
 ## Documentation
 
