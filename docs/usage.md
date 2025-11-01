@@ -28,6 +28,8 @@ PC 初期化の優先順位:
 - `--disasm <RANGE>`: 逆アセンブル（例: `0xE000:0xE100`）
 - `--hex <RANGE>`: 16 進ダンプ（例: `0xE000:0xE040`）
 
+WSL2 + WSLg（Wayland）で GUI（`--features gui` + `--dump-regs`）を使う場合の設定例は `docs/troubleshooting.md` の「WSL2 / Linux の GUI について」を参照してください。
+
 入出力関連（概要。詳細は console_io.md）
 
 - `--console-stdin`: 標準入力を接続

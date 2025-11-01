@@ -38,8 +38,9 @@ GUI とツールの今後の拡張を管理します。簡潔に記載し、進�
   - 適用/キャンセル、入力検証（基数/桁幅）後に CPU 状態とスナップショットへ反映
 
 - Windows 以外の環境への対応（Linux, macOS）
-  - ビルド/実行確認、依存パッケージ（フォント探索、GUIバックエンド）の差異吸収
-  - 日本語フォント自動検出パスの整備、`EM6809_GUI_FONT` の利用ドキュメント補強
+  - [done] `--console-stdin` で端末を raw 化（termios で ICANON/ECHO を無効化、VMIN=1/VTIME=0）
+  - [done] 日本語フォント自動検出（Linux/macOS の代表パスを追加、`EM6809_GUI_FONT` を優先）
+  - 付随するドキュメント更新（console_io.md）
 
 ## メモ
 

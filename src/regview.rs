@@ -90,6 +90,7 @@ mod gui {
         pub mem_utf8: Arc<AtomicBool>,
         pub mem_jump_text: String,
         pub mem_len_text: String,
+        pub quit_flag: Arc<AtomicBool>,
 
         // Editing state for registers and CC flags
         pub edit_mode: bool,
@@ -137,6 +138,11 @@ mod gui {
                     ctx.set_fonts(defs);
                 }
                 self.fonts_applied = true;
+            }
+
+            // If external quit is requested (e.g., Ctrl+C), close the window
+            if self.quit_flag.load(Ordering::SeqCst) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
@@ -737,7 +743,7 @@ mod gui {
         window_len: Arc<AtomicUsize>,
         cmds: Arc<Mutex<Vec<Command>>>,
         ja_font: Option<Arc<Vec<u8>>>,
-        _handle: std::thread::JoinHandle<()>,
+        _handle: Option<std::thread::JoinHandle<()>>,
         // Memory view shared state
         mem_follow_pc: Arc<AtomicBool>,
         mem_window_len: Arc<AtomicUsize>,
@@ -745,6 +751,37 @@ mod gui {
         mem_buf: Arc<Mutex<(u16, Vec<u8>)>>,
         mem_hl: Arc<Mutex<Option<(u16, usize)>>>,
         mem_utf8: Arc<AtomicBool>,
+        quit_flag: Arc<AtomicBool>,
+        alive: Arc<AtomicBool>,
+        started: Arc<AtomicBool>,
+    }
+
+    impl Clone for RegView {
+        fn clone(&self) -> Self {
+            Self {
+                snapshot: Arc::clone(&self.snapshot),
+                paused: Arc::clone(&self.paused),
+                step_requests: Arc::clone(&self.step_requests),
+                lst_mmap: self.lst_mmap.as_ref().map(Arc::clone),
+                lst_text: self.lst_text.as_ref().map(Arc::clone),
+                use_hex: Arc::clone(&self.use_hex),
+                follow_pc_flag: Arc::clone(&self.follow_pc_flag),
+                span_policy: Arc::clone(&self.span_policy),
+                window_len: Arc::clone(&self.window_len),
+                cmds: Arc::clone(&self.cmds),
+                ja_font: self.ja_font.as_ref().map(Arc::clone),
+                _handle: None,
+                mem_follow_pc: Arc::clone(&self.mem_follow_pc),
+                mem_window_len: Arc::clone(&self.mem_window_len),
+                mem_window_start: Arc::clone(&self.mem_window_start),
+                mem_buf: Arc::clone(&self.mem_buf),
+                mem_hl: Arc::clone(&self.mem_hl),
+                mem_utf8: Arc::clone(&self.mem_utf8),
+                quit_flag: Arc::clone(&self.quit_flag),
+                alive: Arc::clone(&self.alive),
+                started: Arc::clone(&self.started),
+            }
+        }
     }
 
     impl RegView {
@@ -904,6 +941,12 @@ mod gui {
             let mem_buf_thread = mem_buf.clone();
             let mem_hl_thread = mem_hl.clone();
             let mem_utf8_thread = mem_utf8.clone();
+            let quit_flag_thread = Arc::new(AtomicBool::new(false));
+            let quit_flag_thread_clone = quit_flag_thread.clone();
+            let alive_flag = Arc::new(AtomicBool::new(false));
+            let alive_flag_thread = alive_flag.clone();
+            let started_flag = Arc::new(AtomicBool::new(false));
+            let started_flag_thread = started_flag.clone();
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
@@ -920,6 +963,9 @@ mod gui {
                         builder.with_any_thread(true);
                     }));
                 }
+                // Note: On some Unix configurations (e.g., WSL2/Wayland), winit requires
+                // the event loop to live on the main thread. If creating on a background
+                // thread panics, we catch it below and continue without the GUI.
                 let app = RegApp {
                     snap: snap_clone,
                     paused: paused_clone,
@@ -943,6 +989,7 @@ mod gui {
                     mem_utf8: mem_utf8_thread.clone(),
                     mem_jump_text: format!("0x{:04X}", initial_start),
                     mem_len_text: format!("{}", mem_window_len_thread.load(Ordering::SeqCst)),
+                    quit_flag: quit_flag_thread_clone,
                     edit_mode: false,
                     edit_initialized: false,
                     edit_a: String::new(),
@@ -964,7 +1011,35 @@ mod gui {
                     cc_c: false,
                     input_error: None,
                 };
-                let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
+                // Windows supports any-thread event loop via ExtWindows; run normally.
+                // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
+                #[cfg(windows)]
+                {
+                    started_flag_thread.store(true, Ordering::SeqCst);
+                    alive_flag_thread.store(true, Ordering::SeqCst);
+                    let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
+                    // Window closed: mark not alive. Keep `started` true so is_closed() becomes true.
+                    alive_flag_thread.store(false, Ordering::SeqCst);
+                }
+                #[cfg(not(windows))]
+                {
+                    use std::panic::{catch_unwind, AssertUnwindSafe};
+                    // Suppress panic noise only during GUI bootstrap on Unix
+                    let prev_hook = std::panic::take_hook();
+                    std::panic::set_hook(Box::new(|_| {}));
+                    started_flag_thread.store(true, Ordering::SeqCst);
+                    alive_flag_thread.store(true, Ordering::SeqCst);
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
+                    })).map_err(|_| {
+                        eprintln!(
+                            "[regview] GUI failed to start on this platform/thread. Running headless."
+                        );
+                    });
+                    let _ = std::panic::set_hook(prev_hook);
+                    alive_flag_thread.store(false, Ordering::SeqCst);
+                    started_flag_thread.store(false, Ordering::SeqCst);
+                }
             });
 
             Self {
@@ -979,13 +1054,235 @@ mod gui {
                 window_len,
                 cmds,
                 ja_font,
-                _handle: handle,
+                _handle: Some(handle),
                 mem_follow_pc,
                 mem_window_len,
                 mem_window_start,
                 mem_buf,
                 mem_hl,
                 mem_utf8,
+                quit_flag: quit_flag_thread,
+                alive: alive_flag,
+                started: started_flag,
+            }
+        }
+
+        pub fn create(
+            _title: &str,
+            lst_path: Option<PathBuf>,
+            lst_fallback_text: Option<String>,
+            initial_start: u16,
+        ) -> Self {
+            // Build the same shared state as spawn(), but do not start a GUI thread.
+            let snapshot = Arc::new(Mutex::new(RegSnapshot::default()));
+            let paused = Arc::new(AtomicBool::new(false));
+            let step_requests = Arc::new(AtomicUsize::new(0));
+            let lst_mmap: Option<Arc<Mmap>> = lst_path.and_then(|p| {
+                if let Ok(f) = File::open(p) {
+                    unsafe { Mmap::map(&f).ok() }.map(Arc::new)
+                } else {
+                    None
+                }
+            });
+            let lst_text: Option<Arc<Mutex<String>>> = lst_fallback_text.map(|s| Arc::new(Mutex::new(s)));
+            let default_use_hex_view: bool = lst_text.is_some() && lst_mmap.is_none();
+            let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
+            let follow_pc_flag = Arc::new(AtomicBool::new(true));
+            let span_policy = Arc::new(AtomicUsize::new(0));
+            let window_len = Arc::new(AtomicUsize::new(256));
+            let cmds: Arc<Mutex<Vec<Command>>> = Arc::new(Mutex::new(Vec::new()));
+            let mem_follow_pc = Arc::new(AtomicBool::new(true));
+            let mem_window_len = Arc::new(AtomicUsize::new(256));
+            let mem_window_start = Arc::new(AtomicUsize::new(initial_start as usize));
+            let mem_buf: Arc<Mutex<(u16, Vec<u8>)>> = Arc::new(Mutex::new((0, Vec::new())));
+            let mem_hl: Arc<Mutex<Option<(u16, usize)>>> = Arc::new(Mutex::new(None));
+            let mem_utf8 = Arc::new(AtomicBool::new(false));
+            let quit_flag = Arc::new(AtomicBool::new(false));
+            let alive = Arc::new(AtomicBool::new(false));
+            let started = Arc::new(AtomicBool::new(false));
+
+            // Font discovery (same as spawn)
+            let ja_font: Option<Arc<Vec<u8>>> = {
+                if let Ok(p) = std::env::var("EM6809_GUI_FONT") {
+                    if !p.is_empty() {
+                        if let Ok(b) = std::fs::read(&p) { Some(Arc::new(b)) } else { None }
+                    } else { None }
+                } else {
+                    #[cfg(windows)]
+                    {
+                        let candidates = [
+                            "C:/Windows/Fonts/Meiryo.ttc",
+                            "C:/Windows/Fonts/meiryo.ttc",
+                            "C:/Windows/Fonts/YuGothR.ttc",
+                            "C:/Windows/Fonts/YuGothM.ttc",
+                            "C:/Windows/Fonts/msgothic.ttc",
+                        ];
+                        let mut found: Option<Arc<Vec<u8>>> = None;
+                        for p in candidates.iter() { if let Ok(b) = std::fs::read(p) { found = Some(Arc::new(b)); break; } }
+                        found
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let candidates = [
+                            "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+                            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                            "/System/Library/Fonts/AppleGothic.ttf",
+                        ];
+                        let mut found: Option<Arc<Vec<u8>>> = None;
+                        for p in candidates.iter() { if let Ok(b) = std::fs::read(p) { found = Some(Arc::new(b)); break; } }
+                        found
+                    }
+                    #[cfg(all(not(windows), not(target_os = "macos")))]
+                    {
+                        let candidates = [
+                            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+                            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                            "/usr/share/fonts/truetype/noto/NotoSansCJKjp-Regular.otf",
+                        ];
+                        let mut found: Option<Arc<Vec<u8>>> = None;
+                        for p in candidates.iter() { if let Ok(b) = std::fs::read(p) { found = Some(Arc::new(b)); break; } }
+                        found
+                    }
+                }
+            };
+
+            Self {
+                snapshot,
+                paused,
+                step_requests,
+                lst_mmap,
+                lst_text,
+                use_hex,
+                follow_pc_flag,
+                span_policy,
+                window_len,
+                cmds,
+                ja_font,
+                _handle: None,
+                mem_follow_pc,
+                mem_window_len,
+                mem_window_start,
+                mem_buf,
+                mem_hl,
+                mem_utf8,
+                quit_flag,
+                alive,
+                started,
+            }
+        }
+
+        pub fn run_blocking(&self, title: &str) {
+            let snap_clone = Arc::clone(&self.snapshot);
+            let paused_clone = Arc::clone(&self.paused);
+            let step_requests_clone = Arc::clone(&self.step_requests);
+            let lst_clone = self.lst_mmap.as_ref().map(Arc::clone);
+            let lst_text_clone = self.lst_text.as_ref().map(Arc::clone);
+            let use_hex_clone = Arc::clone(&self.use_hex);
+            let follow_clone = Arc::clone(&self.follow_pc_flag);
+            let span_policy_clone = Arc::clone(&self.span_policy);
+            let window_len_clone = Arc::clone(&self.window_len);
+            let cmds_clone = Arc::clone(&self.cmds);
+            let ja_font_clone = self.ja_font.as_ref().map(Arc::clone);
+            let mem_follow_pc_thread = self.mem_follow_pc.clone();
+            let mem_window_len_thread = self.mem_window_len.clone();
+            let mem_window_start_thread = self.mem_window_start.clone();
+            let mem_buf_thread = self.mem_buf.clone();
+            let mem_hl_thread = self.mem_hl.clone();
+            let mem_utf8_thread = self.mem_utf8.clone();
+            let initial_start = self.mem_window_start.load(Ordering::SeqCst) as u16;
+            let use_japanese = Self::is_japanese_locale();
+
+            let mut native_options = eframe::NativeOptions::default();
+            native_options.viewport = eframe::egui::ViewportBuilder::default()
+                .with_inner_size(eframe::egui::vec2(1800.0, 700.0))
+                .with_min_inner_size(eframe::egui::vec2(900.0, 400.0))
+                .with_resizable(true);
+            #[cfg(windows)]
+            {
+                native_options.event_loop_builder = Some(Box::new(|builder| {
+                    use winit::platform::windows::EventLoopBuilderExtWindows;
+                    builder.with_any_thread(true);
+                }));
+            }
+            let app = RegApp {
+                snap: snap_clone,
+                paused: paused_clone,
+                step_requests: step_requests_clone,
+                lst_mmap: lst_clone,
+                lst_text: lst_text_clone,
+                use_hex: use_hex_clone,
+                follow_pc_flag: follow_clone,
+                span_policy: span_policy_clone,
+                window_len: window_len_clone,
+                cmds: cmds_clone,
+                ja_font: ja_font_clone,
+                fonts_applied: false,
+                use_japanese,
+                last_pc_for_scroll: 0,
+                mem_follow_pc: mem_follow_pc_thread,
+                mem_window_len: mem_window_len_thread,
+                mem_window_start: mem_window_start_thread,
+                mem_buf: mem_buf_thread,
+                mem_hl: mem_hl_thread,
+                mem_utf8: mem_utf8_thread,
+                mem_jump_text: format!("0x{:04X}", initial_start),
+                mem_len_text: format!("{}", self.mem_window_len.load(Ordering::SeqCst)),
+                quit_flag: self.quit_flag.clone(),
+                edit_mode: false,
+                edit_initialized: false,
+                edit_a: String::new(),
+                edit_b: String::new(),
+                edit_d: String::new(),
+                edit_x: String::new(),
+                edit_y: String::new(),
+                edit_u: String::new(),
+                edit_s: String::new(),
+                edit_dp: String::new(),
+                edit_pc: String::new(),
+                cc_e: false,
+                cc_f: false,
+                cc_h: false,
+                cc_i: false,
+                cc_n: false,
+                cc_z: false,
+                cc_v: false,
+                cc_c: false,
+                input_error: None,
+            };
+            #[cfg(windows)]
+            {
+                self.started.store(true, Ordering::SeqCst);
+                self.alive.store(true, Ordering::SeqCst);
+                let _ = eframe::run_native(title, native_options, Box::new(|_| Box::new(app)));
+                self.alive.store(false, Ordering::SeqCst);
+                self.started.store(false, Ordering::SeqCst);
+            }
+            #[cfg(not(windows))]
+            {
+                use std::panic::{catch_unwind, AssertUnwindSafe};
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|_| {}));
+                self.started.store(true, Ordering::SeqCst);
+                self.alive.store(true, Ordering::SeqCst);
+                let res: Result<eframe::Result<(), eframe::Error>, _> =
+                    catch_unwind(AssertUnwindSafe(|| {
+                        eframe::run_native(title, native_options, Box::new(|_| Box::new(app)))
+                    }));
+                let _ = std::panic::set_hook(prev);
+                self.alive.store(false, Ordering::SeqCst);
+                self.started.store(false, Ordering::SeqCst);
+                match res {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        eprintln!("[regview] GUI error: {} — running headless", e);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "[regview] GUI failed to start on this platform/thread. Running headless."
+                        );
+                    }
+                }
             }
         }
 
@@ -993,6 +1290,14 @@ mod gui {
             if let Ok(mut guard) = self.snapshot.lock() {
                 *guard = s;
             }
+        }
+
+        pub fn request_close(&self) {
+            self.quit_flag.store(true, Ordering::SeqCst);
+        }
+
+        pub fn is_closed(&self) -> bool {
+            self.started.load(Ordering::SeqCst) && !self.alive.load(Ordering::SeqCst)
         }
 
         pub fn update_hex_listing(&self, s: String) {

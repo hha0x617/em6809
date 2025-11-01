@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
 
-pub trait Device {
+pub trait Device: Send {
     fn contains(&self, addr: u16) -> bool;
     fn read8(&mut self, addr: u16) -> u8;
     fn write8(&mut self, addr: u16, data: u8);

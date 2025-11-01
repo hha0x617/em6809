@@ -201,11 +201,36 @@ mod console_mode {
 
 #[cfg(not(windows))]
 mod console_mode {
-    pub type Dummy = ();
-    pub fn enter_raw() -> Option<()> {
-        None
+    use libc::{c_int, tcgetattr, tcsetattr, termios, ECHO, ICANON, STDIN_FILENO, TCSANOW, VMIN, VTIME};
+
+    #[derive(Clone, Copy)]
+    pub struct Prev(termios);
+
+    pub fn enter_raw() -> Option<Prev> {
+        unsafe {
+            let fd: c_int = STDIN_FILENO;
+            let mut tio: termios = core::mem::zeroed();
+            if tcgetattr(fd, &mut tio as *mut termios) != 0 {
+                return None;
+            }
+            let mut new_tio = tio;
+            // Disable canonical mode and echo so reads return per byte without echoing
+            new_tio.c_lflag &= !(ICANON | ECHO);
+            // Return as soon as 1 byte is available, no timeout
+            new_tio.c_cc[VMIN] = 1;
+            new_tio.c_cc[VTIME] = 0;
+            if tcsetattr(fd, TCSANOW, &new_tio as *const termios) != 0 {
+                return None;
+            }
+            Some(Prev(tio))
+        }
     }
-    pub fn restore_stdin_mode(_: ()) {}
+
+    pub fn restore_stdin_mode(prev: Prev) {
+        unsafe {
+            let _ = tcsetattr(STDIN_FILENO, TCSANOW, &prev.0 as *const termios);
+        }
+    }
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -785,8 +810,9 @@ fn main() {
         );
     }
 
-    // If GUI is enabled and --dump-regs is set, launch the register viewer.
-    // The viewer API is a no-op in non-GUI builds.
+    // If GUI is enabled and --dump-regs is set, prepare the register viewer.
+    // On Windows we spawn it on a background thread.
+    // On Unix/macOS we prepare it and run on the main thread later.
     let reg_viewer = if dump_regs {
         // Try to load a companion .lst file for display in the viewer
         let lst_path_opt = {
@@ -827,12 +853,24 @@ fn main() {
         } else {
             None
         };
-        Some(regview::Viewer::spawn(
-            "MC6809 Registers",
-            lst_path_opt,
-            lst_fallback_text,
-            start,
-        ))
+        #[cfg(all(feature = "gui", not(windows)))]
+        {
+            Some(regview::Viewer::create(
+                "MC6809 Registers",
+                lst_path_opt,
+                lst_fallback_text,
+                start,
+            ))
+        }
+        #[cfg(any(not(feature = "gui"), windows))]
+        {
+            Some(regview::Viewer::spawn(
+                "MC6809 Registers",
+                lst_path_opt,
+                lst_fallback_text,
+                start,
+            ))
+        }
     } else {
         None
     };
@@ -919,6 +957,149 @@ fn main() {
         }
     }
 
+    // On Unix/macOS with GUI regs enabled, run GUI on the main thread and move CPU loop to a worker.
+    #[cfg(all(feature = "gui", not(windows)))]
+    if dump_regs {
+        if let Some(viewer_main) = &reg_viewer {
+            use std::thread;
+            let viewer_cpu = viewer_main.clone();
+            // Move ownership of emulator state into CPU worker thread
+            let mut cpu_worker = cpu;
+            let mut bus_worker = bus;
+            let _loaded_img = loaded;
+            let run_forever_flag = run_forever;
+            let steps_opt = steps;
+            let trace_flag = trace;
+            let disasm_hex_flag = disasm_hex;
+            let breakpoints_vec = breakpoints.clone();
+            let paused_start_flag = paused_start;
+            let console_stdin_flag = console_stdin;
+            let _console_rx_wm_opt = console_rx_wm;
+            let _console_irq_hold_opt = console_irq_hold;
+            let _console_in_str = console_in.clone();
+            let _console_out_path_opt = console_out_path.clone();
+            let _console_tee_stderr_flag = console_tee_stderr;
+            let _console_flush_every_opt = console_flush_every;
+            let _console_local_echo_flag = console_local_echo;
+            let mmu_regs_base_copy = mmu_regs_base;
+            let boot_script_path_opt = boot_script_path.clone();
+            let print_cycles_flag = print_cycles;
+            let cpu_handle = thread::spawn(move || {
+                // Everything below mirrors the normal run loop path
+                signals::install();
+                let mut remaining = if run_forever_flag {
+                    usize::MAX
+                } else {
+                    steps_opt.unwrap_or(usize::MAX)
+                };
+                let mut run_until_target: Option<u16> = None;
+                let prev_mode = if console_stdin_flag {
+                    console_mode::enter_raw()
+                } else {
+                    None
+                };
+                let rx = if console_stdin_flag {
+                    use std::io::Read;
+                    use std::sync::mpsc;
+                    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+                    thread::spawn(move || {
+                        let mut stdin = std::io::stdin();
+                        let mut buf = [0u8; 256];
+                        loop {
+                            match stdin.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => { let _ = tx.send(buf[..n].to_vec()); }
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                    Some(rx)
+                } else { None };
+
+                // Boot script
+                let mut boot_seq: Option<BootSequencer> = if let Some(p) = &boot_script_path_opt {
+                    match std::fs::read_to_string(p) {
+                        Ok(s) => parse_boot_script(&s).ok().map(BootSequencer::new),
+                        Err(_) => None,
+                    }
+                } else { None };
+
+                if paused_start_flag {
+                    viewer_cpu.set_paused(true);
+                    let snap = regview::RegSnapshot {
+                        a: cpu_worker.r.a, b: cpu_worker.r.b,
+                        d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
+                        x: cpu_worker.r.x, y: cpu_worker.r.y,
+                        u: cpu_worker.r.u, s: cpu_worker.r.s,
+                        dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc,
+                    };
+                    viewer_cpu.push(snap);
+                }
+
+                'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
+                    if STOP_REQUESTED.load(Ordering::SeqCst) {
+                        // Request GUI to close and break
+                        viewer_cpu.request_close();
+                        break 'run_loop;
+                    }
+                    if viewer_cpu.is_paused() {
+                        let snap = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
+                        viewer_cpu.push(snap);
+                        let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
+                        let eff_start: u16 = if mfollow { cpu_worker.r.pc & 0xFFF0 } else { mstart };
+                        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                        let mut a = eff_start;
+                        for _ in 0..mlen { buf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                        viewer_cpu.update_memory_window(eff_start, buf);
+                        let (consumed, _) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc);
+                        let clen = core::cmp::max(consumed as usize, 1);
+                        viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
+                        while viewer_cpu.should_pause() {
+                            if STOP_REQUESTED.load(Ordering::SeqCst) { break 'run_loop; }
+                            while let Some(cmd) = viewer_cpu.take_command() {
+                                match cmd {
+                                    regview::Command::SetPc(a) => {
+                                        cpu_worker.set_pc(a);
+                                        let snap2 = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
+                                        viewer_cpu.push(snap2);
+                                    }
+                                    regview::Command::RunUntil(a) => { run_until_target = Some(a); viewer_cpu.set_paused(false); break; }
+                                    regview::Command::ApplyRegs(ns) => {
+                                        cpu_worker.r.a = ns.a; cpu_worker.r.b = ns.b; cpu_worker.r.x = ns.x; cpu_worker.r.y = ns.y; cpu_worker.r.u = ns.u; cpu_worker.r.s = ns.s; cpu_worker.r.dp = ns.dp; cpu_worker.r.pc = ns.pc; cpu_worker.r.cc = ns.cc;
+                                        let snap2 = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
+                                        viewer_cpu.push(snap2);
+                                    }
+                                }
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                    }
+
+                    if let Some(ref rxch) = rx { if let Ok(v) = rxch.try_recv() { if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } } } }
+                    if let Some(ref mut seq) = boot_seq { seq.on_pre_step(bus_worker.as_mut(), mmu_regs_base_copy, cpu_worker.r.pc, &mut cpu_worker); }
+                    if trace_flag { let (_len, text) = if disasm_hex_flag { em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc) } else { disasm_one(bus_worker.as_mut(), cpu_worker.r.pc) }; println!("{:04X}: {}", cpu_worker.r.pc, text); }
+                    cpu_worker.step(bus_worker.as_mut(), false);
+                    if viewer_cpu.is_paused() == false { let snap = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc }; viewer_cpu.push(snap); }
+                    if let Some(ref mut seq) = boot_seq { seq.on_post_step(bus_worker.as_mut(), mmu_regs_base_copy); }
+                    if let Some(tgt) = run_until_target { if cpu_worker.r.pc == tgt { viewer_cpu.set_paused(true); run_until_target = None; } }
+                    if !run_forever_flag { remaining = remaining.saturating_sub(1); if remaining == 0 { break; } }
+                    if !breakpoints_vec.is_empty() && breakpoints_vec.contains(&cpu_worker.r.pc) { println!("Breakpoint hit at {:04X}", cpu_worker.r.pc); break; }
+                }
+                if let Some(prev) = prev_mode { console_mode::restore_stdin_mode(prev); }
+                // print cycles
+                if print_cycles_flag { println!("cycles: {}", cpu_worker.cycles); }
+            });
+
+            // Run GUI on main thread (blocks until closed)
+            eprintln!("[regview] Launching GUI on main thread (Unix)");
+            viewer_main.run_blocking("MC6809 Registers");
+            eprintln!("[regview] GUI closed; stopping CPU worker");
+            STOP_REQUESTED.store(true, Ordering::SeqCst);
+            let _ = cpu_handle.join();
+            return;
+        }
+    }
+
     if run_forever || steps.is_some() || trace || !breakpoints.is_empty() || paused_start {
         signals::install();
         // If --run, ignore --step and run until Ctrl+C
@@ -959,6 +1140,12 @@ fn main() {
         };
         // Event-driven updates based on write tracking
         'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
+            if let Some(viewer) = &reg_viewer {
+                if viewer.is_closed() {
+                    // GUI window closed -> exit
+                    break 'run_loop;
+                }
+            }
             // Pre-step pause gating so initial pause prevents executing first instruction
             if let Some(viewer) = &reg_viewer {
                 // Push current snapshot for initial/highlight updates while paused
@@ -993,6 +1180,9 @@ fn main() {
                 // While paused, also process GUI commands so right-click actions take effect immediately
                 while viewer.should_pause() {
                     if STOP_REQUESTED.load(Ordering::SeqCst) {
+                        break 'run_loop;
+                    }
+                    if viewer.is_closed() {
                         break 'run_loop;
                     }
                     // Handle queued commands even while paused
@@ -1427,12 +1617,9 @@ fn main() {
                 break;
             }
         }
-        // Restore console mode (Windows) if we disabled echo
+        // Restore console mode if we switched to raw
         if let Some(prev) = prev_mode {
-            #[cfg(windows)]
-            {
-                console_mode::restore_stdin_mode(prev);
-            }
+            console_mode::restore_stdin_mode(prev);
         }
     }
 

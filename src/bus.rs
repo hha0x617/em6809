@@ -1,6 +1,6 @@
 use std::any::Any;
 
-pub trait Bus {
+pub trait Bus: Send {
     fn read8(&mut self, addr: u16) -> u8;
     // Instruction fetch path (for execute permission checks). Default: read8
     fn read8_fetch(&mut self, addr: u16) -> u8 {
