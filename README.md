@@ -4,7 +4,7 @@ This application was generated with the assistance of AI tools: Codex CLI as par
 
 ## Overview
 
-em6809 is a software emulator for the MC6809. It provides a run-oriented CLI, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. It can be used to boot and validate OS‑9/NitrOS‑9 setups.
+em6809 is a software emulator for the MC6809. It provides a GUI with register/memory views, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. It can be used to boot and validate OS‑9/NitrOS‑9 setups.
 
 ## Install
 
@@ -27,7 +27,7 @@ em6809 is a software emulator for the MC6809. It provides a run-oriented CLI, ri
 
 ## Documentation
 
-- CLI usage: `docs/en/usage.md`
+- Usage: `docs/en/usage.md`
 - Console I/O: `docs/en/console_io.md`
 - Tracing/Disassembly: `docs/en/tracing.md`
 - OS‑9/NitrOS‑9 guide: `docs/en/os9_guide.md`

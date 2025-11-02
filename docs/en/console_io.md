@@ -5,7 +5,7 @@ Options to control the emulator’s console input/output with practical recipes.
 ## Main options
 
 - `--console-stdin`: Attach host stdin (keyboard) to the guest
-- `--console-echo {ON|OFF}`: Local echo (default OFF)
+- `--console-echo`: Enable local echo (default OFF)
 - `--console-in <TEXT>`: Send text immediately (escapes: `\\r`, `\\n`, `\\t`, `\\\\`)
 - `--console-out <FILE>`: Mirror console output to a file
 - `--console-tee-stderr`: Also tee output to stderr
@@ -16,7 +16,7 @@ Options to control the emulator’s console input/output with practical recipes.
 - Send one command line:
   - `... --console-in "HELP\\r\\n"`
 - Interactive input with local echo:
-  - `... --console-stdin --console-echo ON`
+  - `... --console-stdin --console-echo`
 - Save output while displaying:
   - `... --console-out session.log --console-tee-stderr`
 - If output feels choppy/slow, increase buffering:

@@ -10,8 +10,8 @@ Common pitfalls and how to fix them.
 ## Input not reaching the guest
 
 - Add `--console-stdin`
-- If you want local echo, add `--console-echo ON`
-- For OS‑9, confirm device init order (use `--trace`)
+- If you want local echo, add `--console-echo`
+- For OS‑9, confirm device init order (use tracing)
 
 ## Start address is not as expected
 
@@ -19,8 +19,7 @@ Common pitfalls and how to fix them.
 
 ## Verify branch/PC flow
 
-- Use `--trace` to see instructions/registers/targets
-- Disassemble ranges: `--disasm 0xE000:0xE100`
+- Use tracing to see instructions/registers/targets
 
 ## Encoding/input issues
 

@@ -11,17 +11,16 @@ Typical steps and commands to boot/verify NitrOS‑9/OS‑9 on the emulator. Adj
 ## Boot flow (example)
 
 1. Load S‑Record and attach stdin
-   - `target/release/mc6809emu --run --srec path/to/nitros9_kernel.s19 --console-stdin --console-echo ON`
+   - `target/release/em6809 path/to/nitros9_kernel.s19 --format srec --console-stdin --console-echo`
 2. Load extra modules if needed
-   - `target/release/mc6809emu --run --srec kernel.s19 --srec drivers.s19 --console-stdin`
+   - Load additional modules as needed (either via additional inputs if supported, or via GUI workflows).
 3. Control start address as needed
    - `... --pc 0xE000`
-4. Verify early I/O/branches via trace
-   - `target/release/mc6809emu --run --srec kernel.s19 --trace`
+4. Verify early I/O/branches via tracing
 
 ## Debugging tips
 
-- Disassemble first 256 bytes: `... --disasm 0xE000:0xE100`
+- Use the GUI disassembly view to inspect the first 256 bytes.
 - No input? Confirm `--console-stdin` and device init order
 - Slow output? Increase buffering: `--console-flush-every 128`
 

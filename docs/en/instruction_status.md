@@ -85,9 +85,6 @@ Notes:
 
 ## Verification steps
 
-- Run trace samples with markers:
-  - `target/release/mc6809emu --run --srec samples/traces/trace_all.s19 --trace`
-- Static coverage check via disasm:
-  - `... --disasm 0xE000:0xFFFF`
+- Load `samples/traces/trace_all.s19` in the GUI and observe markers/flags with tracing.
 - Start PC policy:
   - `--pc` > reset vector > SREC entry (if invalid) > first loaded range start

@@ -1,7 +1,7 @@
 # ドキュメント索引（日本語）
 
 - 日本語（補助）
-  - CLI 使用方法: `usage.md`
+  - 使用方法: `usage.md`
   - Console I/O: `console_io.md`
   - トレース/逆アセンブル: `tracing.md`
   - OS‑9/NitrOS‑9: `os9_guide.md`

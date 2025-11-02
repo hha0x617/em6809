@@ -1,22 +1,15 @@
-# トレース/デバッグと逆アセンブル
+# トレース/デバッグと逆アセンブル（GUI）
 
-実行中の命令・レジスタ・分岐先の可視化、ステップ実行、逆アセンブルと 16 進ダンプの使い方をまとめます。
+実行中の命令・レジスタ・分岐先の可視化、ステップ実行、逆アセンブルと 16 進ダンプの見方をまとめます。
 
 ## 実行トレース
 
-- 実行と同時にトレースを表示:
-  - `target/release/mc6809emu --run --srec path/to/rom.s19 --trace`
-- ステップ実行で 1 命令ずつ確認:
-  - `target/release/mc6809emu --srec path/to/rom.s19 --step`
-
-分岐は「相対オフセット」と「絶対アドレス」を併記し、レジスタ/CCR の変化を追跡できます。
+- GUI で一時停止/再開・ステップ実行を行います。
+- 分岐は「相対オフセット」と「絶対アドレス」を併記し、レジスタ/CCR の変化を追跡できます。
 
 ## 逆アセンブル
 
-- メモリ範囲を指定して逆アセンブル:
-  - `target/release/mc6809emu --disasm 0xE000:0xE100`
-- 実行開始周辺だけ確認（例: 0xE000〜0xE050）:
-  - `... --disasm 0xE000:0xE050`
+- リスティングビューで逆アセンブルを確認します。リセット付近や PC 周辺を中心に絞り込んで確認できます。
 
 表記仕様（抜粋）
 
@@ -25,15 +18,11 @@
 
 ## 16 進ダンプ
 
-- メモリ範囲を 16 進で表示:
-  - `target/release/mc6809emu --hex 0xE000:0xE040`
+- Hex ビューで対象範囲のバイト列を確認します。
 
 ## サンプル ROM と検証
 
-- トレースサンプル（マーカー付き）:
-  - `target/release/mc6809emu --run --srec samples/traces/trace_all.s19 --trace`
-- START から始めるバリアント:
-  - `target/release/mc6809emu --run --srec samples/traces/trace_all_startfirst.s19 --trace`
+- `samples/traces/trace_all.s19` や `samples/traces/trace_all_startfirst.s19` をロードし、GUI でトレース/分岐を確認します。
 
 命令カバレッジやフラグの扱いは `docs/instruction_status.md` を参照してください。
 

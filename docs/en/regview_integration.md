@@ -17,7 +17,7 @@ eframe = { version = "0.27", optional = true }
 
 Build with GUI:
 
-- `cargo run --release --features gui -- --dump-regs --srec path/to/rom.s19 --run`
+- `cargo run --release --features gui -- path/to/rom.s19 --format srec --dump-regs`
 
 ## Hooking the viewer
 
@@ -117,6 +117,3 @@ Some aspects of the GUI viewer can be customized via environment variables:
   - `en` → English labels (e.g., "Run to here", "Set PC to this address", "Cancel").
   - If unset, language is auto‑detected from `LC_ALL`/`LC_MESSAGES`/`LANG` or the OS language (Windows), defaulting to English.
 
-## CLI suggestion
-
-Wire `--dump-regs` to spawn the viewer. You can keep `--trace` independent; both can be enabled.

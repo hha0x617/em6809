@@ -4,7 +4,7 @@
 
 ## 概要
 
-em6809 は MC6809 のソフトウェアエミュレータです。実行用 CLI、詳細なコンソール I/O、分岐先の可視化を含むトレース/逆アセンブルを備え、OS‑9/NitrOS‑9 のブート検証にも活用できます。
+em6809 は MC6809 のソフトウェアエミュレータです。GUI を中心に、詳細なコンソール I/O、分岐先の可視化を含むトレース/逆アセンブルを備え、OS‑9/NitrOS‑9 のブート検証にも活用できます。
 
 ## インストール
 
@@ -27,8 +27,9 @@ em6809 は MC6809 のソフトウェアエミュレータです。実行用 CLI�
 
 ## ドキュメント
 
-- 使用方法（CLI 全体）: `docs/ja/usage.md`
+- 使用方法: `docs/ja/usage.md`
 - Console I/O 詳細: `docs/ja/console_io.md`
+- メモリダンプ編集（GUI）: `docs/ja/memory_editing.md`
 - トレース/逆アセンブル: `docs/ja/tracing.md`
 - OS‑9/NitrOS‑9 ガイド: `docs/ja/os9_guide.md`
 - トラブルシューティング: `docs/ja/troubleshooting.md`

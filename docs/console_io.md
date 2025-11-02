@@ -5,7 +5,7 @@
 ## 主なオプション
 
 - `--console-stdin`: 標準入力を接続（ユーザーキーボード入力をゲストに送る）
-- `--console-echo {ON|OFF}`: ローカルエコー（既定 OFF）
+- `--console-echo`: ローカルエコーを有効化（既定 OFF）
 - `--console-in <TEXT>`: 文字列を即時送信（エスケープ可: `\r`, `\n`, `\t`, `\\`）
 - `--console-out <FILE>`: コンソール出力をファイルへミラー
 - `--console-tee-stderr`: 出力を `stderr` にもミラー
@@ -16,7 +16,7 @@
 - 1 回だけコマンドを送る:
   - `... --console-in "HELP\\r\\n"`
 - 逐次入力（エコーあり）で操作する:
-  - `... --console-stdin --console-echo ON`
+  - `... --console-stdin --console-echo`
 - ログをファイル保存しながら画面にも表示:
   - `... --console-out session.log --console-tee-stderr`
 - 出力が詰まる場合はバッファリングを増やす:

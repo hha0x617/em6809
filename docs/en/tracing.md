@@ -1,22 +1,15 @@
-# Tracing, Debugging, and Disassembly
+# Tracing, Debugging, and Disassembly (GUI)
 
-How to inspect instructions, registers, and resolved branches during execution; how to step; how to disassemble and hex dump memory.
+How to inspect instructions, registers, and resolved branches in the GUI; how to step; disassembly and hex dump views.
 
 ## Execution trace
 
-- Run with trace:
-  - `target/release/mc6809emu --run --srec path/to/rom.s19 --trace`
-- Step one instruction at a time:
-  - `target/release/mc6809emu --srec path/to/rom.s19 --step`
-
-Branches show both the relative offset and absolute target; register/CCR changes are visible.
+- Use the GUI to pause/resume and step execution.
+- Traces show registers and CCR changes; branches display both relative offset and absolute target.
 
 ## Disassembly
 
-- Disassemble a memory range:
-  - `target/release/mc6809emu --disasm 0xE000:0xE100`
-- Narrow focus (e.g., around reset):
-  - `... --disasm 0xE000:0xE050`
+- The listing view shows disassembly; focus around reset or PC as needed.
 
 Operand conventions (summary)
 
@@ -25,14 +18,10 @@ Operand conventions (summary)
 
 ## Hex dump
 
-- Dump a range:
-  - `target/release/mc6809emu --hex 0xE000:0xE040`
+- Use the hex view to inspect bytes for a selected range.
 
 ## Sample ROMs and checks
 
-- Trace sample with markers:
-  - `target/release/mc6809emu --run --srec samples/traces/trace_all.s19 --trace`
-- START‑first variant:
-  - `target/release/mc6809emu --run --srec samples/traces/trace_all_startfirst.s19 --trace`
+- Load `samples/traces/trace_all.s19` or `samples/traces/trace_all_startfirst.s19` and observe trace/branches in the GUI.
 
 For instruction coverage and flag semantics, see `docs/en/instruction_status.md`.

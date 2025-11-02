@@ -11,13 +11,12 @@ NitrOS‑9/OS‑9 をエミュレータ上でブート/検証するための典�
 ## ブート手順（例）
 
 1. S‑Record をロードし、標準入力を接続
-   - `target/release/mc6809emu --run --srec path/to/nitros9_kernel.s19 --console-stdin --console-echo ON`
+   - `target/release/em6809 path/to/nitros9_kernel.s19 --format srec --console-stdin --console-echo`
 2. 追加モジュールがある場合は順次ロード
-   - `target/release/mc6809emu --run --srec kernel.s19 --srec drivers.s19 --console-stdin`
+   - 必要に応じて追加モジュールを読み込みます（追加入力や GUI 操作で対応）。
 3. 開始位置を制御（必要なら PC 指定）
    - `... --pc 0xE000`
 4. 初期トレースで入出力/分岐を確認
-   - `target/release/mc6809emu --run --srec kernel.s19 --trace`
 
 ## デバッグのポイント
 

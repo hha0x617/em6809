@@ -2,6 +2,27 @@
 
 em6809 は GUI モードに統一されています。起動時に必ずウィンドウが開き、レジスタ/リスティング/メモリビューから操作できます（初期状態は一時停止）。
 
+## プラットフォーム前提条件
+
+本エミュレータはネイティブ GUI（eframe/winit）で動作します。各 OS で以下を用意してください。
+
+- Windows 10/11
+  - Rust（rustup）: https://rustup.rs/
+  - Visual Studio Build Tools（C++）: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+  - 日本語表示用フォント（任意）: `EM6809_GUI_FONT` で TTF/OTF/TTC のパスを指定可能。
+- macOS 12+
+  - Rust（rustup）: `curl https://sh.rustup.rs -sSf | sh`
+  - Xcode Command Line Tools: `xcode-select --install`
+  - 日本語フォント（任意）: `EM6809_GUI_FONT` を設定可能。
+- Linux / WSL2 + WSLg
+  - Rust（rustup）
+  - ビルド/実行に必要なパッケージ（Debian/Ubuntu 例）:
+    - `sudo apt update && sudo apt install -y build-essential pkg-config libxkbcommon0 libxkbcommon-dev libwayland-client0 libwayland-cursor0 libwayland-dev libx11-xcb1 libxcb1 libxcb-render0 libxcb-shape0 libxcb-xfixes0 libegl1 libgles2`
+  - WSL2: Windows 11 の WSLg で Wayland/EGL がそのまま利用できます（他の X/Wayland サーバでも可）。
+
+注意
+- Windows ではイベントループをバックグラウンドスレッドで作成します。Unix 系の一部環境では GUI がメインスレッドを要求するため、実行環境によってはヘッドレスへフォールバックすることがあります。
+
 ## 基本
 
 - ビルド: `cargo build --release`
@@ -40,7 +61,7 @@ WSL2 + WSLg（Wayland）のセットアップ手順・既知の注意点は `doc
 入出力関連（概要。詳細は console_io.md）
 
 - `--console-stdin`: 標準入力を接続
-- `--console-echo {ON|OFF}`: ローカルエコー制御
+- `--console-echo`: ローカルエコーを有効化
 - `--console-in <TEXT>`: エスケープ可の文字列を送信（`\r`, `\n`, `\t`, `\\`）
 - `--console-out <FILE>`: 出力ミラー
 - `--console-tee-stderr`: `stderr` にもティー
@@ -53,5 +74,4 @@ WSL2 + WSLg（Wayland）のセットアップ手順・既知の注意点は `doc
 - 標準入力とエコー ON（Console 接続）:
   - `... --console 0xFF00 --console-stdin --console-echo`
 
-詳細は console_io.md（I/O 制御）、tracing.md（リスティング/逆アセンブルの考え方）、os9_guide.md（OS‑9 連携）を参照してください。
-
+詳細は console_io.md（I/O 制御）、tracing.md（リスティング/逆アセンブルの考え方）、memory_editing.md（メモリ編集）、os9_guide.md（OS‑9 連携）を参照してください。
