@@ -17,6 +17,7 @@ This project maintains English as the primary documentation. Japanese docs are p
   - OS‑9/NitrOS‑9 ガイド: `ja/os9_guide.md`
   - トラブルシューティング: `ja/troubleshooting.md`
   - 命令カバレッジ: `ja/instruction_status.md`
+  - メモリ編集 UI 設計: `ja/memory_edit_ui.md`
 
 ## Project TODOs
 

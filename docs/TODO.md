@@ -37,6 +37,8 @@ GUI とツールの今後の拡張を管理します。簡潔に記載し、進�
   - CC フラグ（E F H I N Z V C）をトグルで変更、検証あり
   - 適用/キャンセル、入力検証（基数/桁幅）後に CPU 状態とスナップショットへ反映
 
+- メモリダンプペインでメモリの値を編集可能にする
+
 - Windows 以外の環境への対応（Linux, macOS）
   - [done] `--console-stdin` で端末を raw 化（termios で ICANON/ECHO を無効化、VMIN=1/VTIME=0）
   - [done] 日本語フォント自動検出（Linux/macOS の代表パスを追加、`EM6809_GUI_FONT` を優先）
