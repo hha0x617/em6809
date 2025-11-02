@@ -1,6 +1,6 @@
 # Console I/O Guide
 
-Options to control the emulator’s console input/output with practical recipes. On Windows, stdin is set to raw mode; output is buffered internally for UTF‑8.
+Options to control the emulator’s console input/output with practical recipes. On Windows/Linux/macOS, stdin is set to raw (immediate) mode; output is buffered internally for UTF‑8.
 
 ## Main options
 

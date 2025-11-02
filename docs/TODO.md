@@ -41,6 +41,10 @@ GUI とツールの今後の拡張を管理します。簡潔に記載し、進�
   - [done] `--console-stdin` で端末を raw 化（termios で ICANON/ECHO を無効化、VMIN=1/VTIME=0）
   - [done] 日本語フォント自動検出（Linux/macOS の代表パスを追加、`EM6809_GUI_FONT` を優先）
   - 付随するドキュメント更新（console_io.md）
+  - [todo] フォント検出の強化（macOS の英語名 Hiragino フォントや `/Library/Fonts` 配下も候補に追加。将来的に CoreText による動的列挙の検討）
+  - [known-issue] macOS: TextEdit 編集時に `IMKCFRunLoopWakeUpReliable` 警告がコンソールに出力される（機能影響なし）
+    - [plan] eframe/winit を将来バージョンへ更新し、ウィンドウハンドル/IME 設定を正式 API で扱えるようになってから、macOS では数値欄に対して IME を無効化
+    - [workaround] 短期は DragValue への置換で IME を経由しない数値入力にする（ユーザー側の英字(ABC) 切替は恒久策としては非推奨）
 
 ## メモ
 

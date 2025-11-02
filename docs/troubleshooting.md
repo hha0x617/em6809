@@ -27,6 +27,13 @@
 - 端末の文字コードを UTF‑8 に設定
 - Windows: キーバインドや IME の干渉に注意（Ctrl+C は終了）
 
+## macOS の GUI について
+
+- Terminal.app や iTerm2 からの実行を推奨します（GUI はメインスレッド上で起動されます）。
+- 日本語ラベルや出力が豆腐になる場合は、`EM6809_GUI_FONT` に日本語フォントの絶対パスを指定してください（例: `/System/Library/Fonts/Hiragino Sans W6.ttc`）。未設定時は自動検出を試みます。
+- HiDPI（Retina）環境では eframe の既定スケーリングが適用されます。表示倍率が気になる場合は macOS のシステム設定で調整してください。
+- まれにウィンドウが開かない/すぐ閉じる場合は、標準出力・標準エラーのログを確認し、`cargo clean && cargo run --release` で再ビルドを試してください。
+
 ## WSL2 / Linux の GUI について
 
 WSL2 + WSLg（Wayland）の環境で GUI を表示するための準備と手順まとめです。
@@ -67,4 +74,3 @@ WSL2 + WSLg（Wayland）の環境で GUI を表示するための準備と手順
 - 既知の注意点
   - Wayland 環境で `XDG_RUNTIME_DIR` が未設定だと GUI 起動に失敗する場合があります（WSLg では通常 `/mnt/wslg/runtime-dir`）。
   - バックエンド切替（`WINIT_UNIX_BACKEND=wayland|x11`）と `WGPU_BACKEND=gl|vulkan` の組み合わせで改善することがあります。
-

@@ -90,6 +90,8 @@ mod gui {
         pub mem_jump_text: String,
         pub mem_len_text: String,
         pub quit_flag: Arc<AtomicBool>,
+        // Numeric UX toggle (DragValue vs TextEdit)
+        pub mem_use_drag: bool,
 
         // Editing state for registers and CC flags
         pub edit_mode: bool,
@@ -209,51 +211,78 @@ mod gui {
                         if ui.checkbox(&mut utf8, "UTF-8").clicked() {
                             self.mem_utf8.store(utf8, Ordering::SeqCst);
                         }
+                        let mut use_drag = self.mem_use_drag;
+                        if ui.checkbox(&mut use_drag, if self.use_japanese { "数値UI" } else { "Numeric" }).clicked() {
+                            self.mem_use_drag = use_drag;
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.label(if self.use_japanese { "開始" } else { "Start" });
-                        let te = egui::TextEdit::singleline(&mut self.mem_jump_text)
-                            .desired_width(80.0)
-                            .hint_text("0x0000");
-                        // Disable editing of Start when following PC
-                        let start_resp = ui.add_enabled(!follow_pc, te);
-                        ui.label(if self.use_japanese { "長さ" } else { "Len" });
-                        let len_te = egui::TextEdit::singleline(&mut self.mem_len_text)
-                            .desired_width(64.0)
-                            .hint_text("256");
-                        let len_resp = ui.add(len_te);
-                        // Commit Start: only when not following PC, and either Enter while focused or focus lost
-                        if !follow_pc {
-                            if start_resp.has_focus() {
-                                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                        if self.mem_use_drag {
+                            let mut sv: u16 = self.mem_window_start.load(Ordering::SeqCst) as u16;
+                            let resp = ui.add_enabled(!follow_pc, egui::DragValue::new(&mut sv).clamp_range(0u16..=0xFFFF).speed(16.0));
+                            ui.monospace(format!(" (0x{:04X})", sv));
+                            if resp.changed() && !follow_pc {
+                                start = sv;
+                                self.mem_window_start.store(sv as usize, Ordering::SeqCst);
+                                self.mem_jump_text = format!("0x{:04X}", sv);
+                            }
+                        } else {
+                            let te = egui::TextEdit::singleline(&mut self.mem_jump_text)
+                                .desired_width(80.0)
+                                .hint_text("0x0000");
+                            // Disable editing of Start when following PC
+                            let start_resp = ui.add_enabled(!follow_pc, te);
+                            // Commit Start: Enter while focused or on focus loss
+                            if !follow_pc {
+                                if start_resp.has_focus() {
+                                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                                        if let Some(val) = parse_num_u16_any_gui(&self.mem_jump_text) {
+                                            start = val;
+                                            self.mem_window_start.store(val as usize, Ordering::SeqCst);
+                                            self.mem_jump_text = format!("0x{:04X}", val);
+                                        }
+                                    }
+                                } else if start_resp.lost_focus() {
                                     if let Some(val) = parse_num_u16_any_gui(&self.mem_jump_text) {
                                         start = val;
                                         self.mem_window_start.store(val as usize, Ordering::SeqCst);
                                         self.mem_jump_text = format!("0x{:04X}", val);
                                     }
                                 }
-                            } else if start_resp.lost_focus() {
-                                if let Some(val) = parse_num_u16_any_gui(&self.mem_jump_text) {
-                                    start = val;
-                                    self.mem_window_start.store(val as usize, Ordering::SeqCst);
-                                    self.mem_jump_text = format!("0x{:04X}", val);
-                                }
                             }
                         }
-                        // Commit Len: Enter while focused or on focus loss
-                        if len_resp.has_focus() {
-                            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                        ui.label(if self.use_japanese { "長さ" } else { "Len" });
+                        if self.mem_use_drag {
+                            let mut lv: usize = self.mem_window_len.load(Ordering::SeqCst);
+                            let old = lv;
+                            let resp = ui.add(egui::DragValue::new(&mut lv).clamp_range(16..=4096).speed(1.0));
+                            ui.label(" bytes");
+                            if resp.changed() && lv != old {
+                                let v = lv.clamp(16, 4096);
+                                self.mem_window_len.store(v, Ordering::SeqCst);
+                                self.mem_len_text = format!("{}", v);
+                            }
+                        } else {
+                            let len_te = egui::TextEdit::singleline(&mut self.mem_len_text)
+                                .desired_width(64.0)
+                                .hint_text("256");
+                            let len_resp = ui.add(len_te);
+                            // Commit Len: Enter while focused or on focus loss
+                            if len_resp.has_focus() {
+                                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                                    if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
+                                        let v = v.clamp(16, 4096);
+                                        self.mem_window_len.store(v, Ordering::SeqCst);
+                                        self.mem_len_text = format!("{}", v);
+                                    }
+                                }
+                            } else if len_resp.lost_focus() {
                                 if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
                                     let v = v.clamp(16, 4096);
                                     self.mem_window_len.store(v, Ordering::SeqCst);
                                     self.mem_len_text = format!("{}", v);
                                 }
-                            }
-                        } else if len_resp.lost_focus() {
-                            if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
-                                let v = v.clamp(16, 4096);
-                                self.mem_window_len.store(v, Ordering::SeqCst);
-                                self.mem_len_text = format!("{}", v);
                             }
                         }
                         // Jump button removed; Enter/focus-out on Start commits address
@@ -887,6 +916,15 @@ mod gui {
                     #[cfg(target_os = "macos")]
                     {
                         let candidates = [
+                            // English-name Hiragino (newer macOS)
+                            "/System/Library/Fonts/Hiragino Sans W6.ttc",
+                            "/System/Library/Fonts/Hiragino Sans W3.ttc",
+                            "/Library/Fonts/Hiragino Sans W6.ttc",
+                            "/Library/Fonts/Hiragino Sans W3.ttc",
+                            // Older ProN names (may be installed in /Library/Fonts)
+                            "/Library/Fonts/Hiragino Kaku Gothic ProN W6.otf",
+                            "/Library/Fonts/Hiragino Kaku Gothic ProN W3.otf",
+                            // Japanese-name variants (some macOS locales)
                             "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
                             "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
                             "/System/Library/Fonts/AppleGothic.ttf",
@@ -989,6 +1027,7 @@ mod gui {
                     mem_jump_text: format!("0x{:04X}", initial_start),
                     mem_len_text: format!("{}", mem_window_len_thread.load(Ordering::SeqCst)),
                     quit_flag: quit_flag_thread_clone,
+                    mem_use_drag: false,
                     edit_mode: false,
                     edit_initialized: false,
                     edit_a: String::new(),
@@ -1123,6 +1162,15 @@ mod gui {
                     #[cfg(target_os = "macos")]
                     {
                         let candidates = [
+                            // English-name Hiragino (newer macOS)
+                            "/System/Library/Fonts/Hiragino Sans W6.ttc",
+                            "/System/Library/Fonts/Hiragino Sans W3.ttc",
+                            "/Library/Fonts/Hiragino Sans W6.ttc",
+                            "/Library/Fonts/Hiragino Sans W3.ttc",
+                            // Older ProN names (may be installed in /Library/Fonts)
+                            "/Library/Fonts/Hiragino Kaku Gothic ProN W6.otf",
+                            "/Library/Fonts/Hiragino Kaku Gothic ProN W3.otf",
+                            // Japanese-name variants (some macOS locales)
                             "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
                             "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
                             "/System/Library/Fonts/AppleGothic.ttf",
@@ -1228,6 +1276,7 @@ mod gui {
                 mem_jump_text: format!("0x{:04X}", initial_start),
                 mem_len_text: format!("{}", self.mem_window_len.load(Ordering::SeqCst)),
                 quit_flag: self.quit_flag.clone(),
+                mem_use_drag: false,
                 edit_mode: false,
                 edit_initialized: false,
                 edit_a: String::new(),

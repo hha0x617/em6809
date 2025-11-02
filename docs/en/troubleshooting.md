@@ -26,3 +26,10 @@ Common pitfalls and how to fix them.
 
 - Use a UTF‑8 terminal and a compatible font
 - On Windows, note Ctrl+C exits the emulator (raw stdin)
+
+## macOS GUI
+
+- Run from Terminal.app or iTerm2. The GUI runs on the main thread.
+- If Japanese labels/text render as tofu (missing glyphs), set `EM6809_GUI_FONT` to a Japanese-capable font (e.g. `/System/Library/Fonts/Hiragino Sans W6.ttc`). When unset, the app auto-discovers common system fonts.
+- HiDPI (Retina) scaling is handled by eframe’s defaults. Adjust macOS display scaling if needed.
+- If the window fails to open or closes immediately, check stdout/stderr logs and try a clean rebuild: `cargo clean && cargo run --release`.
