@@ -9,7 +9,8 @@ Options to control the emulator’s console input/output with practical recipes.
 - `--console-in <TEXT>`: Send text immediately (escapes: `\\r`, `\\n`, `\\t`, `\\\\`)
 - `--console-out <FILE>`: Mirror console output to a file
 - `--console-tee-stderr`: Also tee output to stderr
-- `--console-flush-every {off|byte|<N>}`: Flush strategy (default: per newline)
+- `--console-flush-every {off|byte|<N>}`: Flush strategy (default: 1 = every byte, max 128)
+- `--console-flush-newline`: Also flush on newline (line-oriented output)
 
 ## Recipes
 

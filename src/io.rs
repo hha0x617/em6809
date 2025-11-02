@@ -24,6 +24,7 @@ pub struct ConsoleDev {
     out_file: Option<File>,
     tee_stderr: bool,
     flush_every: Option<usize>,
+    flush_on_newline: bool,
     flush_count: usize,
     local_echo: bool,
     utf8_buf: Vec<u8>,
@@ -41,7 +42,9 @@ impl ConsoleDev {
             irq_countdown: 0,
             out_file: None,
             tee_stderr: false,
-            flush_every: None,
+            // Default: flush every byte
+            flush_every: Some(1),
+            flush_on_newline: false,
             flush_count: 0,
             local_echo: false,
             utf8_buf: Vec::with_capacity(8),
@@ -78,8 +81,13 @@ impl ConsoleDev {
         self.tee_stderr = on;
     }
     pub fn set_flush_every(&mut self, n: usize) {
+        // Cap to a reasonable upper bound to avoid excessive flushing
+        let n = n.min(128);
         self.flush_every = if n > 0 { Some(n) } else { None };
         self.flush_count = 0;
+    }
+    pub fn set_flush_on_newline(&mut self, on: bool) {
+        self.flush_on_newline = on;
     }
     pub fn set_local_echo(&mut self, on: bool) {
         self.local_echo = on;
@@ -112,7 +120,7 @@ impl ConsoleDev {
             }
         }
         // Flush policy
-        let mut need_flush = b == b'\n';
+        let mut need_flush = self.flush_on_newline && b == b'\n';
         if let Some(n) = self.flush_every {
             self.flush_count = self.flush_count.wrapping_add(1);
             if self.flush_count % n == 0 {

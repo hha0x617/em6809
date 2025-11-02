@@ -46,7 +46,7 @@ PC 初期化の優先順位:
 - Console I/O（概要。詳細は console_io.md）:
   - `--console 0xADDR`（例: `0xFF00`）
   - `--console-stdin`, `--console-in <TEXT>`, `--console-out <FILE>`
-  - `--console-echo`, `--console-flush-every <N>`, `--console-tee-stderr`
+  - `--console-echo`, `--console-flush-every <N>`, `--console-flush-newline`, `--console-tee-stderr`
 - MMU / プリセット:
   - `--mmu`, `--mmu-phys`, `--mmu-reg-base`, `--mmu-task`, `--mmu-idmap`
   - `--mmu-map P=F`, `--mmu-map-file PATH`, `--preset NAME`, `--preset-list`
@@ -65,7 +65,8 @@ WSL2 + WSLg（Wayland）のセットアップ手順・既知の注意点は `doc
 - `--console-in <TEXT>`: エスケープ可の文字列を送信（`\r`, `\n`, `\t`, `\\`）
 - `--console-out <FILE>`: 出力ミラー
 - `--console-tee-stderr`: `stderr` にもティー
-- `--console-flush-every {off|byte|<N>}`: フラッシュ間隔
+- `--console-flush-every {off|byte|<N>}`: フラッシュ間隔（既定 1 = 毎バイト、最大 128）
+- `--console-flush-newline`: 改行検出時にもフラッシュ
 
 ## 簡単なレシピ
 

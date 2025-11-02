@@ -9,7 +9,8 @@
 - `--console-in <TEXT>`: 文字列を即時送信（エスケープ可: `\r`, `\n`, `\t`, `\\`）
 - `--console-out <FILE>`: コンソール出力をファイルへミラー
 - `--console-tee-stderr`: 出力を `stderr` にもミラー
-- `--console-flush-every {off|byte|<N>}`: フラッシュ間隔（既定: 改行ごと）
+- `--console-flush-every {off|byte|<N>}`: フラッシュ間隔（既定: 1 = 毎バイト、最大 128）
+- `--console-flush-newline`: 改行検出時にもフラッシュ（追従出力向け）
 
 ## 実用レシピ
 

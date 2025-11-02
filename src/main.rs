@@ -54,7 +54,8 @@ fn print_usage() {
     println!("  --console-in STRING       Prefeed input (supports \\r, \\n, \\t, \\\\)");
     println!("  --console-stdin           Read from stdin (Ctrl+C to stop)");
     println!("  --console-out PATH        Mirror output to file");
-    println!("  --console-flush-every N   Flush every N chars (also flush on newline)");
+    println!("  --console-flush-every N   Flush every N chars (default 1, max 128)");
+    println!("  --console-flush-newline   Also flush on newline characters");
     println!("  --console-echo            Local echo on RX read (default OFF)");
     println!("  --console-rx-wm N         RX IRQ watermark (if used)");
     println!("  --console-irq-hold N      IRQ hold cycles");
@@ -286,6 +287,7 @@ fn main() {
     let mut console_out_path: Option<String> = None;
     let mut console_tee_stderr: bool = false;
     let mut console_flush_every: Option<usize> = None;
+    let mut console_flush_newline: bool = false;
     let mut console_local_echo: bool = false; // default OFF
     let mut emit_boot_template_name: Option<String> = None;
 
@@ -386,9 +388,13 @@ fn main() {
             "--console-flush-every" => {
                 if let Some(v) = args.next() {
                     if let Ok(n) = v.parse::<usize>() {
-                        console_flush_every = Some(n);
+                        // Cap to max 128
+                        console_flush_every = Some(n.min(128));
                     }
                 }
+            }
+            "--console-flush-newline" => {
+                console_flush_newline = true;
             }
             "--console-echo" => {
                 console_local_echo = true;
@@ -571,9 +577,8 @@ fn main() {
             if console_tee_stderr {
                 con.set_tee_stderr(true);
             }
-            if let Some(n) = console_flush_every {
-                con.set_flush_every(n);
-            }
+            if let Some(n) = console_flush_every { con.set_flush_every(n); }
+            if console_flush_newline { con.set_flush_on_newline(true); }
             if console_local_echo {
                 con.set_local_echo(true);
             }
@@ -603,9 +608,8 @@ fn main() {
             if console_tee_stderr {
                 con.set_tee_stderr(true);
             }
-            if let Some(n) = console_flush_every {
-                con.set_flush_every(n);
-            }
+            if let Some(n) = console_flush_every { con.set_flush_every(n); }
+            if console_flush_newline { con.set_flush_on_newline(true); }
             if console_local_echo {
                 con.set_local_echo(true);
             }

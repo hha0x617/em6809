@@ -52,7 +52,8 @@ I/O (see console_io.md for details)
 - `--console-in <TEXT>`: Send escaped text (`\\r`, `\\n`, `\\t`, `\\\\`)
 - `--console-out <FILE>`: Mirror output to file
 - `--console-tee-stderr`: Tee output to stderr as well
-- `--console-flush-every {off|byte|<N>}`: Flush interval
+- `--console-flush-every {off|byte|<N>}`: Flush interval (default 1 = every byte, max 128)
+- `--console-flush-newline`: Also flush on newline
 
 ## Quick recipes
 
