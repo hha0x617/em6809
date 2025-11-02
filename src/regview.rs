@@ -57,12 +57,15 @@ mod gui {
     use memmap2::Mmap;
     use std::fs::File;
     use std::path::PathBuf;
+    use std::collections::HashMap;
 
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Debug)]
     pub enum Command {
         SetPc(u16),
         RunUntil(u16),
         ApplyRegs(RegSnapshot),
+        MemWrite(Vec<(u16, u8)>),
+        RefreshHexListing,
     }
 
     pub struct RegApp {
@@ -72,6 +75,8 @@ mod gui {
         pub lst_mmap: Option<Arc<Mmap>>,
         pub lst_text: Option<Arc<Mutex<String>>>,
         pub use_hex: Arc<AtomicBool>,
+        pub auto_hex_on_edit: Arc<AtomicBool>,
+        pub scroll_to_pc_req: Arc<AtomicBool>,
         pub follow_pc_flag: Arc<AtomicBool>,
         pub span_policy: Arc<AtomicUsize>, // 0=FullSpan, 1=PcWindow
         pub window_len: Arc<AtomicUsize>,  // bytes for PcWindow
@@ -92,6 +97,16 @@ mod gui {
         pub quit_flag: Arc<AtomicBool>,
         // Numeric UX toggle (DragValue vs TextEdit)
         pub mem_use_drag: bool,
+        // Memory edit (phase 1)
+        pub mem_edit_mode: bool,
+        pub mem_pending: HashMap<u16, u8>,
+        pub mem_selected: Option<u16>,
+        pub mem_edit_buf: String,
+        pub mem_focus_next: bool,
+        // Caret boundary tracking for neighbor navigation
+        pub mem_last_sel_addr: Option<u16>,
+        pub mem_last_at_start: bool,
+        pub mem_last_at_end: bool,
 
         // Editing state for registers and CC flags
         pub edit_mode: bool,
@@ -187,39 +202,72 @@ mod gui {
                     let mut follow_pc = self.mem_follow_pc.load(Ordering::SeqCst);
                     let _win_len = self.mem_window_len.load(Ordering::SeqCst);
                     let mut start = self.mem_window_start.load(Ordering::SeqCst) as u16;
-                    ui.horizontal(|ui| {
-                        ui.heading(if self.use_japanese {
-                            "メモリ"
+            ui.horizontal(|ui| {
+                ui.heading(if self.use_japanese {
+                    "メモリ"
+                } else {
+                    "Memory"
+                });
+                ui.separator();
+                if ui
+                    .checkbox(
+                        &mut follow_pc,
+                        if self.use_japanese {
+                            "PC追従"
                         } else {
-                            "Memory"
-                        });
-                        ui.separator();
-                        if ui
-                            .checkbox(
-                                &mut follow_pc,
-                                if self.use_japanese {
-                                    "PC追従"
-                                } else {
-                                    "Follow PC"
-                                },
-                            )
-                            .clicked()
-                        {
-                            self.mem_follow_pc.store(follow_pc, Ordering::SeqCst);
-                        }
-                        let mut utf8 = self.mem_utf8.load(Ordering::SeqCst);
-                        if ui.checkbox(&mut utf8, "UTF-8").clicked() {
-                            self.mem_utf8.store(utf8, Ordering::SeqCst);
-                        }
-                        let mut use_drag = self.mem_use_drag;
-                        if ui.checkbox(&mut use_drag, if self.use_japanese { "数値UI" } else { "Numeric" }).clicked() {
-                            self.mem_use_drag = use_drag;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(if self.use_japanese { "開始" } else { "Start" });
-                        if self.mem_use_drag {
-                            let mut sv: u16 = self.mem_window_start.load(Ordering::SeqCst) as u16;
+                            "Follow PC"
+                        },
+                    )
+                    .clicked()
+                {
+                    self.mem_follow_pc.store(follow_pc, Ordering::SeqCst);
+                }
+                let mut utf8 = self.mem_utf8.load(Ordering::SeqCst);
+                if ui.checkbox(&mut utf8, "UTF-8").clicked() {
+                    self.mem_utf8.store(utf8, Ordering::SeqCst);
+                }
+                let mut use_drag = self.mem_use_drag;
+                if ui.checkbox(&mut use_drag, if self.use_japanese { "数値UI" } else { "Numeric" }).clicked() {
+                    self.mem_use_drag = use_drag;
+                }
+                ui.separator();
+                // Edit mode controls: in normal mode show only "Edit"; in edit mode show "Apply" and "Cancel".
+                let pending_count = self.mem_pending.len();
+                if !self.mem_edit_mode {
+                    if ui.button(if self.use_japanese { "編集" } else { "Edit" }).clicked() {
+                        self.mem_edit_mode = true;
+                        self.mem_selected = None;
+                        self.mem_edit_buf.clear();
+                    }
+                } else {
+                    let apply_enabled = pending_count > 0;
+                    if ui.add_enabled(apply_enabled, egui::Button::new(if self.use_japanese { "適用" } else { "Apply" })).clicked() {
+                        let mut items: Vec<(u16, u8)> = self.mem_pending.iter().map(|(a, v)| (*a, *v)).collect();
+                        items.sort_by_key(|(a, _)| *a);
+                        if let Ok(mut q) = self.cmds.lock() { q.push(Command::MemWrite(items)); }
+                        self.mem_pending.clear();
+                        self.mem_selected = None;
+                        self.mem_edit_buf.clear();
+                        // Exit edit mode after apply as requested
+                        self.mem_edit_mode = false;
+                        // Reset caret boundary tracking
+                        self.mem_last_sel_addr = None;
+                        self.mem_last_at_start = false;
+                        self.mem_last_at_end = false;
+                    }
+                    if ui.button(if self.use_japanese { "取消" } else { "Cancel" }).clicked() {
+                        // Cancel discards pending edits and exits edit mode
+                        self.mem_pending.clear();
+                        self.mem_selected = None;
+                        self.mem_edit_buf.clear();
+                        self.mem_edit_mode = false;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(if self.use_japanese { "開始" } else { "Start" });
+                if self.mem_use_drag {
+                    let mut sv: u16 = self.mem_window_start.load(Ordering::SeqCst) as u16;
                             let resp = ui.add_enabled(!follow_pc, egui::DragValue::new(&mut sv).clamp_range(0u16..=0xFFFF).speed(16.0));
                             ui.monospace(format!(" (0x{:04X})", sv));
                             if resp.changed() && !follow_pc {
@@ -334,25 +382,140 @@ mod gui {
                                             let in_hl = if let (Some(hs), Some(he)) = (hl_start, hl_end) {
                                                 if hs <= he { a >= hs && a < he } else { a >= hs || a < he }
                                             } else { false };
-                                            let mut rt = egui::RichText::new(format!("{:02X}", b)).monospace();
-                                            if in_hl { rt = rt.background_color(hl_color); }
-                                            ui.add(egui::Label::new(rt));
+                                            let shown = if let Some(v) = self.mem_pending.get(&a) { *v } else { *b };
+                                            // Edit mode: selected cell becomes TextEdit, others clickable labels
+                                            if self.mem_edit_mode && self.mem_selected == Some(a) {
+                                                // ensure buffer contains current value
+                                                if self.mem_edit_buf.is_empty() { self.mem_edit_buf = format!("{:02X}", shown); }
+                                                let cell_id = egui::Id::new(("mem_hex_cell", a));
+                                                // Revert overwrite mode: no need to snapshot buffer/caret pre-state
+                                                let te = egui::TextEdit::singleline(&mut self.mem_edit_buf)
+                                                    .desired_width(24.0)
+                                                    .id_source(cell_id)
+                                                    .cursor_at_end(true);
+                                                let resp = ui.add(te);
+                                                if self.mem_focus_next { resp.request_focus(); self.mem_focus_next = false; }
+                                                // On focus gain (e.g., via Tab/Enter), select all text so即時上書き可能
+                                                if resp.gained_focus() {
+                                                    if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), resp.id) {
+                                                        let len = self.mem_edit_buf.len();
+                                                        let range = egui::text::CCursorRange::two(
+                                                            egui::text::CCursor::new(0),
+                                                            egui::text::CCursor::new(len),
+                                                        );
+                                                        state.cursor.set_char_range(Some(range));
+                                                        state.store(ui.ctx(), resp.id);
+                                                    }
+                                                }
+                                                // Key handling: consume Tab/Enter to avoid default focus changes; arrows remain non-consuming
+                                                let (enter, tab_any, shift_held, arrow_up, arrow_down, left_pressed, right_pressed, home_key, end_key) = ui.input_mut(|i| {
+                                                    let shift_now = i.modifiers.shift;
+                                                    let enter = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                                                    // Consume both plain Tab and Shift+Tab
+                                                    let tab_plain_c = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+                                                    let tab_shift_c = i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
+                                                    let tab_any = tab_plain_c || tab_shift_c;
+                                                    let arrow_up = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+                                                    let arrow_down = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+                                                    // Consume left/right to detect a single navigation intent this frame
+                                                    let left_pressed = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
+                                                    let right_pressed = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
+                                                    let home_key = i.key_pressed(egui::Key::Home);
+                                                    let end_key = i.key_pressed(egui::Key::End);
+                                                    (enter, tab_any, shift_now, arrow_up, arrow_down, left_pressed, right_pressed, home_key, end_key)
+                                                });
+                                                let shift_tab = tab_any && shift_held;
+                                                let tab_plain = tab_any && !shift_held;
+                                                // After TextEdit processed keys, re-check caret; only jump if caret stayed at boundary
+                                                let (at_start_after, at_end_after) = {
+                                                    if let Some(state) = egui::text_edit::TextEditState::load(ui.ctx(), resp.id) {
+                                                        if let Some(r) = state.cursor.char_range() {
+                                                            let len = self.mem_edit_buf.len();
+                                                            let collapsed = r.primary == r.secondary;
+                                                            let idx = r.primary.index;
+                                                            (collapsed && idx == 0, collapsed && idx == len)
+                                                        } else { (false, false) }
+                                                    } else { (false, false) }
+                                                };
+                                                // Reverted overwrite mode: rely on TextEdit's default insertion behavior
+                                                // Cross-frame boundary tracking: require端滞在の明確な2度押し
+                                                let now_at_start = at_start_after;
+                                                let now_at_end = at_end_after;
+                                                let same_cell = self.mem_last_sel_addr == Some(a);
+                                                let move_prev = same_cell && left_pressed && self.mem_last_at_start && now_at_start;
+                                                let move_next = same_cell && right_pressed && self.mem_last_at_end && now_at_end;
+                                                let commit = resp.lost_focus() || enter || tab_any || arrow_up || arrow_down || move_prev || move_next || home_key || end_key;
+                                                if commit {
+                                                    if let Ok(v) = u8::from_str_radix(self.mem_edit_buf.trim(), 16) {
+                                                        // Only keep pending entry if it differs from the original byte
+                                                        if v != *b { self.mem_pending.insert(a, v); } else { self.mem_pending.remove(&a); }
+                                                        // Decide next selection
+                                                        let line_base = a & 0xFFF0;
+                                                        let next_sel = if home_key { line_base }
+                                                            else if end_key { line_base.wrapping_add(15) }
+                                                            else if shift_tab || move_prev { a.wrapping_sub(1) }
+                                                            else if arrow_up { a.wrapping_sub(16) }
+                                                            else if arrow_down { a.wrapping_add(16) }
+                                                            else if enter || tab_plain || move_next { a.wrapping_add(1) }
+                                                            else { a };
+                                                        if next_sel != a {
+                                                            self.mem_selected = Some(next_sel);
+                                                            self.mem_focus_next = true;
+                                                            // Reset boundary tracking so新セルでも2度押しが必要
+                                                            self.mem_last_sel_addr = None;
+                                                            self.mem_last_at_start = false;
+                                                            self.mem_last_at_end = false;
+                                                        }
+                                                        self.mem_edit_buf.clear();
+                                                    } else {
+                                                        // keep selection, but reset buffer to current value
+                                                        self.mem_edit_buf = format!("{:02X}", shown);
+                                                    }
+                                                }
+                                                // Update boundary tracking for this cell each frame
+                                                self.mem_last_sel_addr = Some(a);
+                                                self.mem_last_at_start = now_at_start;
+                                                self.mem_last_at_end = now_at_end;
+                                            } else {
+                                                let mut rt = egui::RichText::new(format!("{:02X}", shown)).monospace();
+                                                if in_hl { rt = rt.background_color(hl_color); }
+                                                if let Some(&nv) = self.mem_pending.get(&a) { if nv != *b { rt = rt.background_color(egui::Color32::from_rgb(255, 255, 128)); } }
+                                                let label = egui::Label::new(rt).sense(if self.mem_edit_mode { egui::Sense::click() } else { egui::Sense::hover() });
+                                                let resp = ui.add(label);
+                                                if self.mem_edit_mode && resp.clicked() {
+                                                    self.mem_selected = Some(a);
+                                                    self.mem_edit_buf = String::new();
+                                                    self.mem_focus_next = true;
+                                                    // Reset boundary tracking on new selection
+                                                    self.mem_last_sel_addr = None;
+                                                    self.mem_last_at_start = false;
+                                                    self.mem_last_at_end = false;
+                                                }
+                                            }
                                             if i != chunk.len() - 1 { ui.monospace(" "); }
                                         }
                                         // pad if fewer than 16 bytes
                                         for _ in chunk.len()..16 { ui.monospace("   "); }
                                         ui.monospace("| ");
-                                        // ascii / utf-8 view without spaces between characters
+                                        // ASCII / UTF-8 per-cell render so only changed bytes get highlight
                                         if utf8_mode {
-                                            let s = String::from_utf8_lossy(chunk);
-                                            ui.add(egui::Label::new(egui::RichText::new(s).monospace()));
-                                        } else {
-                                            let mut s = String::with_capacity(16);
-                                            for b in chunk.iter() {
-                                                let ch = if (0x20..=0x7E).contains(b) { *b as char } else { '.' };
-                                                s.push(ch);
+                                            for (i, ob) in chunk.iter().enumerate() {
+                                                let a = addr.wrapping_add(i as u16);
+                                                let shown_b = *self.mem_pending.get(&a).unwrap_or(ob);
+                                                let ch = if (0x20..=0x7E).contains(&shown_b) { shown_b as char } else { '.' };
+                                                let mut rt = egui::RichText::new(format!("{}", ch)).monospace();
+                                                if let Some(&nv) = self.mem_pending.get(&a) { if nv != *ob { rt = rt.background_color(egui::Color32::from_rgb(255,255,128)); } }
+                                                ui.add(egui::Label::new(rt));
                                             }
-                                            ui.monospace(s);
+                                        } else {
+                                            for (i, ob) in chunk.iter().enumerate() {
+                                                let a = addr.wrapping_add(i as u16);
+                                                let shown_b = *self.mem_pending.get(&a).unwrap_or(ob);
+                                                let ch = if (0x20..=0x7E).contains(&shown_b) { shown_b as char } else { '.' };
+                                                let mut rt = egui::RichText::new(format!("{}", ch)).monospace();
+                                                if let Some(&nv) = self.mem_pending.get(&a) { if nv != *ob { rt = rt.background_color(egui::Color32::from_rgb(255,255,128)); } }
+                                                ui.add(egui::Label::new(rt));
+                                            }
                                         }
                                     });
                                 });
@@ -370,6 +533,7 @@ mod gui {
                         let have_lst = self.lst_mmap.is_some();
                         let have_hex = self.lst_text.is_some();
                         let mut use_hex_view = self.use_hex.load(Ordering::SeqCst);
+                        let mut auto_hex = self.auto_hex_on_edit.load(Ordering::SeqCst);
                         let mut follow_pc = self.follow_pc_flag.load(Ordering::SeqCst);
                         let mut policy = self.span_policy.load(Ordering::SeqCst);
                         let mut win_len = self.window_len.load(Ordering::SeqCst);
@@ -379,7 +543,15 @@ mod gui {
                             if have_lst && have_hex {
                                 if ui.checkbox(&mut use_hex_view, "Hex view").clicked() {
                                     self.use_hex.store(use_hex_view, Ordering::SeqCst);
+                                    if follow_pc { self.scroll_to_pc_req.store(true, Ordering::SeqCst); }
+                                    // When switching to Hex, request the backend to (re)build the hex listing immediately
+                                    if use_hex_view {
+                                        if let Ok(mut q) = self.cmds.lock() { q.push(Command::RefreshHexListing); }
+                                    }
                                 }
+                            }
+                            if ui.checkbox(&mut auto_hex, if self.use_japanese { "編集でHexへ" } else { "Auto Hex on edit" }).clicked() {
+                                self.auto_hex_on_edit.store(auto_hex, Ordering::SeqCst);
                             }
                             if ui.checkbox(&mut follow_pc, "Follow PC").clicked() {
                                 self.follow_pc_flag.store(follow_pc, Ordering::SeqCst);
@@ -499,13 +671,20 @@ mod gui {
                                         }
                                     }
                                 }
-                                // Auto-scroll when PC changes and we have a highlighted row
-                                if follow_pc && cur_pc != self.last_pc_for_scroll {
+                                // Auto-scroll when PC changes or a view switch requested a scroll.
+                                // Make the scroll request sticky until we successfully scroll to a highlighted row.
+                                let need_scroll = self
+                                    .scroll_to_pc_req
+                                    .load(Ordering::SeqCst)
+                                    || (cur_pc != self.last_pc_for_scroll);
+                                if follow_pc && need_scroll {
                                     if let Some(rect) = highlight_rect {
                                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                                        // Clear the request only after performing the scroll, and update last_pc marker.
+                                        self.scroll_to_pc_req.store(false, Ordering::SeqCst);
+                                        self.last_pc_for_scroll = cur_pc;
                                     }
                                 }
-                                self.last_pc_for_scroll = cur_pc;
                             });
                     });
             }
@@ -766,6 +945,8 @@ mod gui {
         pub lst_mmap: Option<Arc<Mmap>>,
         pub lst_text: Option<Arc<Mutex<String>>>,
         use_hex: Arc<AtomicBool>,
+        auto_hex_on_edit: Arc<AtomicBool>,
+        scroll_to_pc_req: Arc<AtomicBool>,
         follow_pc_flag: Arc<AtomicBool>,
         span_policy: Arc<AtomicUsize>,
         window_len: Arc<AtomicUsize>,
@@ -793,6 +974,8 @@ mod gui {
                 lst_mmap: self.lst_mmap.as_ref().map(Arc::clone),
                 lst_text: self.lst_text.as_ref().map(Arc::clone),
                 use_hex: Arc::clone(&self.use_hex),
+                auto_hex_on_edit: Arc::clone(&self.auto_hex_on_edit),
+                scroll_to_pc_req: Arc::clone(&self.scroll_to_pc_req),
                 follow_pc_flag: Arc::clone(&self.follow_pc_flag),
                 span_policy: Arc::clone(&self.span_policy),
                 window_len: Arc::clone(&self.window_len),
@@ -869,6 +1052,8 @@ mod gui {
                 lst_fallback_text.map(|s| Arc::new(Mutex::new(s)));
             let default_use_hex_view: bool = lst_text.is_some() && lst_mmap.is_none();
             let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
+            let auto_hex_on_edit = Arc::new(AtomicBool::new(true));
+            let scroll_to_pc_req = Arc::new(AtomicBool::new(false));
             let follow_pc_flag = Arc::new(AtomicBool::new(true));
             let span_policy = Arc::new(AtomicUsize::new(0)); // FullSpan
             let window_len = Arc::new(AtomicUsize::new(256));
@@ -984,6 +1169,8 @@ mod gui {
             let alive_flag_thread = alive_flag.clone();
             let started_flag = Arc::new(AtomicBool::new(false));
             let started_flag_thread = started_flag.clone();
+            let auto_hex_on_edit_thread = Arc::clone(&auto_hex_on_edit);
+            let scroll_to_pc_req_thread = Arc::clone(&scroll_to_pc_req);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
@@ -1003,18 +1190,20 @@ mod gui {
                 // Note: On some Unix configurations (e.g., WSL2/Wayland), winit requires
                 // the event loop to live on the main thread. If creating on a background
                 // thread panics, we catch it below and continue without the GUI.
-                let app = RegApp {
-                    snap: snap_clone,
-                    paused: paused_clone,
-                    step_requests: step_requests_clone,
-                    lst_mmap: lst_clone,
-                    lst_text: lst_text_clone,
-                    use_hex: use_hex_clone,
-                    follow_pc_flag: follow_clone,
-                    span_policy: span_policy_clone,
-                    window_len: window_len_clone,
-                    cmds: cmds_clone,
-                    ja_font: ja_font_clone,
+            let app = RegApp {
+                snap: snap_clone,
+                paused: paused_clone,
+                step_requests: step_requests_clone,
+                lst_mmap: lst_clone,
+                lst_text: lst_text_clone,
+                use_hex: use_hex_clone,
+                auto_hex_on_edit: Arc::clone(&auto_hex_on_edit_thread),
+                scroll_to_pc_req: Arc::clone(&scroll_to_pc_req_thread),
+                follow_pc_flag: follow_clone,
+                span_policy: span_policy_clone,
+                window_len: window_len_clone,
+                cmds: cmds_clone,
+                ja_font: ja_font_clone,
                     fonts_applied: false,
                     use_japanese,
                     last_pc_for_scroll: 0,
@@ -1028,6 +1217,14 @@ mod gui {
                     mem_len_text: format!("{}", mem_window_len_thread.load(Ordering::SeqCst)),
                     quit_flag: quit_flag_thread_clone,
                     mem_use_drag: false,
+                    mem_edit_mode: false,
+                    mem_pending: HashMap::new(),
+                    mem_selected: None,
+                    mem_edit_buf: String::new(),
+                    mem_focus_next: false,
+                    mem_last_sel_addr: None,
+                    mem_last_at_start: false,
+                    mem_last_at_end: false,
                     edit_mode: false,
                     edit_initialized: false,
                     edit_a: String::new(),
@@ -1087,6 +1284,8 @@ mod gui {
                 lst_mmap,
                 lst_text,
                 use_hex,
+                auto_hex_on_edit,
+                scroll_to_pc_req,
                 follow_pc_flag,
                 span_policy,
                 window_len,
@@ -1125,6 +1324,8 @@ mod gui {
             let lst_text: Option<Arc<Mutex<String>>> = lst_fallback_text.map(|s| Arc::new(Mutex::new(s)));
             let default_use_hex_view: bool = lst_text.is_some() && lst_mmap.is_none();
             let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
+            let auto_hex_on_edit = Arc::new(AtomicBool::new(true));
+            let scroll_to_pc_req = Arc::new(AtomicBool::new(false));
             let follow_pc_flag = Arc::new(AtomicBool::new(true));
             let span_policy = Arc::new(AtomicUsize::new(0));
             let window_len = Arc::new(AtomicUsize::new(256));
@@ -1201,6 +1402,8 @@ mod gui {
                 lst_mmap,
                 lst_text,
                 use_hex,
+                auto_hex_on_edit,
+                scroll_to_pc_req,
                 follow_pc_flag,
                 span_policy,
                 window_len,
@@ -1231,6 +1434,7 @@ mod gui {
             let window_len_clone = Arc::clone(&self.window_len);
             let cmds_clone = Arc::clone(&self.cmds);
             let ja_font_clone = self.ja_font.as_ref().map(Arc::clone);
+            let auto_hex_on_edit = Arc::clone(&self.auto_hex_on_edit);
             let mem_follow_pc_thread = self.mem_follow_pc.clone();
             let mem_window_len_thread = self.mem_window_len.clone();
             let mem_window_start_thread = self.mem_window_start.clone();
@@ -1259,6 +1463,8 @@ mod gui {
                 lst_mmap: lst_clone,
                 lst_text: lst_text_clone,
                 use_hex: use_hex_clone,
+                auto_hex_on_edit: Arc::clone(&auto_hex_on_edit),
+                scroll_to_pc_req: Arc::clone(&self.scroll_to_pc_req),
                 follow_pc_flag: follow_clone,
                 span_policy: span_policy_clone,
                 window_len: window_len_clone,
@@ -1277,7 +1483,15 @@ mod gui {
                 mem_len_text: format!("{}", self.mem_window_len.load(Ordering::SeqCst)),
                 quit_flag: self.quit_flag.clone(),
                 mem_use_drag: false,
-                edit_mode: false,
+                mem_edit_mode: false,
+                mem_pending: HashMap::new(),
+                mem_selected: None,
+                mem_edit_buf: String::new(),
+                    mem_focus_next: false,
+                    mem_last_sel_addr: None,
+                    mem_last_at_start: false,
+                    mem_last_at_end: false,
+                    edit_mode: false,
                 edit_initialized: false,
                 edit_a: String::new(),
                 edit_b: String::new(),
@@ -1391,6 +1605,10 @@ mod gui {
         }
         pub fn force_hex_view(&self) {
             self.use_hex.store(true, Ordering::SeqCst);
+            // When switching to Hex programmatically (e.g., after edits), also request centering on PC if following.
+            if self.follow_pc_flag.load(Ordering::SeqCst) {
+                self.scroll_to_pc_req.store(true, Ordering::SeqCst);
+            }
         }
         // Memory view controls
         pub fn get_memory_window(&self) -> (u16, usize, bool) {
@@ -1448,6 +1666,12 @@ mod gui {
     }
 
     pub use RegView as Viewer;
+    
+    impl RegView {
+        pub fn auto_hex_on_edit(&self) -> bool {
+            self.auto_hex_on_edit.load(Ordering::SeqCst)
+        }
+    }
 
     fn parse_num_u16_any_gui(s: &str) -> Option<u16> {
         let sl = s.trim();

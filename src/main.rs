@@ -827,7 +827,7 @@ fn main() {
             // Move ownership of emulator state into CPU worker thread
             let mut cpu_worker = cpu;
             let mut bus_worker = bus;
-            let _loaded_img = loaded;
+            let loaded_ranges_worker = loaded.loaded_ranges.clone();
             // GUI-only: no step/trace controls
             // no hex/trace toggles or CLI breakpoints in GUI-only mode
             let paused_start_flag = paused_start;
@@ -938,11 +938,66 @@ fn main() {
                                         let snap2 = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
                                         viewer_cpu.push(snap2);
                                     }
+                                    regview::Command::RefreshHexListing => {
+                                        // Rebuild hex listing for current PC's loaded span (worker thread)
+                                        let spans = coalesce_ranges(loaded_ranges_worker.clone());
+                                        if let Some((start, end)) = spans
+                                            .iter()
+                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .copied()
+                                        {
+                                            let mut cur = start;
+                                            let mut out = String::new();
+                                            let mut processed: usize = 0;
+                                            let total_len: usize = end.wrapping_sub(start) as usize;
+                                            while processed < total_len {
+                                                let (consumed, text) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cur);
+                                                use core::fmt::Write as _;
+                                                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                                let step = core::cmp::max(consumed as usize, 1);
+                                                processed += step;
+                                                cur = cur.wrapping_add(step as u16);
+                                            }
+                                            viewer_cpu.update_hex_listing(out);
+                                        }
+                                    }
                                     regview::Command::RunUntil(a) => { run_until_target = Some(a); viewer_cpu.set_paused(false); break; }
                                     regview::Command::ApplyRegs(ns) => {
                                         cpu_worker.r.a = ns.a; cpu_worker.r.b = ns.b; cpu_worker.r.x = ns.x; cpu_worker.r.y = ns.y; cpu_worker.r.u = ns.u; cpu_worker.r.s = ns.s; cpu_worker.r.dp = ns.dp; cpu_worker.r.pc = ns.pc; cpu_worker.r.cc = ns.cc;
                                         let snap2 = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
                                         viewer_cpu.push(snap2);
+                                    }
+                                    regview::Command::MemWrite(items) => {
+                                        for (addr, val) in items { bus_worker.as_mut().write8(addr, val); }
+                                        // After applying edits, refresh memory pane immediately
+                                        let (mstart_w, mlen_w, mfollow_w) = viewer_cpu.get_memory_window();
+                                        let eff_start_w: u16 = if mfollow_w { cpu_worker.r.pc & 0xFFF0 } else { mstart_w };
+                                        let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
+                                        let mut a = eff_start_w;
+                                        for _ in 0..mlen_w { nbuf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                        viewer_cpu.update_memory_window(eff_start_w, nbuf);
+                                        // Also refresh listing pane (full span) immediately
+                                        let spans = coalesce_ranges(loaded_ranges_worker.clone());
+                                        if let Some((start, end)) = spans
+                                            .iter()
+                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .copied()
+                                        {
+                                            let mut cur = start;
+                                            let mut out = String::new();
+                                            let mut processed: usize = 0;
+                                            let total_len: usize = end.wrapping_sub(start) as usize;
+                                            while processed < total_len {
+                                                let (consumed, text) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cur);
+                                                use core::fmt::Write as _;
+                                                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                                let step = core::cmp::max(consumed as usize, 1);
+                                                processed += step;
+                                                cur = cur.wrapping_add(step as u16);
+                                            }
+                                            viewer_cpu.update_hex_listing(out);
+                                            if viewer_cpu.auto_hex_on_edit() { viewer_cpu.force_hex_view(); }
+                                        }
                                     }
                                 }
                             }
@@ -1125,6 +1180,29 @@ fn main() {
                                     viewer.update_hex_listing(out);
                                 }
                             }
+                            regview::Command::RefreshHexListing => {
+                                // Rebuild hex listing for current PC's loaded span
+                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                if let Some((start, end)) = spans
+                                    .iter()
+                                    .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                    .copied()
+                                {
+                                    let mut cur = start;
+                                    let mut out = String::new();
+                                    let mut processed: usize = 0;
+                                    let total_len: usize = end.wrapping_sub(start) as usize;
+                                    while processed < total_len {
+                                        let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                        use core::fmt::Write as _;
+                                        let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                        let step = core::cmp::max(consumed as usize, 1);
+                                        processed += step;
+                                        cur = cur.wrapping_add(step as u16);
+                                    }
+                                    viewer.update_hex_listing(out);
+                                }
+                            }
                             regview::Command::RunUntil(a) => {
                                 run_until_target = Some(a);
                                 viewer.set_paused(false);
@@ -1185,6 +1263,9 @@ fn main() {
                                     }
                                     viewer.update_hex_listing(out);
                                 }
+                            }
+                            regview::Command::MemWrite(items) => {
+                                for (addr, val) in items { bus.as_mut().write8(addr, val); }
                             }
                         }
                     }
@@ -1307,6 +1388,29 @@ fn main() {
                                 viewer.update_hex_listing(out);
                             }
                         }
+                        regview::Command::RefreshHexListing => {
+                            // Rebuild hex listing for current PC's loaded span
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
+                            if let Some((start, end)) = span_for_pc {
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                let total_len: usize = end.wrapping_sub(start) as usize;
+                                while processed < total_len {
+                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                                viewer.update_hex_listing(out);
+                            }
+                        }
                         regview::Command::RunUntil(a) => {
                             run_until_target = Some(a);
                             viewer.set_paused(false);
@@ -1390,6 +1494,38 @@ fn main() {
                                     cur = cur.wrapping_add(step as u16);
                                 }
                                 viewer.update_hex_listing(out);
+                            }
+                        }
+                        regview::Command::MemWrite(items) => {
+                            for (addr, val) in items { bus.as_mut().write8(addr, val); }
+                            // Refresh memory pane after applying edits
+                            let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                            let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                            let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                            let mut a = eff_start;
+                            for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
+                            viewer.update_memory_window(eff_start, buf);
+                            // Also refresh listing pane (full span) immediately
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
+                            if let Some((start, end)) = span_for_pc {
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                let total_len: usize = end.wrapping_sub(start) as usize;
+                                while processed < total_len {
+                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                                viewer.update_hex_listing(out);
+                                if viewer.auto_hex_on_edit() { viewer.force_hex_view(); }
                             }
                         }
                     }
