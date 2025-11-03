@@ -60,6 +60,110 @@ mod gui {
     use std::collections::HashMap;
     use i18n_embed_fl::fl;
     use crate::i18n::LOADER;
+    
+    #[cfg(target_os = "macos")]
+    #[allow(unexpected_cfgs)]
+    fn set_macos_app_menu_title(name: &str) {
+        unsafe {
+            use objc::{class, msg_send, sel, sel_impl};
+            use objc::runtime::Object;
+            let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() { return; }
+            let main_menu: *mut Object = msg_send![app, mainMenu];
+            if main_menu.is_null() { return; }
+            let item0: *mut Object = msg_send![main_menu, itemAtIndex: 0i64];
+            if item0.is_null() { return; }
+            let cstr = std::ffi::CString::new(name).unwrap_or_else(|_| std::ffi::CString::new("em6809").unwrap());
+            let ns_name: *mut Object = msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()];
+            let _: () = msg_send![item0, setTitle: ns_name];
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[allow(unexpected_cfgs)]
+    mod macos_about {
+        use objc::{class, msg_send, sel, sel_impl};
+        use objc::runtime::{Object, Sel, Class};
+        use objc::declare::ClassDecl;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static INSTALLED: AtomicBool = AtomicBool::new(false);
+        static mut HELPER_INSTANCE: *mut Object = std::ptr::null_mut();
+
+        unsafe fn nsstring(s: &str) -> *mut Object {
+            let c = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            let ns: *mut Object = msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
+            ns
+        }
+
+        extern "C" fn show_about(_this: &Object, _sel: Sel, _sender: *mut Object) {
+            unsafe {
+                // Show a simple modal About dialog via NSAlert with custom credits
+                let pool: *mut Object = msg_send![class!(NSAutoreleasePool), new];
+                let alert: *mut Object = msg_send![class!(NSAlert), alloc];
+                let alert: *mut Object = msg_send![alert, init];
+                let _: () = msg_send![alert, setMessageText: nsstring("em6809")];
+                let version = env!("CARGO_PKG_VERSION");
+                let info = format!(
+                    "Version: {ver}\n\nCopyright (c) 2025 hha0x617\n\nDual-licensed: MIT OR Apache-2.0\n\nSee LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)\n\nThis software is provided \"AS IS\" without warranty.",
+                    ver = version
+                );
+                let _: () = msg_send![alert, setInformativeText: nsstring(&info)];
+                let _: () = msg_send![alert, addButtonWithTitle: nsstring("OK")];
+                // Set app icon if available
+                let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+                let icon: *mut Object = msg_send![app, applicationIconImage];
+                if !icon.is_null() { let _: () = msg_send![alert, setIcon: icon]; }
+                let _: i64 = msg_send![alert, runModal];
+                let _: () = msg_send![alert, release];
+                let _: () = msg_send![pool, drain];
+            }
+        }
+
+        unsafe fn ensure_helper_class() -> &'static Class {
+            let name = "Em6809AboutHelper";
+            if let Some(cls) = Class::get(name) { return cls; }
+            let superclass = Class::get("NSObject").unwrap();
+            let mut decl = ClassDecl::new(name, superclass).unwrap();
+            decl.add_method(sel!(showAbout:), show_about as extern "C" fn(&Object, Sel, *mut Object));
+            decl.register()
+        }
+
+        unsafe fn ensure_helper_instance() -> *mut Object {
+            if HELPER_INSTANCE.is_null() {
+                let cls = ensure_helper_class();
+                let obj: *mut Object = msg_send![cls, alloc];
+                let obj: *mut Object = msg_send![obj, init];
+                HELPER_INSTANCE = obj;
+            }
+            HELPER_INSTANCE
+        }
+
+        pub fn install_about_handler_once() {
+            if INSTALLED.swap(true, Ordering::SeqCst) { return; }
+            unsafe {
+                let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+                let main_menu: *mut Object = msg_send![app, mainMenu];
+                if main_menu.is_null() { return; }
+                let apple_item: *mut Object = msg_send![main_menu, itemAtIndex: 0i64];
+                if apple_item.is_null() { return; }
+                let submenu: *mut Object = msg_send![apple_item, submenu];
+                if submenu.is_null() { return; }
+                let count: i64 = msg_send![submenu, numberOfItems];
+                let target = ensure_helper_instance();
+                for i in 0..count {
+                    let item: *mut Object = msg_send![submenu, itemAtIndex: i];
+                    if item.is_null() { continue; }
+                    let action: Sel = msg_send![item, action];
+                    if action == sel!(orderFrontStandardAboutPanel:) {
+                        let _: () = msg_send![item, setTarget: target];
+                        let _: () = msg_send![item, setAction: sel!(showAbout:)];
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     #[derive(Clone, Debug)]
     pub enum Command {
@@ -85,8 +189,14 @@ mod gui {
         pub cmds: Arc<Mutex<Vec<Command>>>,
         pub ja_font: Option<Arc<Vec<u8>>>,
         pub fonts_applied: bool,
+        pub menu_fixed: bool,
+        // Windows-only: previously used to override taskbar title; removed to keep caption unchanged
         pub use_japanese: bool,
         pub last_pc_for_scroll: u16,
+        #[cfg(windows)]
+        pub about_open: bool,
+        #[cfg(windows)]
+        pub about_icon_tex: Option<egui::TextureHandle>,
         // Memory view state
         pub mem_follow_pc: Arc<AtomicBool>,
         pub mem_window_len: Arc<AtomicUsize>,
@@ -157,6 +267,124 @@ mod gui {
                 }
                 self.fonts_applied = true;
             }
+
+            // macOS: ensure the application menu (leftmost menu title) shows just "em6809"
+            #[cfg(target_os = "macos")]
+            if !self.menu_fixed {
+                set_macos_app_menu_title("em6809");
+                self.menu_fixed = true;
+            }
+
+            // macOS: install custom About handler once (shows credits/version/license)
+            #[cfg(target_os = "macos")]
+            {
+                macos_about::install_about_handler_once();
+            }
+
+            // Windows: simple menu bar with About
+            #[cfg(windows)]
+            {
+                eframe::egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+                    eframe::egui::menu::bar(ui, |ui| {
+                        ui.menu_button("Help", |ui| {
+                            if ui.button("About em6809…").clicked() {
+                                self.about_open = true;
+                                ui.close_menu();
+                            }
+                        });
+                    });
+                });
+                if self.about_open {
+                    if self.about_icon_tex.is_none() {
+                        // Try to capture the window titlebar icon (HICON) so About uses the same icon
+                        #[allow(unsafe_code)]
+                        unsafe fn load_hicon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+                            use windows_sys::Win32::Graphics::Gdi::*;
+                            use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                            let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+                            if hwnd == core::ptr::null_mut() { return None; }
+                            let mut hicon: HICON = SendMessageW(hwnd, WM_GETICON, ICON_SMALL as usize, 0) as HICON;
+                            if hicon == core::ptr::null_mut() { hicon = SendMessageW(hwnd, WM_GETICON, ICON_BIG as usize, 0) as HICON; }
+                            if hicon == core::ptr::null_mut() { hicon = GetClassLongPtrW(hwnd, GCLP_HICONSM) as HICON; }
+                            if hicon == core::ptr::null_mut() { hicon = GetClassLongPtrW(hwnd, GCLP_HICON) as HICON; }
+                            if hicon == core::ptr::null_mut() { return None; }
+                            let size: i32 = 32;
+                            let mut bmi: BITMAPINFO = core::mem::zeroed();
+                            bmi.bmiHeader.biSize = core::mem::size_of::<BITMAPINFOHEADER>() as u32;
+                            bmi.bmiHeader.biWidth = size;
+                            bmi.bmiHeader.biHeight = -size; // top-down
+                            bmi.bmiHeader.biPlanes = 1;
+                            bmi.bmiHeader.biBitCount = 32;
+                            bmi.bmiHeader.biCompression = BI_RGB as u32;
+                            let hdc = CreateCompatibleDC(core::ptr::null_mut());
+                            if hdc == core::ptr::null_mut() { return None; }
+                            let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+                            let hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits, core::ptr::null_mut(), 0);
+                            if hbm == core::ptr::null_mut() || bits.is_null() { DeleteDC(hdc); return None; }
+                            let old = SelectObject(hdc, hbm as HGDIOBJ);
+                            let ok = DrawIconEx(hdc, 0, 0, hicon, size, size, 0, core::ptr::null_mut(), DI_NORMAL) != 0;
+                            let mut pixels = vec![egui::Color32::TRANSPARENT; (size * size) as usize];
+                            if ok {
+                                let slice = core::slice::from_raw_parts(bits as *const u8, (size * size * 4) as usize);
+                                for i in 0..(size * size) as usize {
+                                    let b = slice[i * 4 + 0];
+                                    let g = slice[i * 4 + 1];
+                                    let r = slice[i * 4 + 2];
+                                    let a = slice[i * 4 + 3];
+                                    pixels[i] = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                                }
+                            }
+                            SelectObject(hdc, old);
+                            DeleteObject(hbm as HGDIOBJ);
+                            DeleteDC(hdc);
+                            if ok {
+                                let img = egui::ColorImage { size: [size as usize, size as usize], pixels };
+                                let tex = ctx.load_texture(
+                                    "about_em6809_icon_win",
+                                    egui::ImageData::Color(img.into()),
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                Some(tex)
+                            } else {
+                                None
+                            }
+                        }
+                        self.about_icon_tex = unsafe { load_hicon_texture(ctx) };
+                    }
+                    let version = env!("CARGO_PKG_VERSION");
+                    eframe::egui::Window::new("About em6809")
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_width(420.0)
+                        .default_height(180.0)
+                        .show(ctx, |ui| {
+                            ui.horizontal(|ui| {
+                                if let Some(tex) = &self.about_icon_tex {
+                                    let img = egui::Image::new(tex)
+                                        .fit_to_exact_size(egui::vec2(32.0, 32.0));
+                                    ui.add(img);
+                                }
+                                ui.heading("em6809");
+                            });
+                            ui.separator();
+                            ui.add(egui::Label::new(format!("Version: {}", version)).wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("Copyright (c) 2025 hha0x617").wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0").wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)").wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("This software is provided \"AS IS\" without warranty.").wrap(false));
+                            ui.add_space(12.0);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("OK").clicked() { self.about_open = false; }
+                            });
+                        });
+                }
+            }
+
+            // Windows: no title override to keep window caption unchanged
 
             // If external quit is requested (e.g., Ctrl+C), close the window
             if self.quit_flag.load(Ordering::SeqCst) {
@@ -1168,10 +1396,15 @@ mod gui {
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
-                native_options.viewport = eframe::egui::ViewportBuilder::default()
+                let base = eframe::egui::ViewportBuilder::default()
                     .with_inner_size(eframe::egui::vec2(1800.0, 700.0))
                     .with_min_inner_size(eframe::egui::vec2(900.0, 400.0))
                     .with_resizable(true);
+                #[cfg(all(unix, not(target_os = "macos")))]
+                let vp = base.with_app_id("em6809");
+                #[cfg(not(all(unix, not(target_os = "macos"))))]
+                let vp = base;
+                native_options.viewport = vp;
                 // On Windows, winit requires the event loop to be created on the main thread by default.
                 // Allow creating it on this background thread to avoid a panic.
                 #[cfg(windows)]
@@ -1199,8 +1432,13 @@ mod gui {
                 cmds: cmds_clone,
                 ja_font: ja_font_clone,
                     fonts_applied: false,
+                    menu_fixed: false,
                     use_japanese,
                     last_pc_for_scroll: 0,
+                    #[cfg(windows)]
+                    about_open: false,
+                    #[cfg(windows)]
+                    about_icon_tex: None,
                     mem_follow_pc: mem_follow_pc_thread.clone(),
                     mem_window_len: mem_window_len_thread.clone(),
                     mem_window_start: mem_window_start_thread.clone(),
@@ -1439,10 +1677,15 @@ mod gui {
             let use_japanese = Self::is_japanese_locale();
 
             let mut native_options = eframe::NativeOptions::default();
-            native_options.viewport = eframe::egui::ViewportBuilder::default()
+            let base = eframe::egui::ViewportBuilder::default()
                 .with_inner_size(eframe::egui::vec2(1800.0, 700.0))
                 .with_min_inner_size(eframe::egui::vec2(900.0, 400.0))
                 .with_resizable(true);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let vp = base.with_app_id("em6809");
+            #[cfg(not(all(unix, not(target_os = "macos"))))]
+            let vp = base;
+            native_options.viewport = vp;
             #[cfg(windows)]
             {
                 native_options.event_loop_builder = Some(Box::new(|builder| {
@@ -1465,8 +1708,13 @@ mod gui {
                 cmds: cmds_clone,
                 ja_font: ja_font_clone,
                 fonts_applied: false,
+                menu_fixed: false,
                 use_japanese,
                 last_pc_for_scroll: 0,
+                #[cfg(windows)]
+                about_open: false,
+                #[cfg(windows)]
+                about_icon_tex: None,
                 mem_follow_pc: mem_follow_pc_thread,
                 mem_window_len: mem_window_len_thread,
                 mem_window_start: mem_window_start_thread,

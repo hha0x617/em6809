@@ -1070,9 +1070,11 @@ dependencies = [
  "i18n-embed-fl",
  "libc",
  "memmap2",
+ "objc",
  "once_cell",
  "rust-embed",
  "unic-langid",
+ "windows-sys 0.60.2",
  "winit",
 ]
 
