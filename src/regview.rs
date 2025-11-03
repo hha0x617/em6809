@@ -58,6 +58,8 @@ mod gui {
     use std::fs::File;
     use std::path::PathBuf;
     use std::collections::HashMap;
+    use i18n_embed_fl::fl;
+    use crate::i18n::LOADER;
 
     #[derive(Clone, Debug)]
     pub enum Command {
@@ -203,20 +205,12 @@ mod gui {
                     let _win_len = self.mem_window_len.load(Ordering::SeqCst);
                     let mut start = self.mem_window_start.load(Ordering::SeqCst) as u16;
             ui.horizontal(|ui| {
-                ui.heading(if self.use_japanese {
-                    "メモリ"
-                } else {
-                    "Memory"
-                });
+                ui.heading(fl!(LOADER, "memory"));
                 ui.separator();
                 if ui
                     .checkbox(
                         &mut follow_pc,
-                        if self.use_japanese {
-                            "PC追従"
-                        } else {
-                            "Follow PC"
-                        },
+                        fl!(LOADER, "follow-pc"),
                     )
                     .clicked()
                 {
@@ -227,21 +221,21 @@ mod gui {
                     self.mem_utf8.store(utf8, Ordering::SeqCst);
                 }
                 let mut use_drag = self.mem_use_drag;
-                if ui.checkbox(&mut use_drag, if self.use_japanese { "数値UI" } else { "Numeric" }).clicked() {
+                if ui.checkbox(&mut use_drag, fl!(LOADER, "numeric")).clicked() {
                     self.mem_use_drag = use_drag;
                 }
                 ui.separator();
                 // Edit mode controls: in normal mode show only "Edit"; in edit mode show "Apply" and "Cancel".
                 let pending_count = self.mem_pending.len();
                 if !self.mem_edit_mode {
-                    if ui.button(if self.use_japanese { "編集" } else { "Edit" }).clicked() {
+                    if ui.button(fl!(LOADER, "edit")).clicked() {
                         self.mem_edit_mode = true;
                         self.mem_selected = None;
                         self.mem_edit_buf.clear();
                     }
                 } else {
                     let apply_enabled = pending_count > 0;
-                    if ui.add_enabled(apply_enabled, egui::Button::new(if self.use_japanese { "適用" } else { "Apply" })).clicked() {
+                    if ui.add_enabled(apply_enabled, egui::Button::new(fl!(LOADER, "apply"))).clicked() {
                         let mut items: Vec<(u16, u8)> = self.mem_pending.iter().map(|(a, v)| (*a, *v)).collect();
                         items.sort_by_key(|(a, _)| *a);
                         if let Ok(mut q) = self.cmds.lock() { q.push(Command::MemWrite(items)); }
@@ -255,7 +249,7 @@ mod gui {
                         self.mem_last_at_start = false;
                         self.mem_last_at_end = false;
                     }
-                    if ui.button(if self.use_japanese { "取消" } else { "Cancel" }).clicked() {
+                    if ui.button(fl!(LOADER, "cancel")).clicked() {
                         // Cancel discards pending edits and exits edit mode
                         self.mem_pending.clear();
                         self.mem_selected = None;
@@ -265,7 +259,7 @@ mod gui {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(if self.use_japanese { "開始" } else { "Start" });
+                ui.label(fl!(LOADER, "start"));
                 if self.mem_use_drag {
                     let mut sv: u16 = self.mem_window_start.load(Ordering::SeqCst) as u16;
                             let resp = ui.add_enabled(!follow_pc, egui::DragValue::new(&mut sv).clamp_range(0u16..=0xFFFF).speed(16.0));
@@ -300,12 +294,12 @@ mod gui {
                                 }
                             }
                         }
-                        ui.label(if self.use_japanese { "長さ" } else { "Len" });
+                        ui.label(fl!(LOADER, "len"));
                         if self.mem_use_drag {
                             let mut lv: usize = self.mem_window_len.load(Ordering::SeqCst);
                             let old = lv;
                             let resp = ui.add(egui::DragValue::new(&mut lv).clamp_range(16..=4096).speed(1.0));
-                            ui.label(" bytes");
+                            ui.label(fl!(LOADER, "bytes"));
                             if resp.changed() && lv != old {
                                 let v = lv.clamp(16, 4096);
                                 self.mem_window_len.store(v, Ordering::SeqCst);
@@ -335,11 +329,7 @@ mod gui {
                         }
                         // Jump button removed; Enter/focus-out on Start commits address
                         if ui
-                            .button(if self.use_japanese {
-                                "コピー"
-                            } else {
-                                "Copy"
-                            })
+                            .button(fl!(LOADER, "copy"))
                             .clicked()
                         {
                             let dump = if let Ok(g) = self.mem_buf.lock() {
@@ -538,10 +528,10 @@ mod gui {
                         let mut policy = self.span_policy.load(Ordering::SeqCst);
                         let mut win_len = self.window_len.load(Ordering::SeqCst);
                         ui.horizontal(|ui| {
-                            ui.heading(if use_hex_view { "Listing (hex disasm)" } else { "Listing (.lst)" });
+                            ui.heading(if use_hex_view { fl!(LOADER, "listing-hex") } else { fl!(LOADER, "listing-lst") });
                             ui.separator();
                             if have_lst && have_hex {
-                                if ui.checkbox(&mut use_hex_view, "Hex view").clicked() {
+                                if ui.checkbox(&mut use_hex_view, fl!(LOADER, "hex-view")).clicked() {
                                     self.use_hex.store(use_hex_view, Ordering::SeqCst);
                                     if follow_pc { self.scroll_to_pc_req.store(true, Ordering::SeqCst); }
                                     // When switching to Hex, request the backend to (re)build the hex listing immediately
@@ -550,28 +540,28 @@ mod gui {
                                     }
                                 }
                             }
-                            if ui.checkbox(&mut auto_hex, if self.use_japanese { "編集でHexへ" } else { "Auto Hex on edit" }).clicked() {
+                            if ui.checkbox(&mut auto_hex, fl!(LOADER, "auto-hex-on-edit")).clicked() {
                                 self.auto_hex_on_edit.store(auto_hex, Ordering::SeqCst);
                             }
-                            if ui.checkbox(&mut follow_pc, "Follow PC").clicked() {
+                            if ui.checkbox(&mut follow_pc, fl!(LOADER, "follow-pc")).clicked() {
                                 self.follow_pc_flag.store(follow_pc, Ordering::SeqCst);
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Span Mode:");
+                            ui.label(fl!(LOADER, "span-mode"));
                             let full = policy == 0;
                             let select_full = full;
-                            if ui.radio(select_full, "Full span").clicked() {
+                            if ui.radio(select_full, fl!(LOADER, "full-span")).clicked() {
                                 policy = 0;
                                 self.span_policy.store(0, Ordering::SeqCst);
                             }
                             let select_win = !full;
-                            if ui.radio(select_win, "PC window").clicked() {
+                            if ui.radio(select_win, fl!(LOADER, "pc-window")).clicked() {
                                 policy = 1;
                                 self.span_policy.store(1, Ordering::SeqCst);
                             }
                             ui.add(egui::DragValue::new(&mut win_len).clamp_range(16..=4096).speed(1));
-                            ui.label("bytes");
+                            ui.label(fl!(LOADER, "bytes"));
                             if self.window_len.load(Ordering::SeqCst) != win_len {
                                 self.window_len.store(win_len, Ordering::SeqCst);
                             }
@@ -595,7 +585,11 @@ mod gui {
                                         let upper = ltrim.to_ascii_uppercase();
                                         let is_macro_line = upper.contains(" MACRO") || upper.contains(" ENDM") || upper.starts_with("MACRO ");
                                         let is_pc_addr_token = addr_for_line.is_some() && token.eq_ignore_ascii_case(&pc_hex) && !is_macro_line;
-                                        let (label_run_until, label_set_pc, label_cancel) = if self.use_japanese { ("ここまで実行", "PCの値を現在のアドレスに変更", "キャンセル") } else { ("Run to here", "Set PC to this address", "Cancel") };
+                            let (label_run_until, label_set_pc, label_cancel) = (
+                                fl!(LOADER, "run-to-here"),
+                                fl!(LOADER, "set-pc-to-here"),
+                                fl!(LOADER, "cancel"),
+                            );
                                         if is_pc_addr_token {
                                             let resp = ui.add(
                                                 egui::Label::new(
@@ -692,28 +686,28 @@ mod gui {
             // Left/center: registers and controls
             egui::CentralPanel::default().show(ctx, |ui| {
                 let s = *self.snap.lock().unwrap();
-                ui.heading("MC6809 Registers");
+                ui.heading(fl!(LOADER, "registers-heading"));
                 ui.horizontal(|ui| {
                     if self.paused.load(Ordering::SeqCst) {
-                        if ui.button("Resume").clicked() {
+                        if ui.button(fl!(LOADER, "resume")).clicked() {
                             self.paused.store(false, Ordering::SeqCst);
                         }
-                        if ui.button("Step").clicked() {
+                        if ui.button(fl!(LOADER, "step")).clicked() {
                             self.paused.store(true, Ordering::SeqCst);
                             self.step_requests.fetch_add(1, Ordering::SeqCst);
                         }
                     } else {
-                        if ui.button("Pause").clicked() {
+                        if ui.button(fl!(LOADER, "pause")).clicked() {
                             self.paused.store(true, Ordering::SeqCst);
                         }
-                        if ui.button("Step").clicked() {
+                        if ui.button(fl!(LOADER, "step")).clicked() {
                             self.paused.store(true, Ordering::SeqCst);
                             self.step_requests.fetch_add(1, Ordering::SeqCst);
                         }
                     }
                     ui.separator();
                     if self.edit_mode {
-                        if ui.button("Apply").clicked() {
+                        if ui.button(fl!(LOADER, "apply")).clicked() {
                             // Parse inputs; numbers accept 0x/0o/0b or decimal
                             let parse8 = |s: &str| -> Option<u8> { parse_num_u16_any_gui(s).and_then(|v| if v <= 0xFF { Some(v as u8) } else { None }) };
                             let parse16 = |s: &str| -> Option<u16> { parse_num_u16_any_gui(s) };
@@ -735,7 +729,7 @@ mod gui {
                                 | (if self.cc_v { 0x02 } else { 0 })
                                 | (if self.cc_c { 0x01 } else { 0 });
                             if a_opt.is_none() || b_opt.is_none() || x_opt.is_none() || y_opt.is_none() || u_opt.is_none() || s_opt.is_none() || dp_opt.is_none() || pc_opt.is_none() {
-                                self.input_error = Some("Invalid register value(s)".to_string());
+                                self.input_error = Some(fl!(LOADER, "invalid-reg-values"));
                             } else {
                                 // D takes precedence if provided
                                 let mut a = a_opt.unwrap();
@@ -760,7 +754,7 @@ mod gui {
                                 self.edit_initialized = false;
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(fl!(LOADER, "cancel")).clicked() {
                             if let Ok(s2) = self.snap.lock() {
                                 self.edit_a = format!("0x{:02X}", s2.a);
                                 self.edit_b = format!("0x{:02X}", s2.b);
@@ -785,7 +779,7 @@ mod gui {
                             self.edit_initialized = false;
                         }
                     } else {
-                        if ui.button("Edit").clicked() {
+                        if ui.button(fl!(LOADER, "edit")).clicked() {
                             self.edit_mode = true;
                             self.edit_initialized = false;
                         }
@@ -803,7 +797,7 @@ mod gui {
                     .column(Column::remainder())
                     .header(22.0, |mut header| {
                         header.col(|ui| {
-                            ui.strong("Reg");
+                            ui.strong(fl!(LOADER, "reg"));
                             let rect = ui.max_rect();
                             let stroke = egui::Stroke::new(
                                 1.0,
@@ -813,7 +807,7 @@ mod gui {
                                 .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
                         });
                         header.col(|ui| {
-                            ui.strong("Value");
+                            ui.strong(fl!(LOADER, "value"));
                             let rect = ui.max_rect();
                             let stroke = egui::Stroke::new(
                                 1.0,

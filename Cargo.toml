@@ -17,6 +17,12 @@ winit = { version = "0.29" }
 egui_extras = { version = "0.27" }
 memmap2 = { version = "0.9" }
 libc = "0.2"
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
+i18n-embed-fl = "0.10"
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+rust-embed = "8"
+once_cell = "1"
 
 [lib]
 name = "em6809"

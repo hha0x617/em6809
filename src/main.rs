@@ -15,6 +15,7 @@ use em6809::mmu::Mc6829;
 
 // GUI register viewer (no-op unless built with `--features gui`)
 mod regview;
+mod i18n;
 
 fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
     ranges.sort_by_key(|(s, _)| *s);
@@ -244,6 +245,8 @@ mod signals {
 }
 
 fn main() {
+    // Initialize i18n (Fluent) from environment/OS locale
+    i18n::init_from_env();
     let mut args = env::args().skip(1).peekable();
     // Help early-exit
     if let Some(first) = args.peek() {
