@@ -1,0 +1,24 @@
+                      (   timer_loop.asm):00001         ; Minimal loop program to exercise the Timer at $FF10
+                      (   timer_loop.asm):00002         ; Assembles for MC6809; start at $E000 and set reset vector.
+                      (   timer_loop.asm):00003         
+                      (   timer_loop.asm):00004                         ORG     $E000
+                      (   timer_loop.asm):00005         
+E000 1CAF             (   timer_loop.asm):00006         start           ANDCC   #$AF        ; enable IRQ+FIRQ (clear I and F)
+E002 7FE100           (   timer_loop.asm):00007                         CLR     $E100       ; zero a counter we'll bump in IRQ
+E005 20F9             (   timer_loop.asm):00008                         BRA     start       ; tight loop for timer ticks
+                      (   timer_loop.asm):00009         
+                      (   timer_loop.asm):00010         ; Simple IRQ/FIRQ handler: bump $E100 then return
+E007 7CE100           (   timer_loop.asm):00011         irq_handler     INC     $E100
+E00A 3B               (   timer_loop.asm):00012                         RTI
+                      (   timer_loop.asm):00013         
+                      (   timer_loop.asm):00014                         ORG     $FFFE
+FFFE E000             (   timer_loop.asm):00015                         FDB     start       ; RESET vector -> start
+                      (   timer_loop.asm):00016                         ORG     $FFF6
+FFF6 E007             (   timer_loop.asm):00017                         FDB     irq_handler ; FIRQ vector
+                      (   timer_loop.asm):00018                         ORG     $FFF8
+FFF8 E007             (   timer_loop.asm):00019                         FDB     irq_handler ; IRQ vector
+                      (   timer_loop.asm):00020         
+                      (   timer_loop.asm):00021         ; Run with:
+                      (   timer_loop.asm):00022         ;   cargo run -- --base 0xE000 --pc 0xE000 --timer 0xFF10 --timer-reload 0x0010 --timer-irq --timer-start -- samples/traces/timer_loop.bin
+                      (   timer_loop.asm):00023         ; or assemble to S19 and simply run:
+                      (   timer_loop.asm):00024         ;   cargo run -- samples/traces/timer_loop.s19 --timer 0xFF10 --timer-reload 0x0010 --timer-irq --timer-start

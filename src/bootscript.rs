@@ -17,6 +17,9 @@ pub enum Action {
     ConFirq(bool),   // console FIRQ preference
     IrqMask(bool),   // CPU I mask (true=set mask=disable IRQ)
     FirqMask(bool),  // CPU F mask (true=set mask=disable FIRQ)
+    BlkIrq(bool),
+    BlkFirq(bool),
+    BlkIrqHold(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +151,21 @@ fn parse_action<'a, I: Iterator<Item = &'a str>>(
             };
             let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
             Ok(Action::ConFirq(on))
+        }
+        "blk_irq" => {
+            let Some(v) = parts.next() else { return Err(format!("Line {}: missing blk_irq", lineno)); };
+            let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
+            Ok(Action::BlkIrq(on))
+        }
+        "blk_firq" => {
+            let Some(v) = parts.next() else { return Err(format!("Line {}: missing blk_firq", lineno)); };
+            let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
+            Ok(Action::BlkFirq(on))
+        }
+        "blk_irq_hold" => {
+            let Some(v) = parts.next() else { return Err(format!("Line {}: missing blk_irq_hold", lineno)); };
+            let pv = parse_hex_or_dec_u64(v).ok_or_else(|| format!("Line {}: bad blk_irq_hold", lineno))? as u32;
+            Ok(Action::BlkIrqHold(pv))
         }
         "irq_mask" => {
             let Some(v) = parts.next() else {
@@ -300,6 +318,18 @@ fn apply_action<B: Bus + ?Sized>(
                     cpu.r.cc &= !0x40;
                 }
             }
+        }
+        Action::BlkIrq(on) => {
+            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() { iom.with_block_mut(|b| b.set_irq_enable(*on)); }
+            else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() { iom.with_block_mut(|b| b.set_irq_enable(*on)); }
+        }
+        Action::BlkFirq(on) => {
+            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() { iom.with_block_mut(|b| b.set_firq(*on)); }
+            else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() { iom.with_block_mut(|b| b.set_firq(*on)); }
+        }
+        Action::BlkIrqHold(n) => {
+            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() { iom.with_block_mut(|b| b.set_irq_hold_cycles(*n)); }
+            else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() { iom.with_block_mut(|b| b.set_irq_hold_cycles(*n)); }
         }
     }
 }

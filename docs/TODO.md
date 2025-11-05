@@ -25,6 +25,12 @@ This file tracks planned enhancements for the GUI and tooling. Please keep items
     - [plan] Upgrade eframe/winit and switch to official window/IME APIs; disable IME for numeric fields on macOS
     - [workaround] Prefer DragValue for numeric inputs to avoid IME path (user keyboard mode switch is not a long‑term solution)
 
+- Prepare virtual GPIO
+  - [todo] Place virtual LEDs to quickly try I/O operations
+- [todo] Visualize MMU bank switching state
+- [todo] Provide a dedicated virtual console window with character VRAM
+- [todo] Provide a frame buffer
+
 ## Notes
 
 - Keep the viewer responsive: avoid heavy recomputation on each keystroke (apply on Enter/Apply)
@@ -58,6 +64,12 @@ GUI とツールの今後の拡張を管理します。簡潔に記載し、進�
   - [known-issue] macOS: TextEdit 編集時に `IMKCFRunLoopWakeUpReliable` 警告がコンソールに出力される（機能影響なし）
     - [plan] eframe/winit を将来バージョンへ更新し、ウィンドウハンドル/IME 設定を正式 API で扱えるようになってから、macOS では数値欄に対して IME を無効化
     - [workaround] 短期は DragValue への置換で IME を経由しない数値入力にする（ユーザー側の英字(ABC) 切替は恒久策としては非推奨）
+
+ - 仮想 GPIO を準備する
+   - [todo] 仮想 LED を配置して手軽に I/O 操作を試せるように
+ - [todo] MMU のバンク切り替え状況確認の可視化
+ - [todo] キャラクタVRAMを有する専用の仮想コンソールウィンドウを準備する
+ - [todo] フレームバッファを準備する
 
 ## メモ
 

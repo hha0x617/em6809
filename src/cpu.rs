@@ -1,4 +1,5 @@
 use crate::bus::Bus;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Default)]
 pub struct Registers {
@@ -31,6 +32,10 @@ const N: u8 = 0x08;
 const Z: u8 = 0x04;
 const V: u8 = 0x02;
 const C: u8 = 0x01;
+
+// Global IRQ/FIRQ/NMI debug logging toggle
+static DEBUG_IRQ_LOG: AtomicBool = AtomicBool::new(false);
+pub fn set_irq_log(on: bool) { DEBUG_IRQ_LOG.store(on, Ordering::SeqCst); }
 
 impl Cpu {
     pub fn new() -> Self {
@@ -454,51 +459,68 @@ impl Cpu {
     }
 
     fn service_nmi<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u32 {
-        // NMI: push entire state, set I (mask IRQ), jump to vector FFFA/FFFB
-        self.r.cc |= E;
-        self.push8(bus, self.r.cc);
-        self.push8(bus, self.r.a);
-        self.push8(bus, self.r.b);
-        self.push8(bus, self.r.dp);
-        self.push16(bus, self.r.x);
-        self.push16(bus, self.r.y);
-        self.push16(bus, self.r.u);
+        // NMI: push entire state with CC at top, then jump to vector FFFA/FFFB
+        // Order (deepest -> top): PC, U, Y, X, DP, B, A, CC
+        let pc_prev = self.r.pc;
+        self.r.cc |= E; // ensure full-frame restore via RTI
         self.push16(bus, self.r.pc);
+        self.push16(bus, self.r.u);
+        self.push16(bus, self.r.y);
+        self.push16(bus, self.r.x);
+        self.push8(bus, self.r.dp);
+        self.push8(bus, self.r.b);
+        self.push8(bus, self.r.a);
+        self.push8(bus, self.r.cc);
         self.r.cc |= I | F;
         let hi = bus.read8(0xFFFA) as u16;
         let lo = bus.read8(0xFFFB) as u16;
-        self.r.pc = (hi << 8) | lo;
+        let vec = (hi << 8) | lo;
+        self.r.pc = vec;
         self.nmi_pending = false;
+        if DEBUG_IRQ_LOG.load(Ordering::SeqCst) {
+            println!("[irq] NMI: pc=${:04X} -> vec=${:04X}", pc_prev, vec);
+        }
         19
     }
     fn service_firq<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u32 {
-        // FIRQ: push CC and PC only (fast), clear E, mask FIRQ/IRQ
-        self.push8(bus, self.r.cc);
+        // FIRQ: push PC then CC (so CC is at top for RTI), mask FIRQ/IRQ
+        let pc_prev = self.r.pc;
         self.push16(bus, self.r.pc);
-        self.r.cc &= !E;
+        self.push8(bus, self.r.cc);
+        self.r.cc &= !E; // minimal frame
         self.r.cc |= I | F;
         let hi = bus.read8(0xFFF4) as u16;
         let lo = bus.read8(0xFFF5) as u16;
-        self.r.pc = (hi << 8) | lo;
+        let vec = (hi << 8) | lo;
+        self.r.pc = vec;
         self.firq_pending = false;
+        if DEBUG_IRQ_LOG.load(Ordering::SeqCst) {
+            println!("[irq] FIRQ: pc=${:04X} -> vec=${:04X}", pc_prev, vec);
+        }
         10
     }
     fn service_irq<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u32 {
-        // IRQ: push entire state, set I, go to IRQ vector FFF6/FFF7
-        self.r.cc |= E;
-        self.push8(bus, self.r.cc);
-        self.push8(bus, self.r.a);
-        self.push8(bus, self.r.b);
-        self.push8(bus, self.r.dp);
-        self.push16(bus, self.r.x);
-        self.push16(bus, self.r.y);
-        self.push16(bus, self.r.u);
+        // IRQ: push entire state with CC at top, then jump to IRQ vector FFF6/FFF7
+        // Order (deepest -> top): PC, U, Y, X, DP, B, A, CC
+        let pc_prev = self.r.pc;
+        self.r.cc |= E; // ensure full-frame restore via RTI
         self.push16(bus, self.r.pc);
+        self.push16(bus, self.r.u);
+        self.push16(bus, self.r.y);
+        self.push16(bus, self.r.x);
+        self.push8(bus, self.r.dp);
+        self.push8(bus, self.r.b);
+        self.push8(bus, self.r.a);
+        self.push8(bus, self.r.cc);
         self.r.cc |= I | F;
         let hi = bus.read8(0xFFF6) as u16;
         let lo = bus.read8(0xFFF7) as u16;
-        self.r.pc = (hi << 8) | lo;
+        let vec = (hi << 8) | lo;
+        self.r.pc = vec;
         self.irq_pending = false;
+        if DEBUG_IRQ_LOG.load(Ordering::SeqCst) {
+            println!("[irq] IRQ: pc=${:04X} -> vec=${:04X}", pc_prev, vec);
+        }
         19
     }
 
@@ -657,6 +679,21 @@ impl Cpu {
         let op = self.fetch8(bus);
         let consumed: u32;
         match op {
+            0x1A => {
+                // ORCC #imm
+                let imm = self.fetch8(bus);
+                self.r.cc |= imm;
+                consumed = 2;
+                if trace { println!("{:04X}: 1A {:02X}   ORCC #${:02X}", pc0, imm, imm); }
+            }
+            0x1C => {
+                // ANDCC #imm
+                let imm = self.fetch8(bus);
+                self.r.cc &= imm;
+                consumed = 2;
+                if trace { println!("{:04X}: 1C {:02X}   ANDCC #${:02X}", pc0, imm, imm); }
+            }
+
             0x10 => {
                 // prefix for long conditional branches / SWI2 / CMPD / Y-reg ops
                 let sub = self.fetch8(bus);
@@ -2162,6 +2199,51 @@ impl Cpu {
                 consumed = 2;
                 if trace {
                     println!("{:04X}: 5C        INCB", pc0);
+                }
+            }
+
+            // Memory clear (CLR) variants
+            0x0F => {
+                // CLR <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                bus.write8(addr, 0);
+                self.set_nz8(0);
+                self.r.cc &= !N;
+                self.r.cc &= !V;
+                self.r.cc &= !C;
+                self.r.cc |= Z;
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: 0F {:02X}    CLR <${:02X}", pc0, zp, zp);
+                }
+            }
+            0x6F => {
+                // CLR indexed
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                bus.write8(ea, 0);
+                self.set_nz8(0);
+                self.r.cc &= !N;
+                self.r.cc &= !V;
+                self.r.cc &= !C;
+                self.r.cc |= Z;
+                consumed = 6 + addcyc;
+                if trace {
+                    println!("{:04X}: 6F ..    CLR {}", pc0, desc);
+                }
+            }
+            0x7F => {
+                // CLR extended
+                let addr = self.ea_extended(bus);
+                bus.write8(addr, 0);
+                self.set_nz8(0);
+                self.r.cc &= !N;
+                self.r.cc &= !V;
+                self.r.cc &= !C;
+                self.r.cc |= Z;
+                consumed = 7;
+                if trace {
+                    println!("{:04X}: 7F {:04X} CLR ${:04X}", pc0, addr, addr);
                 }
             }
 

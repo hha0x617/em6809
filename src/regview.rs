@@ -172,6 +172,11 @@ mod gui {
         ApplyRegs(RegSnapshot),
         MemWrite(Vec<(u16, u8)>),
         RefreshHexListing,
+        GpioSetOut(u32),
+        UiSetGpio(bool, u8, u32, u32),
+        UiSetMmu(bool, u8, [u16; 16]),
+        UiSetTimer(bool, bool),
+        UiSetGpioOnColor(u32),
     }
 
     pub struct RegApp {
@@ -205,6 +210,8 @@ mod gui {
         pub mem_hl: Arc<Mutex<Option<(u16, usize)>>>, // highlight range
         pub mem_utf8: Arc<AtomicBool>,
         pub mem_jump_text: String,
+        // GPIO LED color when ON
+        pub gpio_on_color: egui::Color32,
         pub mem_len_text: String,
         pub quit_flag: Arc<AtomicBool>,
         // Numeric UX toggle (DragValue vs TextEdit)
@@ -241,10 +248,56 @@ mod gui {
         pub cc_v: bool,
         pub cc_c: bool,
         pub input_error: Option<String>,
+        // GPIO view state (mirrors device snapshot)
+        pub gpio_present: bool,
+        pub gpio_bits: u8,
+        pub gpio_out: u32,
+        pub gpio_dir: u32,
+        // Emulator -> GUI sync (shared across threads)
+        pub gpio_sync: Arc<Mutex<Option<(bool, u8, u32, u32)>>>,
+        pub mmu_sync: Arc<Mutex<Option<(bool, u8, [u16; 16])>>>,
+        // MMU grid
+        pub mmu_present: bool,
+        pub mmu_sys_mode: bool,
+        pub mmu_task: u8,
+        pub mmu_map_prev: [u16; 16],
+        pub mmu_map_cur: [u16; 16],
+        pub timer_present: bool,
+        pub timer_pending: bool,
     }
 
     impl App for RegApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            // Drain UI sync commands injected by emulator thread
+            if let Ok(mut q) = self.cmds.lock() {
+                let mut rest: Vec<Command> = Vec::new();
+                while let Some(cmd) = q.pop() {
+                    match cmd {
+                        Command::UiSetGpio(present, bits, out, dir) => {
+                            self.gpio_present = present;
+                            self.gpio_bits = bits;
+                            self.gpio_out = out;
+                            self.gpio_dir = dir;
+                        }
+                        Command::UiSetGpioOnColor(rgb) => {
+                            self.gpio_on_color = egui::Color32::from_rgb(((rgb>>16)&0xFF) as u8, ((rgb>>8)&0xFF) as u8, (rgb&0xFF) as u8);
+                        }
+                        Command::UiSetMmu(sys, task, map) => {
+                            self.mmu_present = true;
+                            self.mmu_sys_mode = sys;
+                            self.mmu_task = task;
+                            self.mmu_map_prev = self.mmu_map_cur;
+                            self.mmu_map_cur = map;
+                        }
+                        Command::UiSetTimer(present, pending) => {
+                            self.timer_present = present;
+                            self.timer_pending = pending;
+                        }
+                        other => rest.push(other),
+                    }
+                }
+                *q = rest;
+            }
             // Install JP-capable font once (if available) so Japanese labels render correctly
             if !self.fonts_applied {
                 if let Some(bytes) = &self.ja_font {
@@ -280,6 +333,8 @@ mod gui {
             {
                 macos_about::install_about_handler_once();
             }
+
+            // (timer indicator top strip removed; shown below MMU panel)
 
             // Windows: simple menu bar with About
             #[cfg(windows)]
@@ -1153,6 +1208,69 @@ mod gui {
                         });
                     });
 
+                // GPIO LEDs (simple quick panel)
+                if self.gpio_present {
+                    ui.separator();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("GPIO LEDs:");
+                        let bits = self.gpio_bits as usize;
+                        let mut new_out = self.gpio_out;
+                        for i in 0..bits {
+                            let is_out = ((self.gpio_dir >> i) & 1) != 0;
+                            let on = ((new_out >> i) & 1) != 0;
+                            let color = if is_out { if on { self.gpio_on_color } else { egui::Color32::DARK_GRAY } } else { egui::Color32::GRAY };
+                            let label = format!("{:02}", i);
+                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+                            ui.painter().rect_filled(rect.shrink(2.0), 4.0, color);
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, egui::TextStyle::Small.resolve(ui.style()), egui::Color32::BLACK);
+                            if is_out && resp.clicked() { new_out ^= 1u32 << i; }
+                        }
+                        if new_out != self.gpio_out { self.gpio_out = new_out; if let Ok(mut q) = self.cmds.lock() { q.push(Command::GpioSetOut(new_out)); } }
+                    });
+                }
+
+                if self.mmu_present {
+                    ui.separator();
+                    let title = if self.mmu_sys_mode { format!("MMU map (SYS) task{}", self.mmu_task) } else { format!("MMU map (USER) task{}", self.mmu_task) };
+                    ui.monospace(title);
+                    ui.horizontal_wrapped(|ui| {
+                        for p in 0..16 {
+                            let f = self.mmu_map_cur[p];
+                            let prev = self.mmu_map_prev[p];
+                            let changed = f != prev;
+                            let text = format!("P{:X}:F{:02X}", p, f & 0xFF);
+                            let (rect, _resp) = ui.allocate_exact_size(egui::vec2(70.0, 20.0), egui::Sense::hover());
+                            let bg = if changed { egui::Color32::DARK_GREEN } else { egui::Color32::DARK_GRAY };
+                            ui.painter().rect_filled(rect.shrink(2.0), 3.0, bg);
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::TextStyle::Monospace.resolve(ui.style()), egui::Color32::WHITE);
+                        }
+                    });
+                    if self.timer_present {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.monospace("Timer:");
+                            let color = if self.timer_pending { egui::Color32::LIGHT_RED } else { egui::Color32::DARK_GREEN };
+                            let (rect, _resp) = ui.allocate_exact_size(egui::vec2(60.0, 18.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect.shrink(3.0), 6.0, color);
+                            let label = if self.timer_pending { "PENDING" } else { "idle" };
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, egui::TextStyle::Monospace.resolve(ui.style()), egui::Color32::BLACK);
+                        });
+                    }
+                }
+
+                // If MMU is not shown, still show standalone Timer indicator
+                if !self.mmu_present && self.timer_present {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.monospace("Timer:");
+                        let color = if self.timer_pending { egui::Color32::LIGHT_RED } else { egui::Color32::DARK_GREEN };
+                        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(60.0, 18.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect.shrink(3.0), 6.0, color);
+                        let label = if self.timer_pending { "PENDING" } else { "idle" };
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, egui::TextStyle::Monospace.resolve(ui.style()), egui::Color32::BLACK);
+                    });
+                }
+
                 // Error display moved next to the Edit/Apply controls at the top
 
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -1185,6 +1303,9 @@ mod gui {
         quit_flag: Arc<AtomicBool>,
         alive: Arc<AtomicBool>,
         started: Arc<AtomicBool>,
+        // Emulator->GUI sync
+        gpio_sync: Arc<Mutex<Option<(bool, u8, u32, u32)>>>,
+        mmu_sync: Arc<Mutex<Option<(bool, u8, [u16; 16])>>>,
     }
 
     impl Clone for RegView {
@@ -1213,6 +1334,8 @@ mod gui {
                 quit_flag: Arc::clone(&self.quit_flag),
                 alive: Arc::clone(&self.alive),
                 started: Arc::clone(&self.started),
+                gpio_sync: Arc::new(Mutex::new(None)),
+                mmu_sync: Arc::new(Mutex::new(None)),
             }
         }
     }
@@ -1477,6 +1600,20 @@ mod gui {
                     cc_v: false,
                     cc_c: false,
                     input_error: None,
+                    gpio_present: true,
+                    gpio_bits: 8,
+                    gpio_out: 0,
+                    gpio_dir: 0xFFFF_FFFF,
+                    gpio_on_color: egui::Color32::LIGHT_YELLOW,
+                    gpio_sync: Arc::new(Mutex::new(None)),
+                    mmu_sync: Arc::new(Mutex::new(None)),
+                    mmu_present: false,
+                    mmu_sys_mode: false,
+                    mmu_task: 0,
+                    mmu_map_prev: [0u16; 16],
+                    mmu_map_cur: [0u16; 16],
+                    timer_present: false,
+                    timer_pending: false,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -1533,6 +1670,8 @@ mod gui {
                 quit_flag: quit_flag_thread,
                 alive: alive_flag,
                 started: started_flag,
+                gpio_sync: Arc::new(Mutex::new(None)),
+                mmu_sync: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -1651,6 +1790,8 @@ mod gui {
                 quit_flag,
                 alive,
                 started,
+                gpio_sync: Arc::new(Mutex::new(None)),
+                mmu_sync: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -1753,6 +1894,20 @@ mod gui {
                 cc_v: false,
                 cc_c: false,
                 input_error: None,
+                gpio_present: true,
+                gpio_bits: 8,
+                gpio_out: 0,
+                gpio_dir: 0xFFFF_FFFF,
+                    gpio_on_color: egui::Color32::LIGHT_YELLOW,
+                gpio_sync: Arc::new(Mutex::new(None)),
+                mmu_sync: Arc::new(Mutex::new(None)),
+                mmu_present: false,
+                mmu_sys_mode: false,
+                mmu_task: 0,
+                mmu_map_prev: [0u16; 16],
+                mmu_map_cur: [0u16; 16],
+                timer_present: false,
+                timer_pending: false,
             };
             #[cfg(windows)]
             {
@@ -1912,6 +2067,38 @@ mod gui {
     impl RegView {
         pub fn auto_hex_on_edit(&self) -> bool {
             self.auto_hex_on_edit.load(Ordering::SeqCst)
+        }
+        /// Worker-side: pop only non-UiSet commands, leaving UiSet* for GUI thread.
+        pub fn take_command_worker(&self) -> Option<Command> {
+            if let Ok(mut q) = self.cmds.lock() {
+                if let Some(idx) = q
+                    .iter()
+                    .position(|c| !matches!(c, Command::UiSetGpio(..) | Command::UiSetMmu(..) | Command::UiSetTimer(..) | Command::UiSetGpioOnColor(..)))
+                {
+                    return Some(q.remove(idx));
+                }
+            }
+            None
+        }
+        pub fn sync_gpio(&self, present: bool, bits: u8, out: u32, dir: u32) {
+            if let Ok(mut q) = self.cmds.lock() {
+                q.push(Command::UiSetGpio(present, bits, out, dir));
+            }
+        }
+        pub fn set_gpio_on_color(&self, rgb: u32) {
+            if let Ok(mut q) = self.cmds.lock() {
+                q.push(Command::UiSetGpioOnColor(rgb));
+            }
+        }
+        pub fn sync_mmu(&self, sys_mode: bool, task: u8, map: [u16; 16]) {
+            if let Ok(mut q) = self.cmds.lock() {
+                q.push(Command::UiSetMmu(sys_mode, task, map));
+            }
+        }
+        pub fn sync_timer(&self, present: bool, pending: bool) {
+            if let Ok(mut q) = self.cmds.lock() {
+                q.push(Command::UiSetTimer(present, pending));
+            }
         }
     }
 

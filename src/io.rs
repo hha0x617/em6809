@@ -1,8 +1,9 @@
 use crate::bus::Bus;
 use std::any::Any;
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub trait Device: Send {
     fn contains(&self, addr: u16) -> bool;
@@ -13,6 +14,10 @@ pub trait Device: Send {
         (false, false, false)
     }
 }
+
+// ------------------------------------------------------------
+// Console (UART-like) device
+// ------------------------------------------------------------
 
 pub struct ConsoleDev {
     pub base: u16, // base..base+3 used
@@ -211,9 +216,362 @@ impl Device for ConsoleDev {
     }
 }
 
+// ------------------------------------------------------------
+// Simple Block (disk) device with 512-byte sectors
+// I/O map (base .. base+7):
+//   +0: DATA      (R/W) data port for a sector buffer
+//   +1: STATUS    (R)  bit0=BUSY, bit1=DRDY, bit2=ERR; write ignored
+//   +2: COMMAND   (W)  0x00=NOP, 0x01=READ, 0x02=WRITE, 0xFF=RESET; (R) last cmd
+//   +3: SECCNT    (R/W) sector count; currently only 1 is supported
+//   +4..+7: LBA0..LBA3 (R/W) 32-bit LBA (little-endian: LBA0=LSB)
+// Behavior:
+//   - READ: loads 512 bytes at LBA into internal buffer; sets DRDY; ERR if OOB (fills zeros)
+//   - WRITE: writes current buffer to LBA; grows image as needed; clears DRDY; sets ERR on failure
+//   - DATA port increments an internal index on each byte read/write; READ clears DRDY after 512 reads.
+//   - SECCNT is accepted but only the value 1 is honored.
+// Backing store:
+//   - In-memory Vec<u8>, optionally mirrored to a file path on writes.
+// Limitations:
+//   - No IRQ/FIRQ; no multi-sector I/O; no timing/busy delays.
+#[derive(Debug)]
+pub struct BlockDev {
+    pub base: u16,
+    sector_size: usize,
+    lba: u32,
+    sec_cnt: u8,
+    status: u8,
+    last_cmd: u8,
+    buf: Vec<u8>,
+    buf_idx: usize,
+    image: Vec<u8>,
+    backing_path: Option<String>,
+    // Transfer state
+    op_read: bool,
+    op_write: bool,
+    xfer_remaining: usize,
+    // IRQ config/state
+    irq_enable: bool,
+    use_firq: bool,
+    irq_hold_cycles: u32,
+    irq_countdown: u32,
+}
+
+impl BlockDev {
+    pub fn new(base: u16) -> Self {
+        let sector_size = 512usize;
+        Self {
+            base,
+            sector_size,
+            lba: 0,
+            sec_cnt: 1,
+            status: 0,
+            last_cmd: 0,
+            buf: vec![0u8; sector_size],
+            buf_idx: 0,
+            image: Vec::new(),
+            backing_path: None,
+            op_read: false,
+            op_write: false,
+            xfer_remaining: 0,
+            irq_enable: false,
+            use_firq: false,
+            irq_hold_cycles: 0,
+            irq_countdown: 0,
+        }
+    }
+    pub fn set_backing_file(&mut self, path: &str) {
+        match std::fs::read(path) {
+            Ok(data) => {
+                self.image = data;
+                self.backing_path = Some(path.to_string());
+            }
+            Err(_) => {
+                // If file read fails, keep empty image but remember the path for future writes.
+                self.backing_path = Some(path.to_string());
+            }
+        }
+    }
+    pub fn set_image(&mut self, data: Vec<u8>) {
+        self.image = data;
+    }
+    pub fn set_irq_hold_cycles(&mut self, n: u32) { self.irq_hold_cycles = n; }
+    pub fn set_irq_enable(&mut self, on: bool) { self.irq_enable = on; }
+    pub fn set_firq(&mut self, on: bool) { self.use_firq = on; }
+    fn contains_reg(&self, addr: u16) -> bool {
+        addr.wrapping_sub(self.base) < 8
+    }
+    fn set_status_busy(&mut self, on: bool) { if on { self.status |= 0x01; } else { self.status &= !0x01; } }
+    fn set_status_drdy(&mut self, on: bool) { if on { self.status |= 0x02; } else { self.status &= !0x02; } }
+    fn set_status_err(&mut self, on: bool) { if on { self.status |= 0x04; } else { self.status &= !0x04; } }
+    #[allow(dead_code)]
+    fn image_len_sectors(&self) -> u64 {
+        (self.image.len() as u64) / (self.sector_size as u64)
+    }
+    fn read_sector_into_buf(&mut self) {
+        self.set_status_err(false);
+        self.set_status_busy(true);
+        let ss = self.sector_size as u64;
+        let lba = self.lba as u64;
+        let start = lba.saturating_mul(ss) as usize;
+        let end = start.saturating_add(self.sector_size);
+        if end <= self.image.len() {
+            self.buf.copy_from_slice(&self.image[start..end]);
+        } else {
+            // Out of range: zero-fill and mark error
+            for b in self.buf.iter_mut() { *b = 0; }
+            self.set_status_err(true);
+        }
+        self.buf_idx = 0;
+        self.set_status_busy(false);
+        self.set_status_drdy(true);
+    }
+    fn write_buf_to_sector(&mut self) {
+        self.set_status_err(false);
+        self.set_status_busy(true);
+        let ss = self.sector_size as u64;
+        let lba = self.lba as u64;
+        let start = lba.saturating_mul(ss) as usize;
+        let end = start.saturating_add(self.sector_size);
+        if end > self.image.len() {
+            self.image.resize(end, 0);
+        }
+        let mut io_error = false;
+        if start < self.image.len() && end <= self.image.len() {
+            self.image[start..end].copy_from_slice(&self.buf);
+            if let Some(path) = &self.backing_path {
+                // Attempt to mirror the written sector to the backing file
+                if let Ok(mut f) = OpenOptions::new().read(true).write(true).create(true).open(path) {
+                    if let Ok(meta) = f.metadata() {
+                        if meta.len() < end as u64 {
+                            // Extend file to required size
+                            if f.set_len(end as u64).is_err() {
+                                io_error = true;
+                            }
+                        }
+                    }
+                    if f.seek(SeekFrom::Start(start as u64)).is_err() {
+                        io_error = true;
+                    } else if f.write_all(&self.buf).is_err() {
+                        io_error = true;
+                    }
+                } else {
+                    io_error = true;
+                }
+            }
+        } else {
+            io_error = true;
+        }
+        self.set_status_busy(false);
+        self.buf_idx = 0;
+        if io_error {
+            self.set_status_err(true);
+        }
+    }
+}
+
+impl Device for BlockDev {
+    fn contains(&self, addr: u16) -> bool { self.contains_reg(addr) }
+    fn read8(&mut self, addr: u16) -> u8 {
+        let off = addr.wrapping_sub(self.base);
+        match off {
+            0 => {
+                // DATA
+                if (self.status & 0x02) != 0 && self.buf_idx < self.sector_size {
+                    let b = self.buf[self.buf_idx];
+                    self.buf_idx += 1;
+                    self.xfer_remaining = self.xfer_remaining.saturating_sub(1);
+                    if self.buf_idx >= self.sector_size {
+                        // Sector exhausted; if more remains and READ op, load next sector
+                        if self.op_read && self.xfer_remaining > 0 {
+                            self.lba = self.lba.wrapping_add(1);
+                            self.read_sector_into_buf();
+                        } else {
+                            self.set_status_drdy(false);
+                            self.op_read = false;
+                            // Completed read transfer -> pulse IRQ hold
+                            if self.irq_enable { self.irq_countdown = self.irq_hold_cycles; }
+                        }
+                    }
+                    b
+                } else { 0x00 }
+            }
+            1 => { let s = self.status; self.set_status_err(false); s }, // STATUS read clears ERR
+            2 => self.last_cmd, // COMMAND (readback)
+            3 => self.sec_cnt, // SECCNT (readback)
+            4 => (self.lba & 0x000000FF) as u8,
+            5 => ((self.lba >> 8) & 0xFF) as u8,
+            6 => ((self.lba >> 16) & 0xFF) as u8,
+            7 => ((self.lba >> 24) & 0xFF) as u8,
+            _ => 0xFF,
+        }
+    }
+    fn write8(&mut self, addr: u16, data: u8) {
+        let off = addr.wrapping_sub(self.base);
+        match off {
+            0 => {
+                // DATA write: stage into buffer
+                if self.buf_idx < self.sector_size {
+                    self.buf[self.buf_idx] = data;
+                    self.buf_idx += 1;
+                    if self.op_write {
+                        // Streaming multi-sector write
+                        if self.buf_idx >= self.sector_size {
+                            self.write_buf_to_sector();
+                            self.lba = self.lba.wrapping_add(1);
+                            self.xfer_remaining = self.xfer_remaining.saturating_sub(self.sector_size);
+                            // Prepare for next sector if more remains
+                            if self.xfer_remaining > 0 {
+                                // Buffer will be refilled by further DATA writes
+                                self.buf.fill(0);
+                                self.buf_idx = 0;
+                            } else {
+                                self.op_write = false;
+                                self.set_status_busy(false);
+                                if self.irq_enable { self.irq_countdown = self.irq_hold_cycles; }
+                            }
+                        }
+                    }
+                }
+            }
+            1 => { /* STATUS write ignored */ }
+            2 => {
+                // COMMAND
+                self.last_cmd = data;
+                match data {
+                    0x00 => { /* NOP */ }
+                    0x01 => { // READ one sector
+                        let cnt = core::cmp::max(1u8, self.sec_cnt) as usize;
+                        self.xfer_remaining = cnt.saturating_mul(self.sector_size);
+                        self.op_read = true;
+                        self.op_write = false;
+                        self.read_sector_into_buf();
+                    }
+                    0x02 => { // WRITE one sector (commit current buffer)
+                        let cnt = core::cmp::max(1u8, self.sec_cnt) as usize;
+                        self.xfer_remaining = cnt.saturating_mul(self.sector_size);
+                        self.op_write = true;
+                        self.op_read = false;
+                        self.set_status_busy(true);
+                        // If buffer already has one sector worth (rare), start committing immediately
+                        if self.buf_idx >= self.sector_size {
+                            self.write_buf_to_sector();
+                            self.lba = self.lba.wrapping_add(1);
+                            self.xfer_remaining = self.xfer_remaining.saturating_sub(self.sector_size);
+                            self.buf.fill(0);
+                            self.buf_idx = 0;
+                        }
+                    }
+                    0xFF => {
+                        // RESET
+                        self.status = 0;
+                        self.buf_idx = 0;
+                        self.last_cmd = 0;
+                        self.op_read = false;
+                        self.op_write = false;
+                        self.xfer_remaining = 0;
+                        self.irq_countdown = 0;
+                    }
+                    _ => {
+                        // Unknown command -> set error
+                        self.set_status_err(true);
+                    }
+                }
+            }
+            3 => { self.sec_cnt = if data == 0 { 1 } else { data }; }
+            4 => { self.lba = (self.lba & 0xFFFFFF00) | (data as u32); }
+            5 => { self.lba = (self.lba & 0xFFFF00FF) | ((data as u32) << 8); }
+            6 => { self.lba = (self.lba & 0xFF00FFFF) | ((data as u32) << 16); }
+            7 => { self.lba = (self.lba & 0x00FFFFFF) | ((data as u32) << 24); }
+            8 => {
+                // CONTROL: bit0 IRQ_EN, bit1 FIRQ, bit2 clear ERR
+                self.irq_enable = (data & 0x01) != 0;
+                self.use_firq = (data & 0x02) != 0;
+                if (data & 0x04) != 0 { self.set_status_err(false); }
+            }
+            _ => {}
+        }
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn irq_lines(&mut self) -> (bool, bool, bool) {
+        // IRQ when DRDY (read data available) or ERR set, or when a write completes (signaled by op_write false and last_cmd==0x02 just finished).
+        let drdy = (self.status & 0x02) != 0;
+        let err = (self.status & 0x04) != 0;
+        let write_done_pulse = !self.op_write && self.last_cmd == 0x02 && self.irq_countdown > 0;
+        let mut on = self.irq_enable && (drdy || err || write_done_pulse);
+        if on {
+            self.irq_countdown = self.irq_hold_cycles;
+        } else if self.irq_countdown > 0 {
+            self.irq_countdown -= 1;
+            on = true;
+        }
+        if self.use_firq { (false, on, false) } else { (false, false, on) }
+    }
+}
+
+// ------------------------------------------------------------
+// Simple GPIO device with OUT/IN/DIR registers
+// Registers (base..base+3):
+//  +0: OUT (R/W) output latch
+//  +1: IN  (R)  input state (for inputs reads in_mask; for outputs reads OUT)
+//  +2: DIR (R/W) 1=output, 0=input
+//  +3: CTRL (W)  bit0: clear inputs; (R) not used
+pub struct GpioDev {
+    pub base: u16,
+    pub bits: u8,
+    out: u32,
+    dir: u32,
+    in_mask: u32,
+}
+
+impl GpioDev {
+    pub fn new(base: u16, bits: u8) -> Self {
+        Self { base, bits: bits.min(32), out: 0, dir: 0xFFFF_FFFF, in_mask: 0 }
+    }
+    pub fn get_state(&self) -> (u32, u32, u8) { (self.out, self.dir, self.bits) }
+    pub fn set_out(&mut self, mask: u32) { self.out = mask & Self::mask_for(self.bits); }
+    pub fn set_dir(&mut self, mask: u32) { self.dir = mask & Self::mask_for(self.bits); }
+    pub fn set_inputs(&mut self, mask: u32) { self.in_mask = mask & Self::mask_for(self.bits); }
+    fn mask_for(bits: u8) -> u32 { if bits >= 32 { 0xFFFF_FFFF } else { (1u32 << bits) - 1 } }
+}
+
+impl Device for GpioDev {
+    fn contains(&self, addr: u16) -> bool { addr.wrapping_sub(self.base) < 4 }
+    fn read8(&mut self, addr: u16) -> u8 {
+        match addr.wrapping_sub(self.base) {
+            0 => (self.out & 0xFF) as u8,
+            1 => {
+                let mask = Self::mask_for(self.bits);
+                let actual = (self.out & self.dir) | (self.in_mask & !self.dir);
+                (actual & mask & 0xFF) as u8
+            }
+            2 => (self.dir & 0xFF) as u8,
+            3 => 0x00,
+            _ => 0xFF,
+        }
+    }
+    fn write8(&mut self, addr: u16, data: u8) {
+        match addr.wrapping_sub(self.base) {
+            0 => { self.out = (self.out & !0xFF) | (data as u32); if GPIO_LOG.load(Ordering::SeqCst) { eprintln!("[gpio] OUT @${:04X} <= ${:02X}", self.base, data); } }
+            1 => { /* read-only */ }
+            2 => { self.dir = (self.dir & !0xFF) | (data as u32); }
+            3 => { if (data & 0x01) != 0 { self.in_mask = 0; } }
+            _ => {}
+        }
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+}
+
+// Debug logging toggle for GPIO writes
+static GPIO_LOG: AtomicBool = AtomicBool::new(false);
+pub fn set_gpio_log(on: bool) { GPIO_LOG.store(on, Ordering::SeqCst); }
+
 pub struct IoBus<B: Bus> {
     inner: B,
     devices: Vec<Box<dyn Device>>,
+    gpio_dirty: bool,
+    mem_watch_start: u16,
+    mem_watch_len: usize,
+    mem_dirty: bool,
 }
 
 impl<B: Bus> IoBus<B> {
@@ -221,6 +579,10 @@ impl<B: Bus> IoBus<B> {
         Self {
             inner,
             devices: Vec::new(),
+            gpio_dirty: false,
+            mem_watch_start: 0,
+            mem_watch_len: 0,
+            mem_dirty: false
         }
     }
     pub fn add_device<D: Device + 'static>(&mut self, dev: D) {
@@ -242,6 +604,41 @@ impl<B: Bus> IoBus<B> {
             }
         }
     }
+    pub fn with_block_mut<F: FnOnce(&mut BlockDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(b) = d.as_any_mut().downcast_mut::<BlockDev>() {
+                f(b);
+                return;
+            }
+        }
+    }
+    pub fn inner_any_mut(&mut self) -> &mut dyn Any { self.inner.as_any_mut() }
+    pub fn with_gpio_mut<F: FnOnce(&mut GpioDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(g) = d.as_any_mut().downcast_mut::<GpioDev>() {
+                f(g);
+                return;
+            }
+        }
+    }
+    pub fn take_gpio_dirty(&mut self) -> bool {
+        if self.gpio_dirty { self.gpio_dirty = false; true } else { false }
+    }
+    pub fn set_mem_watch(&mut self, start: u16, len: usize) {
+        self.mem_watch_start = start;
+        self.mem_watch_len = len;
+    }
+    pub fn take_mem_dirty(&mut self) -> bool {
+        if self.mem_dirty { self.mem_dirty = false; true } else { false }
+    }
+    pub fn with_timer_mut<F: FnOnce(&mut crate::timer::TimerDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(t) = d.as_any_mut().downcast_mut::<crate::timer::TimerDev>() {
+                f(t);
+                return;
+            }
+        }
+    }
 }
 
 impl<B: Bus + 'static> Bus for IoBus<B> {
@@ -256,9 +653,27 @@ impl<B: Bus + 'static> Bus for IoBus<B> {
     fn write8(&mut self, addr: u16, data: u8) {
         for d in self.devices.iter_mut() {
             if d.contains(addr) {
+                if let Some(g) = d.as_any_mut().downcast_mut::<GpioDev>() {
+                    let off = addr.wrapping_sub(g.base);
+                    if off == 0 || off == 2 { self.gpio_dirty = true; }
+                }
+                // mark mem dirty if falls within watch
+                if self.mem_watch_len > 0 {
+                    let s = self.mem_watch_start;
+                    let e = s.wrapping_add(self.mem_watch_len as u16);
+                    let in_range = if s <= e { addr >= s && addr < e } else { addr >= s || addr < e };
+                    if in_range { self.mem_dirty = true; }
+                }
                 d.write8(addr, data);
                 return;
             }
+        }
+        // mark mem dirty on inner writes too
+        if self.mem_watch_len > 0 {
+            let s = self.mem_watch_start;
+            let e = s.wrapping_add(self.mem_watch_len as u16);
+            let in_range = if s <= e { addr >= s && addr < e } else { addr >= s || addr < e };
+            if in_range { self.mem_dirty = true; }
         }
         self.inner.write8(addr, data)
     }

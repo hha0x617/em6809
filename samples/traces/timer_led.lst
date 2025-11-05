@@ -1,0 +1,67 @@
+                      (    timer_led.asm):00001         ; Timer-driven LED toggle sample
+                      (    timer_led.asm):00002         ; - Uses GPIO at $FF30 (bit0 as LED)
+                      (    timer_led.asm):00003         ; - Timer device at $FF10 generates periodic interrupts
+                      (    timer_led.asm):00004         ; - ISR counts 60 ticks, then toggles LED (approx 1 Hz if timer-rate=60)
+                      (    timer_led.asm):00005         ;
+                      (    timer_led.asm):00006         ; Assemble for MC6809, place at $E000, set vectors at top of memory.
+                      (    timer_led.asm):00007         
+                      (    timer_led.asm):00008                         ORG     $E000
+                      (    timer_led.asm):00009         
+                      (    timer_led.asm):00010         ; I/O base addresses
+     FF30             (    timer_led.asm):00011         GPIO_BASE       EQU     $FF30      ; OUT=$FF30, IN=$FF31, DIR=$FF32
+     FF10             (    timer_led.asm):00012         TIMER_BASE      EQU     $FF10      ; CTRL/STATUS=$FF10
+                      (    timer_led.asm):00013         
+                      (    timer_led.asm):00014         ; Variables
+     E100             (    timer_led.asm):00015         LED_STATE       EQU     $E100      ; current LED state (mirrors OUT bit0)
+     E101             (    timer_led.asm):00016         TICK_COUNT      EQU     $E101      ; tick accumulator (0..59)
+                      (    timer_led.asm):00017         
+E000 1CAF             (    timer_led.asm):00018         start           ANDCC   #$AF        ; enable IRQ and FIRQ (clear I and F masks)
+E002 7FE100           (    timer_led.asm):00019                         CLR     LED_STATE
+E005 7FE101           (    timer_led.asm):00020                         CLR     TICK_COUNT
+                      (    timer_led.asm):00021                         ; Configure GPIO bit0 as output, initialize OFF
+E008 8600             (    timer_led.asm):00022                         LDA     #$00
+E00A B7FF30           (    timer_led.asm):00023                         STA     GPIO_BASE      ; OUT=0 (LED OFF)
+E00D 8601             (    timer_led.asm):00024                         LDA     #$01
+E00F B7FF32           (    timer_led.asm):00025                         STA     GPIO_BASE+2    ; DIR=1 for bit0 (output)
+                      (    timer_led.asm):00026         
+E012 20FE             (    timer_led.asm):00027         main_loop       BRA     main_loop       ; idle - timer ISR does the work
+                      (    timer_led.asm):00028         
+                      (    timer_led.asm):00029         ; ISR: runs on each timer tick. After 60 ticks, toggle LED.
+E014 3402             (    timer_led.asm):00030         irq_handler     PSHS    A               ; save A (simple ISR)
+E016 B6E101           (    timer_led.asm):00031                         LDA     TICK_COUNT
+E019 4C               (    timer_led.asm):00032                         INCA
+E01A 813C             (    timer_led.asm):00033                         CMPA    #60
+E01C 2510             (    timer_led.asm):00034                         BLO     .store_ret      ; <60: store and return
+E01E 7FE101           (    timer_led.asm):00035                         CLR     TICK_COUNT      ; reached 60 -> reset tick counter
+                      (    timer_led.asm):00036                         ; Toggle LED bit0
+E021 B6FF30           (    timer_led.asm):00037                         LDA     GPIO_BASE       ; read OUT
+E024 8801             (    timer_led.asm):00038                         EORA    #$01            ; flip bit0
+E026 B7FF30           (    timer_led.asm):00039                         STA     GPIO_BASE       ; write OUT
+E029 B7E100           (    timer_led.asm):00040                         STA     LED_STATE       ; mirror in RAM for inspection
+E02C 2003             (    timer_led.asm):00041                         BRA     .done
+E02E B7E101           (    timer_led.asm):00042         .store_ret      STA     TICK_COUNT
+E031 3502             (    timer_led.asm):00043         .done           PULS    A
+E033 3B               (    timer_led.asm):00044                         RTI
+                      (    timer_led.asm):00045         
+                      (    timer_led.asm):00046                         ORG     $FFF4
+FFF4 E014             (    timer_led.asm):00047                         FDB     irq_handler     ; FIRQ vector
+                      (    timer_led.asm):00048                         ORG     $FFF6
+FFF6 E014             (    timer_led.asm):00049                         FDB     irq_handler     ; IRQ vector
+                      (    timer_led.asm):00050                         ORG     $FFFE
+FFFE E000             (    timer_led.asm):00051                         FDB     start           ; RESET vector -> start
+                      (    timer_led.asm):00052         
+                      (    timer_led.asm):00053         ; Suggested run commands:
+                      (    timer_led.asm):00054         ;  60 Hz via FIRQ (recommended: fits 16-bit reload, ~1Hz blink):
+                      (    timer_led.asm):00055         ;    cargo run -- samples/traces/timer_led.s19 \
+                      (    timer_led.asm):00056         ;      --gpio 0xFF30 --gpio-bits 8 \
+                      (    timer_led.asm):00057         ;      --timer 0xFF10 --timer-rate 60 --timer-ips 1000000 --timer-irq --timer-firq --timer-start --run
+                      (    timer_led.asm):00058         ;
+                      (    timer_led.asm):00059         ;  Using IRQ instead of FIRQ (still fine since both vectors map to same handler):
+                      (    timer_led.asm):00060         ;    cargo run -- samples/traces/timer_led.s19 \
+                      (    timer_led.asm):00061         ;      --gpio 0xFF30 --gpio-bits 8 \
+                      (    timer_led.asm):00062         ;      --timer 0xFF10 --timer-rate 60 --timer-ips 1000000 --timer-irq --timer-start --run
+                      (    timer_led.asm):00063         ;
+                      (    timer_led.asm):00064         ; Notes:
+                      (    timer_led.asm):00065         ; - The timer "rate" is based on instruction ticks using the estimate from --timer-ips. With --timer-ips=1,000,000
+                      (    timer_led.asm):00066         ;   and --timer-rate=60, reload is ~16666 (fits in 16 bits). Counting 60 ticks produces ~1 second.
+                      (    timer_led.asm):00067         ; - In the viewer, watch $E100 (LED_STATE) and GPIO OUT at $FF30 to see the toggling.

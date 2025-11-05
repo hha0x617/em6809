@@ -16,6 +16,7 @@ pub struct Mc6829 {
     fault_status: u8, // bit0=WPROT, bit1=RPROT, bit2=NX
     pub regs_base: u16, // register window base address (logical)
     regs_enable: bool,
+    log_maps: bool,
 }
 
 impl Mc6829 {
@@ -31,6 +32,7 @@ impl Mc6829 {
             fault_status: 0,
             regs_base,
             regs_enable: true,
+            log_maps: false,
         };
         // Identity map task 0 by default: page n -> frame n
         for i in 0..NUM_LOG_PAGES {
@@ -51,13 +53,23 @@ impl Mc6829 {
     pub fn set_task(&mut self, t: u8) {
         self.task = (t as usize % NUM_TASKS) as u8;
     }
+    pub fn set_log_maps(&mut self, on: bool) { self.log_maps = on; }
     pub fn set_map_entry(&mut self, page: usize, frame: u16) {
         let t = self.task as usize;
-        if self.sys_mode {
-            self.map_sys[t][page] = frame;
-        } else {
-            self.map_user[t][page] = frame;
+        if self.sys_mode { self.map_sys[t][page] = frame; } else { self.map_user[t][page] = frame; }
+        if self.log_maps {
+            let mode = if self.sys_mode { "sys" } else { "user" };
+            println!("[mmu] {} task{}: P{:X} -> F{:X}", mode, self.task, page & 0x0F, frame as usize & 0xFF);
         }
+    }
+
+    pub fn snapshot_current_map(&self) -> ([u16; NUM_LOG_PAGES], bool, u8) {
+        let t = self.task as usize;
+        let mut out = [0u16; NUM_LOG_PAGES];
+        for i in 0..NUM_LOG_PAGES {
+            out[i] = if self.sys_mode { self.map_sys[t][i] } else { self.map_user[t][i] };
+        }
+        (out, self.sys_mode, self.task)
     }
 
     fn in_regs(&self, addr: u16) -> bool {

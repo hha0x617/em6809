@@ -5,5 +5,6 @@ pub mod cpu;
 pub mod debug;
 pub mod disasm;
 pub mod io;
+pub mod timer;
 pub mod loader;
 pub mod mmu;
