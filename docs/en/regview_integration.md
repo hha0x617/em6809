@@ -117,3 +117,9 @@ Some aspects of the GUI viewer can be customized via environment variables:
   - `en` → English labels (e.g., "Run to here", "Set PC to this address", "Cancel").
   - If unset, language is auto‑detected from `LC_ALL`/`LC_MESSAGES`/`LANG` or the OS language (Windows), defaulting to English.
 
+About dialog icon (Linux only):
+
+- `EM6809_ABOUT_ICON`: Absolute path to a PNG used for the About dialog icon on Linux.
+  - If set and readable, the PNG is loaded and resized to 32×32.
+  - If unset, the app looks for `assets/app_icon_32.png`, then `assets/icon32.png`, then `assets/icon.png`.
+  - If no PNG is found, a vector fallback is drawn (rounded rectangle with a lowercase "e").

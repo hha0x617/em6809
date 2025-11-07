@@ -76,3 +76,8 @@ WSL2 + WSLg（Wayland）のセットアップ手順・既知の注意点は `doc
   - `... --console 0xFF00 --console-stdin --console-echo`
 
 詳細は console_io.md（I/O 制御）、tracing.md（リスティング/逆アセンブルの考え方）、memory_editing.md（メモリ編集）、os9_guide.md（OS‑9 連携）を参照してください。
+
+## 環境変数（Linux の CSD ヘッダー）
+
+- `EM6809_CSD`: Linux で `1` または `true` を設定すると、ウィンドウのクライアントサイド装飾（CSD）モードを有効化します（アイコン＋タイトル、Help→About、最小化/最大化/閉じるのカスタムヘッダー）。
+  - 例: `EM6809_CSD=1 cargo run --release -- samples/echo/echo.s19 --format srec`

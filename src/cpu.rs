@@ -1,3 +1,4 @@
+#![allow(clippy::uninlined_format_args)]
 use crate::bus::Bus;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -23,6 +24,12 @@ pub struct Cpu {
     pub irq_pending: bool,
 }
 
+impl Default for Cpu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // CC flag bits
 const E: u8 = 0x80;
 const F: u8 = 0x40;
@@ -35,7 +42,9 @@ const C: u8 = 0x01;
 
 // Global IRQ/FIRQ/NMI debug logging toggle
 static DEBUG_IRQ_LOG: AtomicBool = AtomicBool::new(false);
-pub fn set_irq_log(on: bool) { DEBUG_IRQ_LOG.store(on, Ordering::SeqCst); }
+pub fn set_irq_log(on: bool) {
+    DEBUG_IRQ_LOG.store(on, Ordering::SeqCst);
+}
 
 impl Cpu {
     pub fn new() -> Self {
@@ -684,14 +693,18 @@ impl Cpu {
                 let imm = self.fetch8(bus);
                 self.r.cc |= imm;
                 consumed = 2;
-                if trace { println!("{:04X}: 1A {:02X}   ORCC #${:02X}", pc0, imm, imm); }
+                if trace {
+                    println!("{:04X}: 1A {:02X}   ORCC #${:02X}", pc0, imm, imm);
+                }
             }
             0x1C => {
                 // ANDCC #imm
                 let imm = self.fetch8(bus);
                 self.r.cc &= imm;
                 consumed = 2;
-                if trace { println!("{:04X}: 1C {:02X}   ANDCC #${:02X}", pc0, imm, imm); }
+                if trace {
+                    println!("{:04X}: 1C {:02X}   ANDCC #${:02X}", pc0, imm, imm);
+                }
             }
 
             0x10 => {
@@ -1995,7 +2008,7 @@ impl Cpu {
                 let res = self.r.a >> 1;
                 self.r.a = res;
                 self.set_nz8(res);
-                self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 }) | 0; // N cleared for LSR
+                self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 }); // N cleared for LSR
                 consumed = 2;
                 if trace {
                     println!("{:04X}: 44        LSRA", pc0);
@@ -3252,7 +3265,6 @@ impl Cpu {
         consumed + ic
     }
 }
-
 pub fn regs_snapshot(cpu: &Cpu) -> Registers {
     cpu.r
 }

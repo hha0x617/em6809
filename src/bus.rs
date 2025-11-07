@@ -34,6 +34,12 @@ impl Memory {
     }
 }
 
+impl Default for Memory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Bus for Memory {
     fn read8(&mut self, addr: u16) -> u8 {
         self.data[addr as usize]

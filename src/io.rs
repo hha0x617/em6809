@@ -105,7 +105,8 @@ impl ConsoleDev {
         }
         // ASCII fast path
         if b < 0x80 && self.utf8_need == 0 {
-            print!("{}", b as char);
+            let ch = b as char;
+            print!("{ch}");
         } else {
             // Determine expected length if starting sequence
             if self.utf8_need == 0 {
@@ -119,7 +120,7 @@ impl ConsoleDev {
             self.utf8_buf.push(b);
             if self.utf8_buf.len() >= self.utf8_need.max(1) {
                 let s = String::from_utf8_lossy(&self.utf8_buf);
-                print!("{}", s);
+                print!("{s}");
                 self.utf8_buf.clear();
                 self.utf8_need = 0;
             }
@@ -128,7 +129,7 @@ impl ConsoleDev {
         let mut need_flush = self.flush_on_newline && b == b'\n';
         if let Some(n) = self.flush_every {
             self.flush_count = self.flush_count.wrapping_add(1);
-            if self.flush_count % n == 0 {
+            if self.flush_count.is_multiple_of(n) {
                 need_flush = true;
             }
         }
@@ -163,7 +164,7 @@ impl Device for ConsoleDev {
             1 => {
                 // STATUS
                 let txrdy = 0x01u8; // always ready
-                let rxrdy = if self.rx.len() >= 1 { 0x02 } else { 0x00 };
+                let rxrdy = if !self.rx.is_empty() { 0x02 } else { 0x00 };
                 txrdy | rxrdy
             }
             2 => self.ctrl, // CTRL: bit0 RX IRQ enable, bit1 TX IRQ enable
@@ -180,9 +181,7 @@ impl Device for ConsoleDev {
                 if self.tee_stderr {
                     let _ = writeln!(
                         std::io::stderr(),
-                        "[console-tx] addr={:04X} data={:02X}",
-                        addr,
-                        data
+                        "[console-tx] addr={addr:04X} data={data:02X}"
                     );
                 }
                 self.push_stdout_byte(data);
@@ -294,15 +293,39 @@ impl BlockDev {
     pub fn set_image(&mut self, data: Vec<u8>) {
         self.image = data;
     }
-    pub fn set_irq_hold_cycles(&mut self, n: u32) { self.irq_hold_cycles = n; }
-    pub fn set_irq_enable(&mut self, on: bool) { self.irq_enable = on; }
-    pub fn set_firq(&mut self, on: bool) { self.use_firq = on; }
+    pub fn set_irq_hold_cycles(&mut self, n: u32) {
+        self.irq_hold_cycles = n;
+    }
+    pub fn set_irq_enable(&mut self, on: bool) {
+        self.irq_enable = on;
+    }
+    pub fn set_firq(&mut self, on: bool) {
+        self.use_firq = on;
+    }
     fn contains_reg(&self, addr: u16) -> bool {
         addr.wrapping_sub(self.base) < 8
     }
-    fn set_status_busy(&mut self, on: bool) { if on { self.status |= 0x01; } else { self.status &= !0x01; } }
-    fn set_status_drdy(&mut self, on: bool) { if on { self.status |= 0x02; } else { self.status &= !0x02; } }
-    fn set_status_err(&mut self, on: bool) { if on { self.status |= 0x04; } else { self.status &= !0x04; } }
+    fn set_status_busy(&mut self, on: bool) {
+        if on {
+            self.status |= 0x01;
+        } else {
+            self.status &= !0x01;
+        }
+    }
+    fn set_status_drdy(&mut self, on: bool) {
+        if on {
+            self.status |= 0x02;
+        } else {
+            self.status &= !0x02;
+        }
+    }
+    fn set_status_err(&mut self, on: bool) {
+        if on {
+            self.status |= 0x04;
+        } else {
+            self.status &= !0x04;
+        }
+    }
     #[allow(dead_code)]
     fn image_len_sectors(&self) -> u64 {
         (self.image.len() as u64) / (self.sector_size as u64)
@@ -318,7 +341,9 @@ impl BlockDev {
             self.buf.copy_from_slice(&self.image[start..end]);
         } else {
             // Out of range: zero-fill and mark error
-            for b in self.buf.iter_mut() { *b = 0; }
+            for b in self.buf.iter_mut() {
+                *b = 0;
+            }
             self.set_status_err(true);
         }
         self.buf_idx = 0;
@@ -340,7 +365,13 @@ impl BlockDev {
             self.image[start..end].copy_from_slice(&self.buf);
             if let Some(path) = &self.backing_path {
                 // Attempt to mirror the written sector to the backing file
-                if let Ok(mut f) = OpenOptions::new().read(true).write(true).create(true).open(path) {
+                if let Ok(mut f) = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .truncate(false)
+                    .create(true)
+                    .open(path)
+                {
                     if let Ok(meta) = f.metadata() {
                         if meta.len() < end as u64 {
                             // Extend file to required size
@@ -349,9 +380,9 @@ impl BlockDev {
                             }
                         }
                     }
-                    if f.seek(SeekFrom::Start(start as u64)).is_err() {
-                        io_error = true;
-                    } else if f.write_all(&self.buf).is_err() {
+                    if f.seek(SeekFrom::Start(start as u64)).is_err()
+                        || f.write_all(&self.buf).is_err()
+                    {
                         io_error = true;
                     }
                 } else {
@@ -370,7 +401,9 @@ impl BlockDev {
 }
 
 impl Device for BlockDev {
-    fn contains(&self, addr: u16) -> bool { self.contains_reg(addr) }
+    fn contains(&self, addr: u16) -> bool {
+        self.contains_reg(addr)
+    }
     fn read8(&mut self, addr: u16) -> u8 {
         let off = addr.wrapping_sub(self.base);
         match off {
@@ -389,15 +422,23 @@ impl Device for BlockDev {
                             self.set_status_drdy(false);
                             self.op_read = false;
                             // Completed read transfer -> pulse IRQ hold
-                            if self.irq_enable { self.irq_countdown = self.irq_hold_cycles; }
+                            if self.irq_enable {
+                                self.irq_countdown = self.irq_hold_cycles;
+                            }
                         }
                     }
                     b
-                } else { 0x00 }
+                } else {
+                    0x00
+                }
             }
-            1 => { let s = self.status; self.set_status_err(false); s }, // STATUS read clears ERR
+            1 => {
+                let s = self.status;
+                self.set_status_err(false);
+                s
+            } // STATUS read clears ERR
             2 => self.last_cmd, // COMMAND (readback)
-            3 => self.sec_cnt, // SECCNT (readback)
+            3 => self.sec_cnt,  // SECCNT (readback)
             4 => (self.lba & 0x000000FF) as u8,
             5 => ((self.lba >> 8) & 0xFF) as u8,
             6 => ((self.lba >> 16) & 0xFF) as u8,
@@ -418,7 +459,8 @@ impl Device for BlockDev {
                         if self.buf_idx >= self.sector_size {
                             self.write_buf_to_sector();
                             self.lba = self.lba.wrapping_add(1);
-                            self.xfer_remaining = self.xfer_remaining.saturating_sub(self.sector_size);
+                            self.xfer_remaining =
+                                self.xfer_remaining.saturating_sub(self.sector_size);
                             // Prepare for next sector if more remains
                             if self.xfer_remaining > 0 {
                                 // Buffer will be refilled by further DATA writes
@@ -427,7 +469,9 @@ impl Device for BlockDev {
                             } else {
                                 self.op_write = false;
                                 self.set_status_busy(false);
-                                if self.irq_enable { self.irq_countdown = self.irq_hold_cycles; }
+                                if self.irq_enable {
+                                    self.irq_countdown = self.irq_hold_cycles;
+                                }
                             }
                         }
                     }
@@ -439,14 +483,16 @@ impl Device for BlockDev {
                 self.last_cmd = data;
                 match data {
                     0x00 => { /* NOP */ }
-                    0x01 => { // READ one sector
+                    0x01 => {
+                        // READ one sector
                         let cnt = core::cmp::max(1u8, self.sec_cnt) as usize;
                         self.xfer_remaining = cnt.saturating_mul(self.sector_size);
                         self.op_read = true;
                         self.op_write = false;
                         self.read_sector_into_buf();
                     }
-                    0x02 => { // WRITE one sector (commit current buffer)
+                    0x02 => {
+                        // WRITE one sector (commit current buffer)
                         let cnt = core::cmp::max(1u8, self.sec_cnt) as usize;
                         self.xfer_remaining = cnt.saturating_mul(self.sector_size);
                         self.op_write = true;
@@ -456,7 +502,8 @@ impl Device for BlockDev {
                         if self.buf_idx >= self.sector_size {
                             self.write_buf_to_sector();
                             self.lba = self.lba.wrapping_add(1);
-                            self.xfer_remaining = self.xfer_remaining.saturating_sub(self.sector_size);
+                            self.xfer_remaining =
+                                self.xfer_remaining.saturating_sub(self.sector_size);
                             self.buf.fill(0);
                             self.buf_idx = 0;
                         }
@@ -477,21 +524,35 @@ impl Device for BlockDev {
                     }
                 }
             }
-            3 => { self.sec_cnt = if data == 0 { 1 } else { data }; }
-            4 => { self.lba = (self.lba & 0xFFFFFF00) | (data as u32); }
-            5 => { self.lba = (self.lba & 0xFFFF00FF) | ((data as u32) << 8); }
-            6 => { self.lba = (self.lba & 0xFF00FFFF) | ((data as u32) << 16); }
-            7 => { self.lba = (self.lba & 0x00FFFFFF) | ((data as u32) << 24); }
+            3 => {
+                self.sec_cnt = if data == 0 { 1 } else { data };
+            }
+            4 => {
+                self.lba = (self.lba & 0xFFFFFF00) | (data as u32);
+            }
+            5 => {
+                self.lba = (self.lba & 0xFFFF00FF) | ((data as u32) << 8);
+            }
+            6 => {
+                self.lba = (self.lba & 0xFF00FFFF) | ((data as u32) << 16);
+            }
+            7 => {
+                self.lba = (self.lba & 0x00FFFFFF) | ((data as u32) << 24);
+            }
             8 => {
                 // CONTROL: bit0 IRQ_EN, bit1 FIRQ, bit2 clear ERR
                 self.irq_enable = (data & 0x01) != 0;
                 self.use_firq = (data & 0x02) != 0;
-                if (data & 0x04) != 0 { self.set_status_err(false); }
+                if (data & 0x04) != 0 {
+                    self.set_status_err(false);
+                }
             }
             _ => {}
         }
     }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
     fn irq_lines(&mut self) -> (bool, bool, bool) {
         // IRQ when DRDY (read data available) or ERR set, or when a write completes (signaled by op_write false and last_cmd==0x02 just finished).
         let drdy = (self.status & 0x02) != 0;
@@ -504,7 +565,11 @@ impl Device for BlockDev {
             self.irq_countdown -= 1;
             on = true;
         }
-        if self.use_firq { (false, on, false) } else { (false, false, on) }
+        if self.use_firq {
+            (false, on, false)
+        } else {
+            (false, false, on)
+        }
     }
 }
 
@@ -525,17 +590,39 @@ pub struct GpioDev {
 
 impl GpioDev {
     pub fn new(base: u16, bits: u8) -> Self {
-        Self { base, bits: bits.min(32), out: 0, dir: 0xFFFF_FFFF, in_mask: 0 }
+        Self {
+            base,
+            bits: bits.min(32),
+            out: 0,
+            dir: 0xFFFF_FFFF,
+            in_mask: 0,
+        }
     }
-    pub fn get_state(&self) -> (u32, u32, u8) { (self.out, self.dir, self.bits) }
-    pub fn set_out(&mut self, mask: u32) { self.out = mask & Self::mask_for(self.bits); }
-    pub fn set_dir(&mut self, mask: u32) { self.dir = mask & Self::mask_for(self.bits); }
-    pub fn set_inputs(&mut self, mask: u32) { self.in_mask = mask & Self::mask_for(self.bits); }
-    fn mask_for(bits: u8) -> u32 { if bits >= 32 { 0xFFFF_FFFF } else { (1u32 << bits) - 1 } }
+    pub fn get_state(&self) -> (u32, u32, u8) {
+        (self.out, self.dir, self.bits)
+    }
+    pub fn set_out(&mut self, mask: u32) {
+        self.out = mask & Self::mask_for(self.bits);
+    }
+    pub fn set_dir(&mut self, mask: u32) {
+        self.dir = mask & Self::mask_for(self.bits);
+    }
+    pub fn set_inputs(&mut self, mask: u32) {
+        self.in_mask = mask & Self::mask_for(self.bits);
+    }
+    fn mask_for(bits: u8) -> u32 {
+        if bits >= 32 {
+            0xFFFF_FFFF
+        } else {
+            (1u32 << bits) - 1
+        }
+    }
 }
 
 impl Device for GpioDev {
-    fn contains(&self, addr: u16) -> bool { addr.wrapping_sub(self.base) < 4 }
+    fn contains(&self, addr: u16) -> bool {
+        addr.wrapping_sub(self.base) < 4
+    }
     fn read8(&mut self, addr: u16) -> u8 {
         match addr.wrapping_sub(self.base) {
             0 => (self.out & 0xFF) as u8,
@@ -551,19 +638,34 @@ impl Device for GpioDev {
     }
     fn write8(&mut self, addr: u16, data: u8) {
         match addr.wrapping_sub(self.base) {
-            0 => { self.out = (self.out & !0xFF) | (data as u32); if GPIO_LOG.load(Ordering::SeqCst) { eprintln!("[gpio] OUT @${:04X} <= ${:02X}", self.base, data); } }
+            0 => {
+                self.out = (self.out & !0xFF) | (data as u32);
+                if GPIO_LOG.load(Ordering::SeqCst) {
+                    eprintln!("[gpio] OUT @${:04X} <= ${:02X}", self.base, data);
+                }
+            }
             1 => { /* read-only */ }
-            2 => { self.dir = (self.dir & !0xFF) | (data as u32); }
-            3 => { if (data & 0x01) != 0 { self.in_mask = 0; } }
+            2 => {
+                self.dir = (self.dir & !0xFF) | (data as u32);
+            }
+            3 => {
+                if (data & 0x01) != 0 {
+                    self.in_mask = 0;
+                }
+            }
             _ => {}
         }
     }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 // Debug logging toggle for GPIO writes
 static GPIO_LOG: AtomicBool = AtomicBool::new(false);
-pub fn set_gpio_log(on: bool) { GPIO_LOG.store(on, Ordering::SeqCst); }
+pub fn set_gpio_log(on: bool) {
+    GPIO_LOG.store(on, Ordering::SeqCst);
+}
 
 pub struct IoBus<B: Bus> {
     inner: B,
@@ -582,7 +684,7 @@ impl<B: Bus> IoBus<B> {
             gpio_dirty: false,
             mem_watch_start: 0,
             mem_watch_len: 0,
-            mem_dirty: false
+            mem_dirty: false,
         }
     }
     pub fn add_device<D: Device + 'static>(&mut self, dev: D) {
@@ -612,7 +714,9 @@ impl<B: Bus> IoBus<B> {
             }
         }
     }
-    pub fn inner_any_mut(&mut self) -> &mut dyn Any { self.inner.as_any_mut() }
+    pub fn inner_any_mut(&mut self) -> &mut dyn Any {
+        self.inner.as_any_mut()
+    }
     pub fn with_gpio_mut<F: FnOnce(&mut GpioDev)>(&mut self, f: F) {
         for d in self.devices.iter_mut() {
             if let Some(g) = d.as_any_mut().downcast_mut::<GpioDev>() {
@@ -622,14 +726,24 @@ impl<B: Bus> IoBus<B> {
         }
     }
     pub fn take_gpio_dirty(&mut self) -> bool {
-        if self.gpio_dirty { self.gpio_dirty = false; true } else { false }
+        if self.gpio_dirty {
+            self.gpio_dirty = false;
+            true
+        } else {
+            false
+        }
     }
     pub fn set_mem_watch(&mut self, start: u16, len: usize) {
         self.mem_watch_start = start;
         self.mem_watch_len = len;
     }
     pub fn take_mem_dirty(&mut self) -> bool {
-        if self.mem_dirty { self.mem_dirty = false; true } else { false }
+        if self.mem_dirty {
+            self.mem_dirty = false;
+            true
+        } else {
+            false
+        }
     }
     pub fn with_timer_mut<F: FnOnce(&mut crate::timer::TimerDev)>(&mut self, f: F) {
         for d in self.devices.iter_mut() {
@@ -655,14 +769,22 @@ impl<B: Bus + 'static> Bus for IoBus<B> {
             if d.contains(addr) {
                 if let Some(g) = d.as_any_mut().downcast_mut::<GpioDev>() {
                     let off = addr.wrapping_sub(g.base);
-                    if off == 0 || off == 2 { self.gpio_dirty = true; }
+                    if off == 0 || off == 2 {
+                        self.gpio_dirty = true;
+                    }
                 }
                 // mark mem dirty if falls within watch
                 if self.mem_watch_len > 0 {
                     let s = self.mem_watch_start;
                     let e = s.wrapping_add(self.mem_watch_len as u16);
-                    let in_range = if s <= e { addr >= s && addr < e } else { addr >= s || addr < e };
-                    if in_range { self.mem_dirty = true; }
+                    let in_range = if s <= e {
+                        addr >= s && addr < e
+                    } else {
+                        addr >= s || addr < e
+                    };
+                    if in_range {
+                        self.mem_dirty = true;
+                    }
                 }
                 d.write8(addr, data);
                 return;
@@ -672,8 +794,14 @@ impl<B: Bus + 'static> Bus for IoBus<B> {
         if self.mem_watch_len > 0 {
             let s = self.mem_watch_start;
             let e = s.wrapping_add(self.mem_watch_len as u16);
-            let in_range = if s <= e { addr >= s && addr < e } else { addr >= s || addr < e };
-            if in_range { self.mem_dirty = true; }
+            let in_range = if s <= e {
+                addr >= s && addr < e
+            } else {
+                addr >= s || addr < e
+            };
+            if in_range {
+                self.mem_dirty = true;
+            }
         }
         self.inner.write8(addr, data)
     }

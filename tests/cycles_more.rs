@@ -59,7 +59,7 @@ fn pshs_puls_cycles_and_data() {
     cpu.step(&mut mem, false); // PSHS
     assert_eq!(cpu.cycles, 5 + 4);
     assert_eq!(cpu.r.s, 0x0100 - 4);
-    let s = cpu.r.s as u16;
+    let s = cpu.r.s;
     // Push order in implementation: DP, B, A, CC
     assert_eq!(mem.read_slice(s, 4), &[0xAA, 0x12, 0x34, 0x5E]); // note: stack grows downward; top at lowest address
     cpu.step(&mut mem, false); // PULS

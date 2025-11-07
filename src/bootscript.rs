@@ -31,6 +31,7 @@ pub enum Trigger {
 pub fn parse_boot_script(s: &str) -> Result<Vec<Trigger>, String> {
     let mut out: Vec<Trigger> = Vec::new();
     for (lineno, raw) in s.lines().enumerate() {
+        let line_no = lineno + 1;
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
             continue;
@@ -40,29 +41,29 @@ pub fn parse_boot_script(s: &str) -> Result<Vec<Trigger>, String> {
         match kind {
             "on_pc" => {
                 let Some(addr_s) = parts.next() else {
-                    return Err(format!("Line {}: missing address", lineno + 1));
+                    return Err(format!("Line {line_no}: missing address"));
                 };
                 let addr = parse_hex_or_dec_u16(addr_s)
-                    .ok_or_else(|| format!("Line {}: bad addr", lineno + 1))?;
+                    .ok_or_else(|| format!("Line {line_no}: bad addr"))?;
                 let Some(cmd) = parts.next() else {
-                    return Err(format!("Line {}: missing command", lineno + 1));
+                    return Err(format!("Line {line_no}: missing command"));
                 };
-                let act = parse_action(cmd, &mut parts, lineno + 1)?;
+                let act = parse_action(cmd, &mut parts, line_no)?;
                 out.push(Trigger::OnPc(addr, act));
             }
             "on_step" => {
                 let Some(n_s) = parts.next() else {
-                    return Err(format!("Line {}: missing step", lineno + 1));
+                    return Err(format!("Line {line_no}: missing step"));
                 };
-                let n = parse_hex_or_dec_u64(n_s)
-                    .ok_or_else(|| format!("Line {}: bad step", lineno + 1))?;
+                let n =
+                    parse_hex_or_dec_u64(n_s).ok_or_else(|| format!("Line {line_no}: bad step"))?;
                 let Some(cmd) = parts.next() else {
-                    return Err(format!("Line {}: missing command", lineno + 1));
+                    return Err(format!("Line {line_no}: missing command"));
                 };
-                let act = parse_action(cmd, &mut parts, lineno + 1)?;
+                let act = parse_action(cmd, &mut parts, line_no)?;
                 out.push(Trigger::OnStep(n, act));
             }
-            _ => return Err(format!("Line {}: unknown directive {}", lineno + 1, kind)),
+            _ => return Err(format!("Line {line_no}: unknown directive {kind}")),
         }
     }
     Ok(out)
@@ -76,7 +77,7 @@ fn parse_action<'a, I: Iterator<Item = &'a str>>(
     match cmd {
         "mode" => {
             let Some(m) = parts.next() else {
-                return Err(format!("Line {}: missing mode", lineno));
+                return Err(format!("Line {lineno}: missing mode"));
             };
             Ok(Action::Mode(matches!(
                 m.to_lowercase().as_str(),
@@ -85,103 +86,110 @@ fn parse_action<'a, I: Iterator<Item = &'a str>>(
         }
         "prot" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing prot", lineno));
+                return Err(format!("Line {lineno}: missing prot"));
             };
-            let pv = parse_hex_or_dec_u8(v).ok_or_else(|| format!("Line {}: bad prot", lineno))?;
+            let pv = parse_hex_or_dec_u8(v).ok_or_else(|| format!("Line {lineno}: bad prot"))?;
             Ok(Action::Prot(pv))
         }
         "map" => {
             let Some(pf) = parts.next() else {
-                return Err(format!("Line {}: missing map", lineno));
+                return Err(format!("Line {lineno}: missing map"));
             };
             let Some(eq) = pf.find('=') else {
-                return Err(format!("Line {}: map expects P=F", lineno));
+                return Err(format!("Line {lineno}: map expects P=F"));
             };
             let (p, f) = pf.split_at(eq);
             let f = &f[1..];
             let page =
-                parse_hex_or_dec_usize(p).ok_or_else(|| format!("Line {}: bad page", lineno))?;
+                parse_hex_or_dec_usize(p).ok_or_else(|| format!("Line {lineno}: bad page"))?;
             let frame =
-                parse_hex_or_dec_u16(f).ok_or_else(|| format!("Line {}: bad frame", lineno))?;
+                parse_hex_or_dec_u16(f).ok_or_else(|| format!("Line {lineno}: bad frame"))?;
             Ok(Action::Map(page, frame))
         }
         "attr" => {
             let Some(pv) = parts.next() else {
-                return Err(format!("Line {}: missing attr", lineno));
+                return Err(format!("Line {lineno}: missing attr"));
             };
             let Some(eq) = pv.find('=') else {
-                return Err(format!("Line {}: attr expects P=V", lineno));
+                return Err(format!("Line {lineno}: attr expects P=V"));
             };
             let (p, v) = pv.split_at(eq);
             let v = &v[1..];
             let page =
-                parse_hex_or_dec_usize(p).ok_or_else(|| format!("Line {}: bad page", lineno))?;
-            let val =
-                parse_hex_or_dec_u8(v).ok_or_else(|| format!("Line {}: bad value", lineno))?;
+                parse_hex_or_dec_usize(p).ok_or_else(|| format!("Line {lineno}: bad page"))?;
+            let val = parse_hex_or_dec_u8(v).ok_or_else(|| format!("Line {lineno}: bad value"))?;
             Ok(Action::Attr(page, val))
         }
         "con_ctrl" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing con_ctrl", lineno));
+                return Err(format!("Line {lineno}: missing con_ctrl"));
             };
             let pv =
-                parse_hex_or_dec_u8(v).ok_or_else(|| format!("Line {}: bad con_ctrl", lineno))?;
+                parse_hex_or_dec_u8(v).ok_or_else(|| format!("Line {lineno}: bad con_ctrl"))?;
             Ok(Action::ConCtrl(pv))
         }
         "con_rx_wm" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing con_rx_wm", lineno));
+                return Err(format!("Line {lineno}: missing con_rx_wm"));
             };
-            let pv = parse_hex_or_dec_usize(v)
-                .ok_or_else(|| format!("Line {}: bad con_rx_wm", lineno))?;
+            let pv =
+                parse_hex_or_dec_usize(v).ok_or_else(|| format!("Line {lineno}: bad con_rx_wm"))?;
             Ok(Action::ConRxWm(pv))
         }
         "con_irq_hold" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing con_irq_hold", lineno));
+                return Err(format!("Line {lineno}: missing con_irq_hold"));
             };
             let pv = parse_hex_or_dec_u64(v)
-                .ok_or_else(|| format!("Line {}: bad con_irq_hold", lineno))?
+                .ok_or_else(|| format!("Line {lineno}: bad con_irq_hold"))?
                 as u32;
             Ok(Action::ConIrqHold(pv))
         }
         "con_firq" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing con_firq", lineno));
+                return Err(format!("Line {lineno}: missing con_firq"));
             };
             let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
             Ok(Action::ConFirq(on))
         }
         "blk_irq" => {
-            let Some(v) = parts.next() else { return Err(format!("Line {}: missing blk_irq", lineno)); };
+            let Some(v) = parts.next() else {
+                return Err(format!("Line {lineno}: missing blk_irq"));
+            };
             let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
             Ok(Action::BlkIrq(on))
         }
         "blk_firq" => {
-            let Some(v) = parts.next() else { return Err(format!("Line {}: missing blk_firq", lineno)); };
+            let Some(v) = parts.next() else {
+                return Err(format!("Line {lineno}: missing blk_firq"));
+            };
             let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
             Ok(Action::BlkFirq(on))
         }
         "blk_irq_hold" => {
-            let Some(v) = parts.next() else { return Err(format!("Line {}: missing blk_irq_hold", lineno)); };
-            let pv = parse_hex_or_dec_u64(v).ok_or_else(|| format!("Line {}: bad blk_irq_hold", lineno))? as u32;
+            let Some(v) = parts.next() else {
+                return Err(format!("Line {lineno}: missing blk_irq_hold"));
+            };
+            let pv = parse_hex_or_dec_u64(v)
+                .ok_or_else(|| format!("Line {lineno}: bad blk_irq_hold"))?
+                as u32;
             Ok(Action::BlkIrqHold(pv))
         }
         "irq_mask" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing irq_mask", lineno));
+                return Err(format!("Line {lineno}: missing irq_mask"));
             };
             let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
             Ok(Action::IrqMask(on))
         }
         "firq_mask" => {
             let Some(v) = parts.next() else {
-                return Err(format!("Line {}: missing firq_mask", lineno));
+                return Err(format!("Line {lineno}: missing firq_mask"));
             };
             let on = matches!(v.to_lowercase().as_str(), "1" | "on" | "true" | "yes");
             Ok(Action::FirqMask(on))
         }
-        other => Err(format!("Line {}: unknown action {}", lineno, other)),
+        other => Err(format!("Line {lineno}: unknown action {other}")),
     }
 }
 
@@ -258,7 +266,7 @@ fn apply_action<B: Bus + ?Sized>(
     bus: &mut B,
     regs_base: u16,
     act: &Action,
-    mut cpu_opt: Option<&mut Cpu>,
+    cpu_opt: Option<&mut Cpu>,
 ) {
     match act {
         Action::Mode(sys) => {
@@ -302,7 +310,7 @@ fn apply_action<B: Bus + ?Sized>(
             }
         }
         Action::IrqMask(on) => {
-            if let Some(cpu) = cpu_opt.as_deref_mut() {
+            if let Some(cpu) = cpu_opt {
                 if *on {
                     cpu.r.cc |= 0x10;
                 } else {
@@ -311,7 +319,7 @@ fn apply_action<B: Bus + ?Sized>(
             }
         }
         Action::FirqMask(on) => {
-            if let Some(cpu) = cpu_opt.as_deref_mut() {
+            if let Some(cpu) = cpu_opt {
                 if *on {
                     cpu.r.cc |= 0x40;
                 } else {
@@ -320,16 +328,25 @@ fn apply_action<B: Bus + ?Sized>(
             }
         }
         Action::BlkIrq(on) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() { iom.with_block_mut(|b| b.set_irq_enable(*on)); }
-            else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() { iom.with_block_mut(|b| b.set_irq_enable(*on)); }
+            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                iom.with_block_mut(|b| b.set_irq_enable(*on));
+            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                iom.with_block_mut(|b| b.set_irq_enable(*on));
+            }
         }
         Action::BlkFirq(on) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() { iom.with_block_mut(|b| b.set_firq(*on)); }
-            else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() { iom.with_block_mut(|b| b.set_firq(*on)); }
+            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                iom.with_block_mut(|b| b.set_firq(*on));
+            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                iom.with_block_mut(|b| b.set_firq(*on));
+            }
         }
         Action::BlkIrqHold(n) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() { iom.with_block_mut(|b| b.set_irq_hold_cycles(*n)); }
-            else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() { iom.with_block_mut(|b| b.set_irq_hold_cycles(*n)); }
+            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                iom.with_block_mut(|b| b.set_irq_hold_cycles(*n));
+            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                iom.with_block_mut(|b| b.set_irq_hold_cycles(*n));
+            }
         }
     }
 }

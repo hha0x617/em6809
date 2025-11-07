@@ -70,3 +70,30 @@ The following variables affect the GUI register viewer (when building with `--fe
 
 - `EM6809_GUI_FONT`: Path to a TTF/OTF/TTC font to prefer (helps render Japanese glyphs).
 - `EM6809_LANG`: Force listing context‑menu labels to Japanese (`ja`) or English (`en`); auto‑detected when unset.
+
+Linux client-side decorations (CSD):
+
+- `EM6809_CSD`: When set to `1` or `true` on Linux, enables a custom client‑side decorated header (icon/title, Help→About, Minimize/Maximize/Close). Example: `EM6809_CSD=1 cargo run --release -- samples/echo/echo.s19 --format srec`.
+
+Additional (About dialog icon on Linux):
+
+- `EM6809_ABOUT_ICON`: Absolute path to a PNG image used for the About dialog icon on Linux.
+  - If set and readable, the PNG is loaded and resized to 32×32.
+  - If unset, the app looks for `assets/app_icon_32.png`, then `assets/icon32.png`, then `assets/icon.png`.
+  - If no PNG is found, a vector fallback is drawn (rounded rectangle with a lowercase "e").
+
+## GUI menus
+
+- Help → About em6809…: shows version and license. On Windows and macOS, the platform’s window/app icon is used. On Linux, the icon is loaded via `EM6809_ABOUT_ICON`/assets as above, with a vector fallback when missing.
+
+## GPIO and Timer options (CLI)
+
+- `--gpio-bits N`: Number of GPIO LEDs (default 8)
+- `--gpio-on-color 0xRRGGBB`: LED ON color (e.g., `0xFFD000`)
+- `--timer 0xADDR`: Attach periodic timer at base (e.g., `0xFF10`)
+- `--timer-reload 0xNNNN`: Timer period in instruction ticks
+- `--timer-rate HZ`: Target rate in Hz; combined with `--timer-ips` to derive reload
+- `--timer-ips N`: Estimated instructions/sec for deriving reload from `--timer-rate`
+- `--timer-irq`: Enable timer IRQ; `--timer-firq`: route to FIRQ instead
+- `--timer-start`: Start timer immediately
+- `--run`: Start unpaused

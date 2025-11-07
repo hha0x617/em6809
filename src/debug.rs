@@ -1,3 +1,4 @@
+#![allow(clippy::uninlined_format_args)]
 use crate::bus::{Bus, Memory};
 use crate::cpu::Cpu;
 
@@ -21,31 +22,34 @@ pub fn dump_memory(mem: &Memory, start: u16, len: usize) {
     let bytes = mem.read_slice(start, len);
     let mut addr = start as usize;
     for chunk in bytes.chunks(16) {
-        print!("{:04X}:", addr as u16);
+        let addr16 = addr as u16;
+        print!("{addr16:04X}:");
         for b in chunk {
-            print!(" {:02X}", b);
+            print!(" {b:02X}");
         }
-        println!("");
+        println!();
         addr += chunk.len();
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn dump_memory_bus<B: Bus + ?Sized>(bus: &mut B, start: u16, len: usize) {
     let mut addr = start;
     let mut left = len;
     while left > 0 {
-        print!("{:04X}:", addr);
+        print!("{addr:04X}:");
         let line = left.min(16);
         for i in 0..line {
             let b = bus.read8(addr.wrapping_add(i as u16));
-            print!(" {:02X}", b);
+            print!(" {b:02X}");
         }
-        println!("");
+        println!();
         addr = addr.wrapping_add(line as u16);
         left -= line;
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn dump_memory_ascii<B: Bus + ?Sized>(bus: &mut B, start: u16, len: usize) {
     let mut addr = start;
     let mut left = len;
@@ -55,7 +59,7 @@ pub fn dump_memory_ascii<B: Bus + ?Sized>(bus: &mut B, start: u16, len: usize) {
         for i in 0..line {
             bytes[i] = bus.read8(addr.wrapping_add(i as u16));
         }
-        print!("{:04X}:", addr);
+        print!("{addr:04X}:");
         for i in 0..line {
             print!(" {:02X}", bytes[i]);
         }
@@ -70,7 +74,7 @@ pub fn dump_memory_ascii<B: Bus + ?Sized>(bus: &mut B, start: u16, len: usize) {
             } else {
                 '.'
             };
-            print!("{}", ch);
+            print!("{ch}");
         }
         println!("|");
         addr = addr.wrapping_add(line as u16);

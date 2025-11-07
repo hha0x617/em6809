@@ -77,7 +77,7 @@ pub fn apply_mmu_config_from_str(mmu: &mut Mc6829, text: &str) -> Result<(), Str
                 }
             }
             _ => {
-                return Err(format!("Line {}: unknown directive: {}", lineno + 1, cmd));
+                return Err(format!("Line {}: unknown directive: {cmd}", lineno + 1));
             }
         }
     }
@@ -107,7 +107,7 @@ pub fn apply_preset(mmu: &mut Mc6829, name: &str) -> Result<(), String> {
             // WPROT_EN | NX_EN | IRQ on fault
             mmu.write8(mmu.regs_base + 0x12, 0x0B);
             // attr: page 0x00 NX, page 0x0F WPROT
-            mmu.write8(mmu.regs_base + 0x18 + 0x00, 0x04);
+            mmu.write8(mmu.regs_base + 0x18, 0x04);
             mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01);
             Ok(())
         }
@@ -117,7 +117,7 @@ pub fn apply_preset(mmu: &mut Mc6829, name: &str) -> Result<(), String> {
             mmu.identity_map_current();
             mmu.write8(mmu.regs_base + 0x11, 0x01); // system mode
             mmu.write8(mmu.regs_base + 0x12, 0x0B); // WPROT_EN | NX_EN | IRQ on fault
-            mmu.write8(mmu.regs_base + 0x18 + 0x00, 0x04); // NX on page 0
+            mmu.write8(mmu.regs_base + 0x18, 0x04); // NX on page 0
             mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01); // WPROT on vectors page
             Ok(())
         }
@@ -129,7 +129,7 @@ pub fn apply_preset(mmu: &mut Mc6829, name: &str) -> Result<(), String> {
                                                     // WPROT_EN | NX_EN | IRQ on fault
             mmu.write8(mmu.regs_base + 0x12, 0x0B);
             // Attributes: NX on page 0x00 (null), WPROT on vectors, NX on 0x0E (I/O)
-            mmu.write8(mmu.regs_base + 0x18 + 0x00, 0x04);
+            mmu.write8(mmu.regs_base + 0x18, 0x04);
             mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01);
             mmu.write8(mmu.regs_base + 0x18 + 0x0E, 0x04);
             // Map page 0x0E to a high frame (e.g., 0xFE) to isolate I/O window
@@ -152,7 +152,7 @@ pub fn apply_preset(mmu: &mut Mc6829, name: &str) -> Result<(), String> {
             mmu.set_map_entry(0x0B, 0x00C3);
             Ok(())
         }
-        other => Err(format!("Unknown preset: {}", other)),
+        other => Err(format!("Unknown preset: {other}")),
     }
 }
 

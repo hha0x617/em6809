@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use crate::bus::Bus;
 
 const PAGE_SHIFT: usize = 12; // 4KB pages
@@ -53,13 +54,25 @@ impl Mc6829 {
     pub fn set_task(&mut self, t: u8) {
         self.task = (t as usize % NUM_TASKS) as u8;
     }
-    pub fn set_log_maps(&mut self, on: bool) { self.log_maps = on; }
+    pub fn set_log_maps(&mut self, on: bool) {
+        self.log_maps = on;
+    }
     pub fn set_map_entry(&mut self, page: usize, frame: u16) {
         let t = self.task as usize;
-        if self.sys_mode { self.map_sys[t][page] = frame; } else { self.map_user[t][page] = frame; }
+        if self.sys_mode {
+            self.map_sys[t][page] = frame;
+        } else {
+            self.map_user[t][page] = frame;
+        }
         if self.log_maps {
             let mode = if self.sys_mode { "sys" } else { "user" };
-            println!("[mmu] {} task{}: P{:X} -> F{:X}", mode, self.task, page & 0x0F, frame as usize & 0xFF);
+            println!(
+                "[mmu] {} task{}: P{:X} -> F{:X}",
+                mode,
+                self.task,
+                page & 0x0F,
+                frame as usize & 0xFF
+            );
         }
     }
 
@@ -67,7 +80,11 @@ impl Mc6829 {
         let t = self.task as usize;
         let mut out = [0u16; NUM_LOG_PAGES];
         for i in 0..NUM_LOG_PAGES {
-            out[i] = if self.sys_mode { self.map_sys[t][i] } else { self.map_user[t][i] };
+            out[i] = if self.sys_mode {
+                self.map_sys[t][i]
+            } else {
+                self.map_user[t][i]
+            };
         }
         (out, self.sys_mode, self.task)
     }
@@ -77,7 +94,7 @@ impl Mc6829 {
     }
 
     fn regs_read(&mut self, addr: u16) -> u8 {
-        let off = addr.wrapping_sub(self.regs_base) as u16;
+        let off = addr.wrapping_sub(self.regs_base);
         match off as usize {
             // 0x00..0x0F: map registers for current task (8-bit frame index)
             0x00..=0x0F => {
@@ -112,7 +129,7 @@ impl Mc6829 {
     }
 
     fn regs_write(&mut self, addr: u16, data: u8) {
-        let off = addr.wrapping_sub(self.regs_base) as u16;
+        let off = addr.wrapping_sub(self.regs_base);
         match off as usize {
             0x00..=0x0F => {
                 let page = off as usize;

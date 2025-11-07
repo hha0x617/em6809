@@ -1,3 +1,4 @@
+#![allow(clippy::uninlined_format_args)]
 use crate::bus::Bus;
 
 fn r8<B: Bus + ?Sized>(bus: &mut B, addr: u16) -> u8 {

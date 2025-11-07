@@ -11,6 +11,31 @@
 - `EM6809_GUI_FONT`: 優先して使うフォントファイル（`.ttf`/`.otf`/`.ttc`）。日本語表示の文字化け回避に有効です。
 - `EM6809_LANG`: リスティング右クリックメニューの言語を強制します。`ja`（日本語）/`en`（英語）。未設定時は `LC_ALL`/`LC_MESSAGES`/`LANG`（または Windows の OS 言語）から自動判定します。
 
+追加（Linux の About ダイアログ アイコン）:
+
+- `EM6809_ABOUT_ICON`: Linux で About ダイアログに表示する PNG 画像の絶対パス。
+  - 指定時は 32×32 にリサイズして表示します。
+  - 未指定時は `assets/app_icon_32.png` → `assets/icon32.png` → `assets/icon.png` の順で探索します。
+  - いずれも見つからない場合は、角丸の背景に小文字の “e” を描画するベクタのフォールバックを表示します。
+
+## GUI メニュー
+
+- Help → About em6809…: バージョン・ライセンス表示。
+  - Windows/macOS: プラットフォームのウィンドウ/アプリのアイコンを使用します。
+  - Linux: 上記の `EM6809_ABOUT_ICON`/assets から PNG を読み込み（無い場合はベクタ フォールバック）。
+
+## GPIO / タイマ 関連オプション（CLI）
+
+- `--gpio-bits N`: GPIO LED の個数（既定 8）
+- `--gpio-on-color 0xRRGGBB`: LED ON 時の色（例: `0xFFD000`）
+- `--timer 0xADDR`: 周期タイマのベースアドレス（例: `0xFF10`）
+- `--timer-reload 0xNNNN`: タイマのリロード値（命令ティック数）
+- `--timer-rate HZ`: 目標の周波数（Hz）。`--timer-ips` と組み合わせてリロード値を導出
+- `--timer-ips N`: 1 秒あたりの命令実行数の推定値（リロード値の導出用）
+- `--timer-irq`: タイマ IRQ を有効化 / `--timer-firq`: FIRQ へ割り当て
+- `--timer-start`: タイマを直ちに開始
+- `--run`: 一時停止せず開始
+
 ## レジスタビューアの機能拡張（最近の追加）
 
 - リスティングの自動切替/フォールバック

@@ -10,13 +10,13 @@ use em6809::bus::{self, Memory};
 use em6809::config::{apply_mmu_config_from_str, apply_preset};
 use em6809::cpu::Cpu;
 use em6809::io::{BlockDev, ConsoleDev, GpioDev, IoBus};
-use em6809::timer::TimerDev;
 use em6809::loader::{self, ImageFormat, LoadedImage};
 use em6809::mmu::Mc6829;
+use em6809::timer::TimerDev;
 
 // GUI register viewer (no-op unless built with `--features gui`)
-mod regview;
 mod i18n;
+mod regview;
 
 fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
     ranges.sort_by_key(|(s, _)| *s);
@@ -185,7 +185,9 @@ mod console_mode {
 
 #[cfg(not(windows))]
 mod console_mode {
-    use libc::{c_int, tcgetattr, tcsetattr, termios, ECHO, ICANON, STDIN_FILENO, TCSANOW, VMIN, VTIME};
+    use libc::{
+        c_int, tcgetattr, tcsetattr, termios, ECHO, ICANON, STDIN_FILENO, TCSANOW, VMIN, VTIME,
+    };
 
     #[derive(Clone, Copy)]
     pub struct Prev(termios);
@@ -339,7 +341,7 @@ fn main() {
                         "bin" => Some(ImageFormat::Binary),
                         "srec" => Some(ImageFormat::Srec),
                         other => {
-                            eprintln!("Unknown format: {}", other);
+                            eprintln!("Unknown format: {other}");
                             return;
                         }
                     };
@@ -356,12 +358,18 @@ fn main() {
                 }
             }
             "--cycles" => print_cycles = true,
-            "--run" => { paused_start = false; }
+            "--run" => {
+                paused_start = false;
+            }
             // --paused is default in GUI-only mode; ignore if present
             "--paused" => {}
             "--dump-regs" => { /* ignored in GUI-only mode */ }
-            "--dump-mem" => { let _ = (args.next(), args.next()); /* ignored */ }
-            "--dump-mem-ascii" => { let _ = (args.next(), args.next()); /* ignored */ }
+            "--dump-mem" => {
+                let _ = (args.next(), args.next()); /* ignored */
+            }
+            "--dump-mem-ascii" => {
+                let _ = (args.next(), args.next()); /* ignored */
+            }
             "--disasm" => { /* removed in GUI-only mode */ }
             // --bp removed in GUI-only mode
             "--mmu" => use_mmu = true,
@@ -393,8 +401,8 @@ fn main() {
                     if let Some(eq) = v.find('=') {
                         let (p, f) = v.split_at(eq);
                         let f = &f[1..];
-                        let page = p.strip_prefix("0x").or(Some(p)).unwrap();
-                        let frame = f.strip_prefix("0x").or(Some(f)).unwrap();
+                        let page = p.strip_prefix("0x").unwrap_or(p);
+                        let frame = f.strip_prefix("0x").unwrap_or(f);
                         if let (Ok(pp), Ok(ff)) = (
                             usize::from_str_radix(page, if p.starts_with("0x") { 16 } else { 10 }),
                             u16::from_str_radix(frame, if f.starts_with("0x") { 16 } else { 10 }),
@@ -435,23 +443,40 @@ fn main() {
             }
             "--block-irq-hold" => {
                 if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<u32>() { block_irq_hold = Some(n); }
+                    if let Ok(n) = v.parse::<u32>() {
+                        block_irq_hold = Some(n);
+                    }
                 }
             }
             "--gpio" => {
-                if let Some(v) = args.next() { gpio_base = parse_hex(&v); }
+                if let Some(v) = args.next() {
+                    gpio_base = parse_hex(&v);
+                }
             }
             "--gpio-bits" => {
-                if let Some(v) = args.next() { if let Ok(n) = v.parse::<u8>() { gpio_bits = n; } }
+                if let Some(v) = args.next() {
+                    if let Ok(n) = v.parse::<u8>() {
+                        gpio_bits = n;
+                    }
+                }
             }
             "--gpio-on-color" => {
                 if let Some(v) = args.next() {
                     let s2 = v.trim();
-                    let hex = s2.strip_prefix("0x").or_else(|| s2.strip_prefix("#")).unwrap_or(s2);
-                    if hex.len() == 6 { if let Ok(n) = u32::from_str_radix(hex, 16) { gpio_on_color = Some(n & 0xFFFFFF); } }
+                    let hex = s2
+                        .strip_prefix("0x")
+                        .or_else(|| s2.strip_prefix("#"))
+                        .unwrap_or(s2);
+                    if hex.len() == 6 {
+                        if let Ok(n) = u32::from_str_radix(hex, 16) {
+                            gpio_on_color = Some(n & 0xFFFFFF);
+                        }
+                    }
                 }
             }
-            "--gpio-log" => { gpio_log = true; }
+            "--gpio-log" => {
+                gpio_log = true;
+            }
             "--console-out" => {
                 if let Some(v) = args.next() {
                     console_out_path = Some(v);
@@ -489,27 +514,49 @@ fn main() {
                 }
             }
             "--timer" => {
-                if let Some(v) = args.next() { timer_base = parse_hex(&v); }
+                if let Some(v) = args.next() {
+                    timer_base = parse_hex(&v);
+                }
             }
             "--timer-reload" => {
-                if let Some(v) = args.next() { timer_reload = parse_hex(&v); }
+                if let Some(v) = args.next() {
+                    timer_reload = parse_hex(&v);
+                }
             }
             "--timer-rate" => {
-                if let Some(v) = args.next() { if let Ok(hz) = v.parse::<u32>() { timer_rate_hz = Some(hz); } }
+                if let Some(v) = args.next() {
+                    if let Ok(hz) = v.parse::<u32>() {
+                        timer_rate_hz = Some(hz);
+                    }
+                }
             }
             "--timer-ips" => {
-                if let Some(v) = args.next() { if let Ok(n) = v.parse::<u32>() { timer_ips_est = n.max(1); } }
+                if let Some(v) = args.next() {
+                    if let Ok(n) = v.parse::<u32>() {
+                        timer_ips_est = n.max(1);
+                    }
+                }
             }
-            "--timer-irq" => { timer_irq = true; }
-            "--timer-firq" => { timer_firq = true; }
-            "--timer-start" => { timer_start = true; }
-            "--irq-log" => { irq_log = true; }
+            "--timer-irq" => {
+                timer_irq = true;
+            }
+            "--timer-firq" => {
+                timer_firq = true;
+            }
+            "--timer-start" => {
+                timer_start = true;
+            }
+            "--irq-log" => {
+                irq_log = true;
+            }
             "--mmu-map-file" => {
                 if let Some(v) = args.next() {
                     mmu_map_file = Some(v);
                 }
             }
-            "--mmu-log-maps" => { mmu_log_maps = true; }
+            "--mmu-log-maps" => {
+                mmu_log_maps = true;
+            }
             "--preset" | "--mmu-template" => {
                 if let Some(v) = args.next() {
                     preset_name = Some(v);
@@ -571,7 +618,7 @@ fn main() {
                 }
             }
             _ => {
-                eprintln!("Unknown arg: {}", arg);
+                eprintln!("Unknown arg: {arg}");
                 print_usage();
                 return;
             }
@@ -581,28 +628,28 @@ fn main() {
     let data = match fs::read(&image_path) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("Failed to read {}: {}", image_path, e);
+            eprintln!("Failed to read {image_path}: {e}");
             return;
         }
     };
 
     let inferred = if let Some(fmt) = format {
         fmt
+    } else if image_path.ends_with(".s19")
+        || image_path.ends_with(".srec")
+        || image_path.ends_with(".s1")
+    {
+        ImageFormat::Srec
     } else {
-        if image_path.ends_with(".s19")
-            || image_path.ends_with(".srec")
-            || image_path.ends_with(".s1")
-        {
-            ImageFormat::Srec
-        } else {
-            ImageFormat::Binary
-        }
+        ImageFormat::Binary
     };
 
     // Choose memory backend and build a Bus object
     let mut bus: Box<dyn bus::Bus> = if use_mmu {
         let mut mmu = Mc6829::new(mmu_phys, mmu_regs_base);
-        if mmu_log_maps { mmu.set_log_maps(true); }
+        if mmu_log_maps {
+            mmu.set_log_maps(true);
+        }
         mmu.set_task(mmu_task);
         if mmu_idmap {
             mmu.identity_map_current();
@@ -614,19 +661,19 @@ fn main() {
             match std::fs::read_to_string(path) {
                 Ok(s) => {
                     if let Err(e) = apply_mmu_config_from_str(&mut mmu, &s) {
-                        eprintln!("MMU map file error: {}", e);
+                        eprintln!("MMU map file error: {e}");
                         return;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to read {}: {}", path, e);
+                    eprintln!("Failed to read {path}: {e}");
                     return;
                 }
             }
         }
         if let Some(pname) = &preset_name {
             if let Err(e) = apply_preset(&mut mmu, pname) {
-                eprintln!("Preset error: {}", e);
+                eprintln!("Preset error: {e}");
                 return;
             }
             // Consoleの既定
@@ -651,27 +698,55 @@ fn main() {
             mmu.write8(mmu.regs_base + 0x12, 0x03);
             mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01);
         }
-        let need_iobus = console_base.is_some() || block_base.is_some() || gpio_base.is_some() || timer_base.is_some();
+        let need_iobus = console_base.is_some()
+            || block_base.is_some()
+            || gpio_base.is_some()
+            || timer_base.is_some();
         if need_iobus {
             let mut iobus = IoBus::new(mmu);
             if let Some(base) = console_base {
                 let mut con = ConsoleDev::new(base);
-                if let Some(wm) = console_rx_wm { con.set_rx_watermark(wm); }
-                if let Some(h) = console_irq_hold { con.set_irq_hold_cycles(h); }
-                if let Some(s) = &console_in { let bytes = parse_escapes(s); con.feed_bytes(&bytes); }
-                if let Some(p) = &console_out_path { con.set_out_file(p); }
-                if console_tee_stderr { con.set_tee_stderr(true); }
-                if let Some(n) = console_flush_every { con.set_flush_every(n); }
-                if console_flush_newline { con.set_flush_on_newline(true); }
-                if console_local_echo { con.set_local_echo(true); }
+                if let Some(wm) = console_rx_wm {
+                    con.set_rx_watermark(wm);
+                }
+                if let Some(h) = console_irq_hold {
+                    con.set_irq_hold_cycles(h);
+                }
+                if let Some(s) = &console_in {
+                    let bytes = parse_escapes(s);
+                    con.feed_bytes(&bytes);
+                }
+                if let Some(p) = &console_out_path {
+                    con.set_out_file(p);
+                }
+                if console_tee_stderr {
+                    con.set_tee_stderr(true);
+                }
+                if let Some(n) = console_flush_every {
+                    con.set_flush_every(n);
+                }
+                if console_flush_newline {
+                    con.set_flush_on_newline(true);
+                }
+                if console_local_echo {
+                    con.set_local_echo(true);
+                }
                 iobus.add_device(con);
             }
             if let Some(base) = block_base {
                 let mut blk = BlockDev::new(base);
-                if let Some(p) = &block_file_path { blk.set_backing_file(p); }
-                if let Some(n) = block_irq_hold { blk.set_irq_hold_cycles(n); }
-                if block_irq_enable { blk.set_irq_enable(true); }
-                if block_firq { blk.set_firq(true); }
+                if let Some(p) = &block_file_path {
+                    blk.set_backing_file(p);
+                }
+                if let Some(n) = block_irq_hold {
+                    blk.set_irq_hold_cycles(n);
+                }
+                if block_irq_enable {
+                    blk.set_irq_enable(true);
+                }
+                if block_firq {
+                    blk.set_firq(true);
+                }
                 iobus.add_device(blk);
             }
             if let Some(base) = gpio_base {
@@ -680,12 +755,27 @@ fn main() {
             }
             if let Some(base) = timer_base {
                 let mut t = TimerDev::new(base);
-                if let Some(r) = timer_reload { t.set_reload(r); }
-                else if let Some(hz) = timer_rate_hz { let ticks = (timer_ips_est / hz.max(1)).max(1); t.set_reload((ticks as u16).max(1)); }
-                if timer_irq { t.set_irq_enable(true); }
-                if timer_firq { t.set_firq(true); }
-                if timer_start { t.start(); }
-                println!("[timer] attached at ${:04X} reload=${:04X} irq={} firq={} start={}", base, if let Some(r) = timer_reload { r } else { if let Some(hz) = timer_rate_hz { ((timer_ips_est / hz.max(1)).max(1) as u16).max(1) } else { 0 } }, timer_irq, timer_firq, timer_start);
+                if let Some(r) = timer_reload {
+                    t.set_reload(r);
+                } else if let Some(hz) = timer_rate_hz {
+                    let ticks = (timer_ips_est / hz.max(1)).max(1);
+                    t.set_reload((ticks as u16).max(1));
+                }
+                if timer_irq {
+                    t.set_irq_enable(true);
+                }
+                if timer_firq {
+                    t.set_firq(true);
+                }
+                if timer_start {
+                    t.start();
+                }
+                let reload_val: u16 = timer_reload
+                    .or_else(|| {
+                        timer_rate_hz.map(|hz| ((timer_ips_est / hz.max(1)).max(1) as u16).max(1))
+                    })
+                    .unwrap_or(0);
+                println!("[timer] attached at ${base:04X} reload=${reload_val:04X} irq={timer_irq} firq={timer_firq} start={timer_start}");
                 iobus.add_device(t);
             }
             Box::new(iobus)
@@ -694,27 +784,55 @@ fn main() {
         }
     } else {
         let mem = Memory::new();
-        let need_iobus = console_base.is_some() || block_base.is_some() || gpio_base.is_some() || timer_base.is_some();
+        let need_iobus = console_base.is_some()
+            || block_base.is_some()
+            || gpio_base.is_some()
+            || timer_base.is_some();
         if need_iobus {
             let mut iobus = IoBus::new(mem);
             if let Some(base) = console_base {
                 let mut con = ConsoleDev::new(base);
-                if let Some(wm) = console_rx_wm { con.set_rx_watermark(wm); }
-                if let Some(h) = console_irq_hold { con.set_irq_hold_cycles(h); }
-                if let Some(s) = &console_in { let bytes = parse_escapes(s); con.feed_bytes(&bytes); }
-                if let Some(p) = &console_out_path { con.set_out_file(p); }
-                if console_tee_stderr { con.set_tee_stderr(true); }
-                if let Some(n) = console_flush_every { con.set_flush_every(n); }
-                if console_flush_newline { con.set_flush_on_newline(true); }
-                if console_local_echo { con.set_local_echo(true); }
+                if let Some(wm) = console_rx_wm {
+                    con.set_rx_watermark(wm);
+                }
+                if let Some(h) = console_irq_hold {
+                    con.set_irq_hold_cycles(h);
+                }
+                if let Some(s) = &console_in {
+                    let bytes = parse_escapes(s);
+                    con.feed_bytes(&bytes);
+                }
+                if let Some(p) = &console_out_path {
+                    con.set_out_file(p);
+                }
+                if console_tee_stderr {
+                    con.set_tee_stderr(true);
+                }
+                if let Some(n) = console_flush_every {
+                    con.set_flush_every(n);
+                }
+                if console_flush_newline {
+                    con.set_flush_on_newline(true);
+                }
+                if console_local_echo {
+                    con.set_local_echo(true);
+                }
                 iobus.add_device(con);
             }
             if let Some(base) = block_base {
                 let mut blk = BlockDev::new(base);
-                if let Some(p) = &block_file_path { blk.set_backing_file(p); }
-                if let Some(n) = block_irq_hold { blk.set_irq_hold_cycles(n); }
-                if block_irq_enable { blk.set_irq_enable(true); }
-                if block_firq { blk.set_firq(true); }
+                if let Some(p) = &block_file_path {
+                    blk.set_backing_file(p);
+                }
+                if let Some(n) = block_irq_hold {
+                    blk.set_irq_hold_cycles(n);
+                }
+                if block_irq_enable {
+                    blk.set_irq_enable(true);
+                }
+                if block_firq {
+                    blk.set_firq(true);
+                }
                 iobus.add_device(blk);
             }
             if let Some(base) = gpio_base {
@@ -723,12 +841,27 @@ fn main() {
             }
             if let Some(base) = timer_base {
                 let mut t = TimerDev::new(base);
-                if let Some(r) = timer_reload { t.set_reload(r); }
-                else if let Some(hz) = timer_rate_hz { let ticks = (timer_ips_est / hz.max(1)).max(1); t.set_reload((ticks as u16).max(1)); }
-                if timer_irq { t.set_irq_enable(true); }
-                if timer_firq { t.set_firq(true); }
-                if timer_start { t.start(); }
-                println!("[timer] attached at ${:04X} reload=${:04X} irq={} firq={} start={}", base, if let Some(r) = timer_reload { r } else { if let Some(hz) = timer_rate_hz { ((timer_ips_est / hz.max(1)).max(1) as u16).max(1) } else { 0 } }, timer_irq, timer_firq, timer_start);
+                if let Some(r) = timer_reload {
+                    t.set_reload(r);
+                } else if let Some(hz) = timer_rate_hz {
+                    let ticks = (timer_ips_est / hz.max(1)).max(1);
+                    t.set_reload((ticks as u16).max(1));
+                }
+                if timer_irq {
+                    t.set_irq_enable(true);
+                }
+                if timer_firq {
+                    t.set_firq(true);
+                }
+                if timer_start {
+                    t.start();
+                }
+                let reload_val: u16 = timer_reload
+                    .or_else(|| {
+                        timer_rate_hz.map(|hz| ((timer_ips_est / hz.max(1)).max(1) as u16).max(1))
+                    })
+                    .unwrap_or(0);
+                println!("[timer] attached at ${base:04X} reload=${reload_val:04X} irq={timer_irq} firq={timer_firq} start={timer_start}");
                 iobus.add_device(t);
             }
             Box::new(iobus)
@@ -739,13 +872,13 @@ fn main() {
 
     if let Some(name) = &emit_boot_template_name {
         let t = emit_boot_template(name);
-        let out = format!("{}.boot", name);
+        let out = format!("{name}.boot");
         match std::fs::write(&out, t) {
             Ok(_) => {
-                println!("Wrote {}", out);
+                println!("Wrote {out}");
             }
             Err(e) => {
-                eprintln!("Failed to write {}: {}", out, e);
+                eprintln!("Failed to write {out}: {e}");
             }
         }
         return;
@@ -760,7 +893,7 @@ fn main() {
             match loader::load_srec_bus(bus.as_mut(), &String::from_utf8_lossy(&data)) {
                 Ok(img) => img,
                 Err(e) => {
-                    eprintln!("SREC parse error: {}", e);
+                    eprintln!("SREC parse error: {e}");
                     return;
                 }
             }
@@ -768,8 +901,12 @@ fn main() {
     };
 
     let mut cpu = Cpu::new();
-    if irq_log { em6809::cpu::set_irq_log(true); }
-    if gpio_log { em6809::io::set_gpio_log(true); }
+    if irq_log {
+        em6809::cpu::set_irq_log(true);
+    }
+    if gpio_log {
+        em6809::io::set_gpio_log(true);
+    }
     cpu.reset(bus.as_mut());
     // Prefer reset vector. Only override with --pc or SREC entry if vector looks invalid.
     let reset_pc = cpu.r.pc;
@@ -865,7 +1002,7 @@ fn main() {
             while processed < total_len {
                 let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                 use core::fmt::Write as _;
-                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                let _ = writeln!(&mut out, "{cur:04X}: {text}");
                 let step = core::cmp::max(consumed as usize, 1);
                 processed += step;
                 cur = cur.wrapping_add(step as u16);
@@ -876,14 +1013,16 @@ fn main() {
         };
         #[cfg(not(windows))]
         {
-        let v = Some(regview::Viewer::create(
+            let v = Some(regview::Viewer::create(
                 "em6809 - MC6809 Software Emulator",
                 lst_path_opt,
                 lst_fallback_text,
                 start,
             ));
-        if let (Some(view), Some(rgb)) = (&v, gpio_on_color) { view.set_gpio_on_color(rgb); }
-        v
+            if let (Some(view), Some(rgb)) = (&v, gpio_on_color) {
+                view.set_gpio_on_color(rgb);
+            }
+            v
         }
         #[cfg(windows)]
         {
@@ -893,8 +1032,10 @@ fn main() {
                 lst_fallback_text,
                 start,
             ));
-        if let (Some(view), Some(rgb)) = (&v, gpio_on_color) { view.set_gpio_on_color(rgb); }
-        v
+            if let (Some(view), Some(rgb)) = (&v, gpio_on_color) {
+                view.set_gpio_on_color(rgb);
+            }
+            v
         }
     };
 
@@ -914,33 +1055,68 @@ fn main() {
         // GPIO snapshot from current bus
         let mut pushed_gpio = false;
         if let Some(iomem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
-            iomem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed_gpio = true; });
+            iomem.with_gpio_mut(|g| {
+                let (o, d, b) = g.get_state();
+                viewer.sync_gpio(true, b, o, d);
+                pushed_gpio = true;
+            });
         } else if let Some(iommu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-            iommu.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed_gpio = true; });
+            iommu.with_gpio_mut(|g| {
+                let (o, d, b) = g.get_state();
+                viewer.sync_gpio(true, b, o, d);
+                pushed_gpio = true;
+            });
         } else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
             let inner_any = wt.inner_any_mut();
             if let Some(iomem) = inner_any.downcast_mut::<IoBus<Memory>>() {
-                iomem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed_gpio = true; });
+                iomem.with_gpio_mut(|g| {
+                    let (o, d, b) = g.get_state();
+                    viewer.sync_gpio(true, b, o, d);
+                    pushed_gpio = true;
+                });
             } else if let Some(iommu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
-                iommu.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed_gpio = true; });
+                iommu.with_gpio_mut(|g| {
+                    let (o, d, b) = g.get_state();
+                    viewer.sync_gpio(true, b, o, d);
+                    pushed_gpio = true;
+                });
             }
         }
         let _ = pushed_gpio; // avoid unused in case no GPIO
-        // Timer snapshot from current bus
-        let mut t_present = false; let mut t_pending = false;
+                             // Timer snapshot from current bus
+        let mut t_present = false;
+        let mut t_pending = false;
         if let Some(iomem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
-            iomem.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; });
+            iomem.with_timer_mut(|t| {
+                let (_run, _irq, _firq, p) = t.get_state();
+                t_present = true;
+                t_pending = p;
+            });
         } else if let Some(iommu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-            iommu.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; });
+            iommu.with_timer_mut(|t| {
+                let (_run, _irq, _firq, p) = t.get_state();
+                t_present = true;
+                t_pending = p;
+            });
         } else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
             let inner_any = wt.inner_any_mut();
             if let Some(iomem) = inner_any.downcast_mut::<IoBus<Memory>>() {
-                iomem.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; });
+                iomem.with_timer_mut(|t| {
+                    let (_run, _irq, _firq, p) = t.get_state();
+                    t_present = true;
+                    t_pending = p;
+                });
             } else if let Some(iommu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
-                iommu.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; });
+                iommu.with_timer_mut(|t| {
+                    let (_run, _irq, _firq, p) = t.get_state();
+                    t_present = true;
+                    t_pending = p;
+                });
             }
         }
-        if t_present { viewer.sync_timer(true, t_pending); }
+        if t_present {
+            viewer.sync_timer(true, t_pending);
+        }
     }
 
     // Always GUI: legacy headless register dump removed.
@@ -954,12 +1130,12 @@ fn main() {
             Ok(s) => match parse_boot_script(&s) {
                 Ok(v) => Some(BootSequencer::new(v)),
                 Err(e) => {
-                    eprintln!("Boot script parse error: {}", e);
+                    eprintln!("Boot script parse error: {e}");
                     None
                 }
             },
             Err(e) => {
-                eprintln!("Failed to read boot script {}: {}", p, e);
+                eprintln!("Failed to read boot script {p}: {e}");
                 None
             }
         }
@@ -1048,7 +1224,9 @@ fn main() {
                         }
                     });
                     Some(rx)
-                } else { None };
+                } else {
+                    None
+                };
 
                 // Boot script
                 let mut boot_seq: Option<BootSequencer> = if let Some(p) = &boot_script_path_opt {
@@ -1056,16 +1234,23 @@ fn main() {
                         Ok(s) => parse_boot_script(&s).ok().map(BootSequencer::new),
                         Err(_) => None,
                     }
-                } else { None };
+                } else {
+                    None
+                };
 
                 if paused_start_flag {
                     viewer_cpu.set_paused(true);
                     let snap = regview::RegSnapshot {
-                        a: cpu_worker.r.a, b: cpu_worker.r.b,
+                        a: cpu_worker.r.a,
+                        b: cpu_worker.r.b,
                         d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
-                        x: cpu_worker.r.x, y: cpu_worker.r.y,
-                        u: cpu_worker.r.u, s: cpu_worker.r.s,
-                        dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc,
+                        x: cpu_worker.r.x,
+                        y: cpu_worker.r.y,
+                        u: cpu_worker.r.u,
+                        s: cpu_worker.r.s,
+                        dp: cpu_worker.r.dp,
+                        pc: cpu_worker.r.pc,
+                        cc: cpu_worker.r.cc,
                     };
                     viewer_cpu.push(snap);
                 }
@@ -1077,31 +1262,64 @@ fn main() {
                         break 'run_loop;
                     }
                     if viewer_cpu.is_paused() {
-                        let snap = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
+                        let snap = regview::RegSnapshot {
+                            a: cpu_worker.r.a,
+                            b: cpu_worker.r.b,
+                            d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
+                            x: cpu_worker.r.x,
+                            y: cpu_worker.r.y,
+                            u: cpu_worker.r.u,
+                            s: cpu_worker.r.s,
+                            dp: cpu_worker.r.dp,
+                            pc: cpu_worker.r.pc,
+                            cc: cpu_worker.r.cc,
+                        };
                         viewer_cpu.push(snap);
                         let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
-                        let eff_start: u16 = if mfollow { cpu_worker.r.pc & 0xFFF0 } else { mstart };
+                        let eff_start: u16 = if mfollow {
+                            cpu_worker.r.pc & 0xFFF0
+                        } else {
+                            mstart
+                        };
                         let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                         let mut a = eff_start;
-                        for _ in 0..mlen { buf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                        for _ in 0..mlen {
+                            buf.push(bus_worker.as_mut().read8(a));
+                            a = a.wrapping_add(1);
+                        }
                         viewer_cpu.update_memory_window(eff_start, buf);
-                        let (consumed, _) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc);
+                        let (consumed, _) =
+                            em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc);
                         let clen = core::cmp::max(consumed as usize, 1);
                         viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
                         // While paused, keep UI responsive and update memory pane on setting changes
                         let (mut mstart, mut mlen, mut mfollow) = viewer_cpu.get_memory_window();
                         while viewer_cpu.should_pause() {
-                            if STOP_REQUESTED.load(Ordering::SeqCst) { break 'run_loop; }
+                            if STOP_REQUESTED.load(Ordering::SeqCst) {
+                                break 'run_loop;
+                            }
                             // Detect Memory pane setting changes (Follow PC / Start / Len)
                             let (ns, nl, nf) = viewer_cpu.get_memory_window();
                             if ns != mstart || nl != mlen || nf != mfollow {
-                                mstart = ns; mlen = nl; mfollow = nf;
-                                let eff_start: u16 = if mfollow { cpu_worker.r.pc & 0xFFF0 } else { mstart };
+                                mstart = ns;
+                                mlen = nl;
+                                mfollow = nf;
+                                let eff_start: u16 = if mfollow {
+                                    cpu_worker.r.pc & 0xFFF0
+                                } else {
+                                    mstart
+                                };
                                 let mut nbuf: Vec<u8> = Vec::with_capacity(mlen);
                                 let mut a = eff_start;
-                                for _ in 0..mlen { nbuf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                for _ in 0..mlen {
+                                    nbuf.push(bus_worker.as_mut().read8(a));
+                                    a = a.wrapping_add(1);
+                                }
                                 viewer_cpu.update_memory_window(eff_start, nbuf);
-                                let (consumed, _) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc);
+                                let (consumed, _) = em6809::disasm::disasm_one_hex(
+                                    bus_worker.as_mut(),
+                                    cpu_worker.r.pc,
+                                );
                                 let clen = core::cmp::max(consumed as usize, 1);
                                 viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
                             }
@@ -1109,7 +1327,19 @@ fn main() {
                                 match cmd {
                                     regview::Command::SetPc(a) => {
                                         cpu_worker.set_pc(a);
-                                        let snap2 = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
+                                        let snap2 = regview::RegSnapshot {
+                                            a: cpu_worker.r.a,
+                                            b: cpu_worker.r.b,
+                                            d: ((cpu_worker.r.a as u16) << 8)
+                                                | (cpu_worker.r.b as u16),
+                                            x: cpu_worker.r.x,
+                                            y: cpu_worker.r.y,
+                                            u: cpu_worker.r.u,
+                                            s: cpu_worker.r.s,
+                                            dp: cpu_worker.r.dp,
+                                            pc: cpu_worker.r.pc,
+                                            cc: cpu_worker.r.cc,
+                                        };
                                         viewer_cpu.push(snap2);
                                     }
                                     regview::Command::RefreshHexListing => {
@@ -1117,7 +1347,9 @@ fn main() {
                                         let spans = coalesce_ranges(loaded_ranges_worker.clone());
                                         if let Some((start, end)) = spans
                                             .iter()
-                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .find(|(s, e)| {
+                                                *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
+                                            })
                                             .copied()
                                         {
                                             let mut cur = start;
@@ -1125,9 +1357,13 @@ fn main() {
                                             let mut processed: usize = 0;
                                             let total_len: usize = end.wrapping_sub(start) as usize;
                                             while processed < total_len {
-                                                let (consumed, text) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cur);
+                                                let (consumed, text) =
+                                                    em6809::disasm::disasm_one_hex(
+                                                        bus_worker.as_mut(),
+                                                        cur,
+                                                    );
                                                 use core::fmt::Write as _;
-                                                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                                 let step = core::cmp::max(consumed as usize, 1);
                                                 processed += step;
                                                 cur = cur.wrapping_add(step as u16);
@@ -1135,26 +1371,62 @@ fn main() {
                                             viewer_cpu.update_hex_listing(out);
                                         }
                                     }
-                                    regview::Command::RunUntil(a) => { run_until_target = Some(a); viewer_cpu.set_paused(false); break; }
+                                    regview::Command::RunUntil(a) => {
+                                        run_until_target = Some(a);
+                                        viewer_cpu.set_paused(false);
+                                        break;
+                                    }
                                     regview::Command::ApplyRegs(ns) => {
-                                        cpu_worker.r.a = ns.a; cpu_worker.r.b = ns.b; cpu_worker.r.x = ns.x; cpu_worker.r.y = ns.y; cpu_worker.r.u = ns.u; cpu_worker.r.s = ns.s; cpu_worker.r.dp = ns.dp; cpu_worker.r.pc = ns.pc; cpu_worker.r.cc = ns.cc;
-                                        let snap2 = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc };
+                                        cpu_worker.r.a = ns.a;
+                                        cpu_worker.r.b = ns.b;
+                                        cpu_worker.r.x = ns.x;
+                                        cpu_worker.r.y = ns.y;
+                                        cpu_worker.r.u = ns.u;
+                                        cpu_worker.r.s = ns.s;
+                                        cpu_worker.r.dp = ns.dp;
+                                        cpu_worker.r.pc = ns.pc;
+                                        cpu_worker.r.cc = ns.cc;
+                                        let snap2 = regview::RegSnapshot {
+                                            a: cpu_worker.r.a,
+                                            b: cpu_worker.r.b,
+                                            d: ((cpu_worker.r.a as u16) << 8)
+                                                | (cpu_worker.r.b as u16),
+                                            x: cpu_worker.r.x,
+                                            y: cpu_worker.r.y,
+                                            u: cpu_worker.r.u,
+                                            s: cpu_worker.r.s,
+                                            dp: cpu_worker.r.dp,
+                                            pc: cpu_worker.r.pc,
+                                            cc: cpu_worker.r.cc,
+                                        };
                                         viewer_cpu.push(snap2);
                                     }
                                     regview::Command::MemWrite(items) => {
-                                        for (addr, val) in items { bus_worker.as_mut().write8(addr, val); }
+                                        for (addr, val) in items {
+                                            bus_worker.as_mut().write8(addr, val);
+                                        }
                                         // After applying edits, refresh memory pane immediately
-                                        let (mstart_w, mlen_w, mfollow_w) = viewer_cpu.get_memory_window();
-                                        let eff_start_w: u16 = if mfollow_w { cpu_worker.r.pc & 0xFFF0 } else { mstart_w };
+                                        let (mstart_w, mlen_w, mfollow_w) =
+                                            viewer_cpu.get_memory_window();
+                                        let eff_start_w: u16 = if mfollow_w {
+                                            cpu_worker.r.pc & 0xFFF0
+                                        } else {
+                                            mstart_w
+                                        };
                                         let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
                                         let mut a = eff_start_w;
-                                        for _ in 0..mlen_w { nbuf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                        for _ in 0..mlen_w {
+                                            nbuf.push(bus_worker.as_mut().read8(a));
+                                            a = a.wrapping_add(1);
+                                        }
                                         viewer_cpu.update_memory_window(eff_start_w, nbuf);
                                         // Also refresh listing pane (full span) immediately
                                         let spans = coalesce_ranges(loaded_ranges_worker.clone());
                                         if let Some((start, end)) = spans
                                             .iter()
-                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .find(|(s, e)| {
+                                                *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
+                                            })
                                             .copied()
                                         {
                                             let mut cur = start;
@@ -1162,27 +1434,49 @@ fn main() {
                                             let mut processed: usize = 0;
                                             let total_len: usize = end.wrapping_sub(start) as usize;
                                             while processed < total_len {
-                                                let (consumed, text) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cur);
+                                                let (consumed, text) =
+                                                    em6809::disasm::disasm_one_hex(
+                                                        bus_worker.as_mut(),
+                                                        cur,
+                                                    );
                                                 use core::fmt::Write as _;
-                                                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                                 let step = core::cmp::max(consumed as usize, 1);
                                                 processed += step;
                                                 cur = cur.wrapping_add(step as u16);
                                             }
                                             viewer_cpu.update_hex_listing(out);
-                                            if viewer_cpu.auto_hex_on_edit() { viewer_cpu.force_hex_view(); }
+                                            if viewer_cpu.auto_hex_on_edit() {
+                                                viewer_cpu.force_hex_view();
+                                            }
                                         }
                                     }
                                     regview::Command::GpioSetOut(mask) => {
-                                        if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                                        if let Some(io_mem) = bus_worker
+                                            .as_mut()
+                                            .as_any_mut()
+                                            .downcast_mut::<IoBus<Memory>>()
+                                        {
                                             io_mem.with_gpio_mut(|g| g.set_out(mask));
-                                        } else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                                        } else if let Some(io_mmu) = bus_worker
+                                            .as_mut()
+                                            .as_any_mut()
+                                            .downcast_mut::<IoBus<Mc6829>>()
+                                        {
                                             io_mmu.with_gpio_mut(|g| g.set_out(mask));
-                                        } else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
+                                        } else if let Some(wt) = bus_worker
+                                            .as_mut()
+                                            .as_any_mut()
+                                            .downcast_mut::<bus::WriteTrack>()
+                                        {
                                             let inner_any = wt.inner_any_mut();
-                                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                            if let Some(io_mem) =
+                                                inner_any.downcast_mut::<IoBus<Memory>>()
+                                            {
                                                 io_mem.with_gpio_mut(|g| g.set_out(mask));
-                                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                                            } else if let Some(io_mmu) =
+                                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                            {
                                                 io_mmu.with_gpio_mut(|g| g.set_out(mask));
                                             }
                                         }
@@ -1197,57 +1491,226 @@ fn main() {
                         }
                     }
 
-                    if let Some(ref rxch) = rx { if let Ok(v) = rxch.try_recv() { if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.feed_console_input(&v); } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu.feed_console_input(&v); } } } }
-                    if let Some(ref mut seq) = boot_seq { seq.on_pre_step(bus_worker.as_mut(), mmu_regs_base_copy, cpu_worker.r.pc, &mut cpu_worker); }
+                    if let Some(ref rxch) = rx {
+                        if let Ok(v) = rxch.try_recv() {
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
+                                io_mem.feed_console_input(&v);
+                            } else if let Some(io_mmu) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                io_mmu.feed_console_input(&v);
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.feed_console_input(&v);
+                                } else if let Some(io_mmu) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu.feed_console_input(&v);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(ref mut seq) = boot_seq {
+                        seq.on_pre_step(
+                            bus_worker.as_mut(),
+                            mmu_regs_base_copy,
+                            cpu_worker.r.pc,
+                            &mut cpu_worker,
+                        );
+                    }
                     // Push GPIO/MMU snapshots for GUI while paused
                     if viewer_cpu.is_paused() {
                         // GPIO
-                        let mut present = false; let mut out=0u32; let mut dir=0xFFFF_FFFFu32; let mut bits=8u8;
-                        if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); out=o; dir=d; bits=b; present = true; }); }
-                        else if let Some(io_mmu_io) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu_io.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); out=o; dir=d; bits=b; present = true; }); }
-                        else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); out=o; dir=d; bits=b; present = true; }); } else if let Some(io_mmu_io) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu_io.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); out=o; dir=d; bits=b; present = true; }); } }
-                        if present { viewer_cpu.sync_gpio(true, bits, out, dir); }
+                        let mut present = false;
+                        let mut out = 0u32;
+                        let mut dir = 0xFFFF_FFFFu32;
+                        let mut bits = 8u8;
+                        if let Some(io_mem) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Memory>>()
+                        {
+                            io_mem.with_gpio_mut(|g| {
+                                let (o, d, b) = g.get_state();
+                                out = o;
+                                dir = d;
+                                bits = b;
+                                present = true;
+                            });
+                        } else if let Some(io_mmu_io) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
+                            io_mmu_io.with_gpio_mut(|g| {
+                                let (o, d, b) = g.get_state();
+                                out = o;
+                                dir = d;
+                                bits = b;
+                                present = true;
+                            });
+                        } else if let Some(wt) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<bus::WriteTrack>()
+                        {
+                            let inner_any = wt.inner_any_mut();
+                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                io_mem.with_gpio_mut(|g| {
+                                    let (o, d, b) = g.get_state();
+                                    out = o;
+                                    dir = d;
+                                    bits = b;
+                                    present = true;
+                                });
+                            } else if let Some(io_mmu_io) =
+                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                io_mmu_io.with_gpio_mut(|g| {
+                                    let (o, d, b) = g.get_state();
+                                    out = o;
+                                    dir = d;
+                                    bits = b;
+                                    present = true;
+                                });
+                            }
+                        }
+                        if present {
+                            viewer_cpu.sync_gpio(true, bits, out, dir);
+                        }
                         // MMU current map
-                        if let Some(io_mmu_io) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { let inner = io_mmu_io.inner_any_mut(); if let Some(mmu) = inner.downcast_mut::<Mc6829>() { let (map, sys, task) = mmu.snapshot_current_map(); viewer_cpu.sync_mmu(sys, task, map); } }
-                        else if let Some(mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<Mc6829>() { let (map, sys, task) = mmu.snapshot_current_map(); viewer_cpu.sync_mmu(sys, task, map); }
+                        if let Some(io_mmu_io) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
+                            let inner = io_mmu_io.inner_any_mut();
+                            if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                let (map, sys, task) = mmu.snapshot_current_map();
+                                viewer_cpu.sync_mmu(sys, task, map);
+                            }
+                        } else if let Some(mmu) =
+                            bus_worker.as_mut().as_any_mut().downcast_mut::<Mc6829>()
+                        {
+                            let (map, sys, task) = mmu.snapshot_current_map();
+                            viewer_cpu.sync_mmu(sys, task, map);
+                        }
                         // Timer state
-                        let mut t_present = false; let mut t_pending = false;
-                        if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; }); }
-                        else if let Some(io_mmu_io) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu_io.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; }); }
-                        else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; }); } else if let Some(io_mmu_io) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu_io.with_timer_mut(|t| { let (_run,_irq,_firq,p) = t.get_state(); t_present = true; t_pending = p; }); } }
-                        if t_present { viewer_cpu.sync_timer(true, t_pending); }
+                        let mut t_present = false;
+                        let mut t_pending = false;
+                        if let Some(io_mem) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Memory>>()
+                        {
+                            io_mem.with_timer_mut(|t| {
+                                let (_run, _irq, _firq, p) = t.get_state();
+                                t_present = true;
+                                t_pending = p;
+                            });
+                        } else if let Some(io_mmu_io) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
+                            io_mmu_io.with_timer_mut(|t| {
+                                let (_run, _irq, _firq, p) = t.get_state();
+                                t_present = true;
+                                t_pending = p;
+                            });
+                        } else if let Some(wt) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<bus::WriteTrack>()
+                        {
+                            let inner_any = wt.inner_any_mut();
+                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                io_mem.with_timer_mut(|t| {
+                                    let (_run, _irq, _firq, p) = t.get_state();
+                                    t_present = true;
+                                    t_pending = p;
+                                });
+                            } else if let Some(io_mmu_io) =
+                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                io_mmu_io.with_timer_mut(|t| {
+                                    let (_run, _irq, _firq, p) = t.get_state();
+                                    t_present = true;
+                                    t_pending = p;
+                                });
+                            }
+                        }
+                        if t_present {
+                            viewer_cpu.sync_timer(true, t_pending);
+                        }
                     }
                     // trace printing removed in GUI-only mode
                     cpu_worker.step(bus_worker.as_mut(), false);
                     // Dirty-driven memory window refresh while running
                     {
                         let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
-                        let eff_start: u16 = if mfollow { cpu_worker.r.pc & 0xFFF0 } else { mstart };
+                        let eff_start: u16 = if mfollow {
+                            cpu_worker.r.pc & 0xFFF0
+                        } else {
+                            mstart
+                        };
                         // Program IoBus to watch this window and refresh if dirty
-                        if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                        if let Some(io_mem) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Memory>>()
+                        {
                             io_mem.set_mem_watch(eff_start, mlen);
                             if io_mem.take_mem_dirty() {
                                 let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                                 let mut a = eff_start;
-                                for _ in 0..mlen { buf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                for _ in 0..mlen {
+                                    buf.push(bus_worker.as_mut().read8(a));
+                                    a = a.wrapping_add(1);
+                                }
                                 viewer_cpu.update_memory_window(eff_start, buf);
                             }
-                        } else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                        } else if let Some(io_mmu) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
                             io_mmu.set_mem_watch(eff_start, mlen);
                             if io_mmu.take_mem_dirty() {
                                 let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                                 let mut a = eff_start;
-                                for _ in 0..mlen { buf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                for _ in 0..mlen {
+                                    buf.push(bus_worker.as_mut().read8(a));
+                                    a = a.wrapping_add(1);
+                                }
                                 viewer_cpu.update_memory_window(eff_start, buf);
                             }
-                        } else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
+                        } else if let Some(wt) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<bus::WriteTrack>()
+                        {
                             let inner_any = wt.inner_any_mut();
                             if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
                                 io_mem.set_mem_watch(eff_start, mlen);
                                 if io_mem.take_mem_dirty() {
                                     let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                                     let mut a = eff_start;
-                                    for _ in 0..mlen { buf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                    for _ in 0..mlen {
+                                        buf.push(bus_worker.as_mut().read8(a));
+                                        a = a.wrapping_add(1);
+                                    }
                                     viewer_cpu.update_memory_window(eff_start, buf);
                                 }
                             } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
@@ -1255,7 +1718,10 @@ fn main() {
                                 if io_mmu.take_mem_dirty() {
                                     let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                                     let mut a = eff_start;
-                                    for _ in 0..mlen { buf.push(bus_worker.as_mut().read8(a)); a = a.wrapping_add(1); }
+                                    for _ in 0..mlen {
+                                        buf.push(bus_worker.as_mut().read8(a));
+                                        a = a.wrapping_add(1);
+                                    }
                                     viewer_cpu.update_memory_window(eff_start, buf);
                                 }
                             }
@@ -1264,41 +1730,138 @@ fn main() {
                     // While running, push GPIO changes on demand (dirty-driven)
                     {
                         let mut pushed = false;
-                        if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                            if io_mem.take_gpio_dirty() { io_mem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer_cpu.sync_gpio(true, b, o, d); pushed = true; }); }
-                        } else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                            if io_mmu.take_gpio_dirty() { io_mmu.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer_cpu.sync_gpio(true, b, o, d); pushed = true; }); }
-                        } else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
+                        if let Some(io_mem) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Memory>>()
+                        {
+                            if io_mem.take_gpio_dirty() {
+                                io_mem.with_gpio_mut(|g| {
+                                    let (o, d, b) = g.get_state();
+                                    viewer_cpu.sync_gpio(true, b, o, d);
+                                    pushed = true;
+                                });
+                            }
+                        } else if let Some(io_mmu) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
+                            if io_mmu.take_gpio_dirty() {
+                                io_mmu.with_gpio_mut(|g| {
+                                    let (o, d, b) = g.get_state();
+                                    viewer_cpu.sync_gpio(true, b, o, d);
+                                    pushed = true;
+                                });
+                            }
+                        } else if let Some(wt) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<bus::WriteTrack>()
+                        {
                             let inner_any = wt.inner_any_mut();
                             if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
-                                if io_mem.take_gpio_dirty() { io_mem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer_cpu.sync_gpio(true, b, o, d); pushed = true; }); }
+                                if io_mem.take_gpio_dirty() {
+                                    io_mem.with_gpio_mut(|g| {
+                                        let (o, d, b) = g.get_state();
+                                        viewer_cpu.sync_gpio(true, b, o, d);
+                                        pushed = true;
+                                    });
+                                }
                             } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
-                                if io_mmu.take_gpio_dirty() { io_mmu.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer_cpu.sync_gpio(true, b, o, d); pushed = true; }); }
+                                if io_mmu.take_gpio_dirty() {
+                                    io_mmu.with_gpio_mut(|g| {
+                                        let (o, d, b) = g.get_state();
+                                        viewer_cpu.sync_gpio(true, b, o, d);
+                                        pushed = true;
+                                    });
+                                }
                             }
                         }
                         let _ = pushed;
                     }
                     // While running, update Timer indicator on change (avoid flooding)
                     if let Some(viewer) = Some(&viewer_cpu) {
-                        let mut present = false; let mut pending = false;
-                        if let Some(io_mem) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.with_timer_mut(|t| { let (_r,_i,_f,p) = t.get_state(); present = true; pending = p; }); }
-                        else if let Some(io_mmu) = bus_worker.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.with_timer_mut(|t| { let (_r,_i,_f,p) = t.get_state(); present = true; pending = p; }); }
-                        else if let Some(wt) = bus_worker.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.with_timer_mut(|t| { let (_r,_i,_f,p) = t.get_state(); present = true; pending = p; }); } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu.with_timer_mut(|t| { let (_r,_i,_f,p) = t.get_state(); present = true; pending = p; }); } }
-                        if present {
-                            if last_timer_pending.map(|v| v != pending).unwrap_or(true) {
-                                viewer.sync_timer(true, pending);
-                                last_timer_pending = Some(pending);
+                        let mut present = false;
+                        let mut pending = false;
+                        if let Some(io_mem) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Memory>>()
+                        {
+                            io_mem.with_timer_mut(|t| {
+                                let (_r, _i, _f, p) = t.get_state();
+                                present = true;
+                                pending = p;
+                            });
+                        } else if let Some(io_mmu) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
+                            io_mmu.with_timer_mut(|t| {
+                                let (_r, _i, _f, p) = t.get_state();
+                                present = true;
+                                pending = p;
+                            });
+                        } else if let Some(wt) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<bus::WriteTrack>()
+                        {
+                            let inner_any = wt.inner_any_mut();
+                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                io_mem.with_timer_mut(|t| {
+                                    let (_r, _i, _f, p) = t.get_state();
+                                    present = true;
+                                    pending = p;
+                                });
+                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                                io_mmu.with_timer_mut(|t| {
+                                    let (_r, _i, _f, p) = t.get_state();
+                                    present = true;
+                                    pending = p;
+                                });
                             }
                         }
+                        if present && last_timer_pending.map(|v| v != pending).unwrap_or(true) {
+                            viewer.sync_timer(true, pending);
+                            last_timer_pending = Some(pending);
+                        }
                     }
-                    if viewer_cpu.is_paused() == false { let snap = regview::RegSnapshot { a: cpu_worker.r.a, b: cpu_worker.r.b, d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16), x: cpu_worker.r.x, y: cpu_worker.r.y, u: cpu_worker.r.u, s: cpu_worker.r.s, dp: cpu_worker.r.dp, pc: cpu_worker.r.pc, cc: cpu_worker.r.cc }; viewer_cpu.push(snap); }
-                    if let Some(ref mut seq) = boot_seq { seq.on_post_step(bus_worker.as_mut(), mmu_regs_base_copy); }
-                    if let Some(tgt) = run_until_target { if cpu_worker.r.pc == tgt { viewer_cpu.set_paused(true); run_until_target = None; } }
+                    if !viewer_cpu.is_paused() {
+                        let snap = regview::RegSnapshot {
+                            a: cpu_worker.r.a,
+                            b: cpu_worker.r.b,
+                            d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
+                            x: cpu_worker.r.x,
+                            y: cpu_worker.r.y,
+                            u: cpu_worker.r.u,
+                            s: cpu_worker.r.s,
+                            dp: cpu_worker.r.dp,
+                            pc: cpu_worker.r.pc,
+                            cc: cpu_worker.r.cc,
+                        };
+                        viewer_cpu.push(snap);
+                    }
+                    if let Some(ref mut seq) = boot_seq {
+                        seq.on_post_step(bus_worker.as_mut(), mmu_regs_base_copy);
+                    }
+                    if let Some(tgt) = run_until_target {
+                        if cpu_worker.r.pc == tgt {
+                            viewer_cpu.set_paused(true);
+                            run_until_target = None;
+                        }
+                    }
                     // no step counter; no CLI breakpoints in GUI-only mode
                 }
-                if let Some(prev) = prev_mode { console_mode::restore_stdin_mode(prev); }
+                if let Some(prev) = prev_mode {
+                    console_mode::restore_stdin_mode(prev);
+                }
                 // print cycles
-                if print_cycles_flag { println!("cycles: {}", cpu_worker.cycles); }
+                if print_cycles_flag {
+                    println!("cycles: {}", cpu_worker.cycles);
+                }
             });
 
             // Watch for Ctrl+C (SIGINT) and proactively request GUI close
@@ -1380,7 +1943,10 @@ fn main() {
                 let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                 {
                     let mut a = eff_start;
-                    for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
+                    for _ in 0..mlen {
+                        buf.push(bus.as_mut().read8(a));
+                        a = a.wrapping_add(1);
+                    }
                 }
                 viewer.update_memory_window(eff_start, buf);
                 let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
@@ -1398,13 +1964,19 @@ fn main() {
                     {
                         let (ns, nl, nf) = viewer.get_memory_window();
                         if ns != mstart || nl != mlen || nf != mfollow {
-                            mstart = ns; mlen = nl; mfollow = nf;
+                            mstart = ns;
+                            mlen = nl;
+                            mfollow = nf;
                             eff_start = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
                             let mut nbuf: Vec<u8> = Vec::with_capacity(mlen);
                             let mut a = eff_start;
-                            for _ in 0..mlen { nbuf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
+                            for _ in 0..mlen {
+                                nbuf.push(bus.as_mut().read8(a));
+                                a = a.wrapping_add(1);
+                            }
                             viewer.update_memory_window(eff_start, nbuf);
-                            let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                            let (consumed, _) =
+                                em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
                             clen = core::cmp::max(consumed as usize, 1);
                             viewer.set_memory_highlight(cpu.r.pc, clen);
                         }
@@ -1430,10 +2002,14 @@ fn main() {
                                 viewer.push(snap2);
                                 // refresh memory view to reflect new PC
                                 let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
-                                let eff_start2: u16 = if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                                let eff_start2: u16 =
+                                    if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
                                 let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
                                 let mut a2 = eff_start2;
-                                for _ in 0..mlen2 { buf2.push(bus.as_mut().read8(a2)); a2 = a2.wrapping_add(1); }
+                                for _ in 0..mlen2 {
+                                    buf2.push(bus.as_mut().read8(a2));
+                                    a2 = a2.wrapping_add(1);
+                                }
                                 viewer.update_memory_window(eff_start2, buf2);
                                 let (consumed, _) =
                                     em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
@@ -1454,7 +2030,7 @@ fn main() {
                                         let (consumed, text) =
                                             em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                         use core::fmt::Write as _;
-                                        let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                        let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                         let step = core::cmp::max(consumed as usize, 1);
                                         processed += step;
                                         cur = cur.wrapping_add(step as u16);
@@ -1475,9 +2051,10 @@ fn main() {
                                     let mut processed: usize = 0;
                                     let total_len: usize = end.wrapping_sub(start) as usize;
                                     while processed < total_len {
-                                        let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                        let (consumed, text) =
+                                            em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                         use core::fmt::Write as _;
-                                        let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                        let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                         let step = core::cmp::max(consumed as usize, 1);
                                         processed += step;
                                         cur = cur.wrapping_add(step as u16);
@@ -1516,12 +2093,17 @@ fn main() {
                                 viewer.push(snap2);
                                 // refresh memory view to reflect edits
                                 let (mstart3, mlen3, mfollow3) = viewer.get_memory_window();
-                                let eff_start3: u16 = if mfollow3 { cpu.r.pc & 0xFFF0 } else { mstart3 };
+                                let eff_start3: u16 =
+                                    if mfollow3 { cpu.r.pc & 0xFFF0 } else { mstart3 };
                                 let mut buf3: Vec<u8> = Vec::with_capacity(mlen3);
                                 let mut a3 = eff_start3;
-                                for _ in 0..mlen3 { buf3.push(bus.as_mut().read8(a3)); a3 = a3.wrapping_add(1); }
+                                for _ in 0..mlen3 {
+                                    buf3.push(bus.as_mut().read8(a3));
+                                    a3 = a3.wrapping_add(1);
+                                }
                                 viewer.update_memory_window(eff_start3, buf3);
-                                let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                                let (consumed, _) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
                                 let clen3 = core::cmp::max(consumed as usize, 1);
                                 viewer.set_memory_highlight(cpu.r.pc, clen3);
                                 // refresh listing for current PC span
@@ -1536,9 +2118,10 @@ fn main() {
                                     let mut processed: usize = 0;
                                     let total_len: usize = end.wrapping_sub(start) as usize;
                                     while processed < total_len {
-                                        let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                        let (consumed, text) =
+                                            em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                         use core::fmt::Write as _;
-                                        let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                        let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                         let step = core::cmp::max(consumed as usize, 1);
                                         processed += step;
                                         cur = cur.wrapping_add(step as u16);
@@ -1546,24 +2129,38 @@ fn main() {
                                     viewer.update_hex_listing(out);
                                 }
                             }
-                        regview::Command::MemWrite(items) => {
-                            for (addr, val) in items { bus.as_mut().write8(addr, val); }
-                        }
-                        regview::Command::GpioSetOut(mask) => {
-                                if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                            regview::Command::MemWrite(items) => {
+                                for (addr, val) in items {
+                                    bus.as_mut().write8(addr, val);
+                                }
+                            }
+                            regview::Command::GpioSetOut(mask) => {
+                                if let Some(io_mem) =
+                                    bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
+                                {
                                     io_mem.with_gpio_mut(|g| g.set_out(mask));
-                                } else if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                                } else if let Some(io_mmu) =
+                                    bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
+                                {
                                     io_mmu.with_gpio_mut(|g| g.set_out(mask));
-                                } else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
+                                } else if let Some(wt) =
+                                    bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
+                                {
                                     let inner_any = wt.inner_any_mut();
-                                    if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>()
+                                    {
                                         io_mem.with_gpio_mut(|g| g.set_out(mask));
-                                    } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                                    } else if let Some(io_mmu) =
+                                        inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                    {
                                         io_mmu.with_gpio_mut(|g| g.set_out(mask));
                                     }
                                 }
                             }
-                            regview::Command::UiSetGpio(_, _, _, _) | regview::Command::UiSetMmu(_, _, _) | regview::Command::UiSetTimer(_, _) | regview::Command::UiSetGpioOnColor(_) => { }
+                            regview::Command::UiSetGpio(_, _, _, _)
+                            | regview::Command::UiSetMmu(_, _, _)
+                            | regview::Command::UiSetTimer(_, _)
+                            | regview::Command::UiSetGpioOnColor(_) => {}
                         }
                     }
                     // While paused, refresh memory pane based on current controls
@@ -1612,47 +2209,62 @@ fn main() {
             }
             // trace printing removed in GUI-only mode
             cpu.step(bus.as_mut(), false);
-                    // Dirty-driven memory window refresh while running (main thread path)
-                    if let Some(viewer) = &reg_viewer {
-                        let (mstart, mlen, mfollow) = viewer.get_memory_window();
-                        let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
-                        if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                            io_mem.set_mem_watch(eff_start, mlen);
-                            if io_mem.take_mem_dirty() {
-                                let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                                let mut a = eff_start;
-                                for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
-                                viewer.update_memory_window(eff_start, buf);
+            // Dirty-driven memory window refresh while running (main thread path)
+            if let Some(viewer) = &reg_viewer {
+                let (mstart, mlen, mfollow) = viewer.get_memory_window();
+                let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
+                if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    io_mem.set_mem_watch(eff_start, mlen);
+                    if io_mem.take_mem_dirty() {
+                        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                        let mut a = eff_start;
+                        for _ in 0..mlen {
+                            buf.push(bus.as_mut().read8(a));
+                            a = a.wrapping_add(1);
+                        }
+                        viewer.update_memory_window(eff_start, buf);
+                    }
+                } else if let Some(io_mmu) =
+                    bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
+                {
+                    io_mmu.set_mem_watch(eff_start, mlen);
+                    if io_mmu.take_mem_dirty() {
+                        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                        let mut a = eff_start;
+                        for _ in 0..mlen {
+                            buf.push(bus.as_mut().read8(a));
+                            a = a.wrapping_add(1);
+                        }
+                        viewer.update_memory_window(eff_start, buf);
+                    }
+                } else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
+                {
+                    let inner_any = wt.inner_any_mut();
+                    if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                        io_mem.set_mem_watch(eff_start, mlen);
+                        if io_mem.take_mem_dirty() {
+                            let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                            let mut a = eff_start;
+                            for _ in 0..mlen {
+                                buf.push(bus.as_mut().read8(a));
+                                a = a.wrapping_add(1);
                             }
-                        } else if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                            io_mmu.set_mem_watch(eff_start, mlen);
-                            if io_mmu.take_mem_dirty() {
-                                let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                                let mut a = eff_start;
-                                for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
-                                viewer.update_memory_window(eff_start, buf);
+                            viewer.update_memory_window(eff_start, buf);
+                        }
+                    } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                        io_mmu.set_mem_watch(eff_start, mlen);
+                        if io_mmu.take_mem_dirty() {
+                            let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                            let mut a = eff_start;
+                            for _ in 0..mlen {
+                                buf.push(bus.as_mut().read8(a));
+                                a = a.wrapping_add(1);
                             }
-                        } else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
-                                io_mem.set_mem_watch(eff_start, mlen);
-                                if io_mem.take_mem_dirty() {
-                                    let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                                    let mut a = eff_start;
-                                    for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
-                                    viewer.update_memory_window(eff_start, buf);
-                                }
-                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
-                                io_mmu.set_mem_watch(eff_start, mlen);
-                                if io_mmu.take_mem_dirty() {
-                                    let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                                    let mut a = eff_start;
-                                    for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
-                                    viewer.update_memory_window(eff_start, buf);
-                                }
-                            }
+                            viewer.update_memory_window(eff_start, buf);
                         }
                     }
+                }
+            }
 
             // Update register viewer after executing instruction
             if let Some(viewer) = &reg_viewer {
@@ -1718,7 +2330,7 @@ fn main() {
                                     let (consumed, text) =
                                         em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
-                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                     let step = core::cmp::max(consumed as usize, 1);
                                     processed += step;
                                     cur = cur.wrapping_add(step as u16);
@@ -1739,9 +2351,10 @@ fn main() {
                                 let mut processed: usize = 0;
                                 let total_len: usize = end.wrapping_sub(start) as usize;
                                 while processed < total_len {
-                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
-                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                     let step = core::cmp::max(consumed as usize, 1);
                                     processed += step;
                                     cur = cur.wrapping_add(step as u16);
@@ -1767,7 +2380,7 @@ fn main() {
                                     let (consumed, text) =
                                         em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
-                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                     let step = core::cmp::max(consumed as usize, 1);
                                     processed += step;
                                     cur = cur.wrapping_add(step as u16);
@@ -1808,7 +2421,8 @@ fn main() {
                                 a = a.wrapping_add(1);
                             }
                             viewer.update_memory_window(eff_start, buf);
-                            let (consumed, _) = em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                            let (consumed, _) =
+                                em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
                             let clen = core::cmp::max(consumed as usize, 1);
                             viewer.set_memory_highlight(cpu.r.pc, clen);
                             // Also refresh listing pane to reflect current PC span and highlight
@@ -1826,7 +2440,7 @@ fn main() {
                                     let (consumed, text) =
                                         em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
-                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                     let step = core::cmp::max(consumed as usize, 1);
                                     processed += step;
                                     cur = cur.wrapping_add(step as u16);
@@ -1835,13 +2449,18 @@ fn main() {
                             }
                         }
                         regview::Command::MemWrite(items) => {
-                            for (addr, val) in items { bus.as_mut().write8(addr, val); }
+                            for (addr, val) in items {
+                                bus.as_mut().write8(addr, val);
+                            }
                             // Refresh memory pane after applying edits
                             let (mstart, mlen, mfollow) = viewer.get_memory_window();
                             let eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
                             let mut buf: Vec<u8> = Vec::with_capacity(mlen);
                             let mut a = eff_start;
-                            for _ in 0..mlen { buf.push(bus.as_mut().read8(a)); a = a.wrapping_add(1); }
+                            for _ in 0..mlen {
+                                buf.push(bus.as_mut().read8(a));
+                                a = a.wrapping_add(1);
+                            }
                             viewer.update_memory_window(eff_start, buf);
                             // Also refresh listing pane (full span) immediately
                             let spans = coalesce_ranges(loaded.loaded_ranges.clone());
@@ -1855,43 +2474,98 @@ fn main() {
                                 let mut processed: usize = 0;
                                 let total_len: usize = end.wrapping_sub(start) as usize;
                                 while processed < total_len {
-                                    let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                     use core::fmt::Write as _;
-                                    let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                     let step = core::cmp::max(consumed as usize, 1);
                                     processed += step;
                                     cur = cur.wrapping_add(step as u16);
                                 }
                                 viewer.update_hex_listing(out);
-                                if viewer.auto_hex_on_edit() { viewer.force_hex_view(); }
+                                if viewer.auto_hex_on_edit() {
+                                    viewer.force_hex_view();
+                                }
 
-                    // While running (GUI main-thread path), push GPIO changes on demand (dirty-driven)
-                    {
-                        let mut pushed = false;
-                        if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                            if io_mem.take_gpio_dirty() { io_mem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed = true; }); }
-                        } else if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                            if io_mmu.take_gpio_dirty() { io_mmu.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed = true; }); }
-                        } else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
-                                if io_mem.take_gpio_dirty() { io_mem.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed = true; }); }
-                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
-                                if io_mmu.take_gpio_dirty() { io_mmu.with_gpio_mut(|g| { let (o,d,b) = g.get_state(); viewer.sync_gpio(true, b, o, d); pushed = true; }); }
-                            }
-                        }
-                        _ = pushed;
-                    }
+                                // While running (GUI main-thread path), push GPIO changes on demand (dirty-driven)
+                                {
+                                    let mut pushed = false;
+                                    if let Some(io_mem) =
+                                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
+                                    {
+                                        if io_mem.take_gpio_dirty() {
+                                            io_mem.with_gpio_mut(|g| {
+                                                let (o, d, b) = g.get_state();
+                                                viewer.sync_gpio(true, b, o, d);
+                                                pushed = true;
+                                            });
+                                        }
+                                    } else if let Some(io_mmu) =
+                                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
+                                    {
+                                        if io_mmu.take_gpio_dirty() {
+                                            io_mmu.with_gpio_mut(|g| {
+                                                let (o, d, b) = g.get_state();
+                                                viewer.sync_gpio(true, b, o, d);
+                                                pushed = true;
+                                            });
+                                        }
+                                    } else if let Some(wt) =
+                                        bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
+                                    {
+                                        let inner_any = wt.inner_any_mut();
+                                        if let Some(io_mem) =
+                                            inner_any.downcast_mut::<IoBus<Memory>>()
+                                        {
+                                            if io_mem.take_gpio_dirty() {
+                                                io_mem.with_gpio_mut(|g| {
+                                                    let (o, d, b) = g.get_state();
+                                                    viewer.sync_gpio(true, b, o, d);
+                                                    pushed = true;
+                                                });
+                                            }
+                                        } else if let Some(io_mmu) =
+                                            inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                        {
+                                            if io_mmu.take_gpio_dirty() {
+                                                io_mmu.with_gpio_mut(|g| {
+                                                    let (o, d, b) = g.get_state();
+                                                    viewer.sync_gpio(true, b, o, d);
+                                                    pushed = true;
+                                                });
+                                            }
+                                        }
+                                    }
+                                    _ = pushed;
+                                }
                             }
                         }
                         regview::Command::GpioSetOut(mask) => {
-                            if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>() { io_mem.with_gpio_mut(|g| g.set_out(mask)); }
-                            else if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() { io_mmu.with_gpio_mut(|g| g.set_out(mask)); }
-                            else if let Some(wt) = bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>() { let inner_any = wt.inner_any_mut(); if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() { io_mem.with_gpio_mut(|g| g.set_out(mask)); } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() { io_mmu.with_gpio_mut(|g| g.set_out(mask)); } }
+                            if let Some(io_mem) =
+                                bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
+                            {
+                                io_mem.with_gpio_mut(|g| g.set_out(mask));
+                            } else if let Some(io_mmu) =
+                                bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                io_mmu.with_gpio_mut(|g| g.set_out(mask));
+                            } else if let Some(wt) =
+                                bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.with_gpio_mut(|g| g.set_out(mask));
+                                } else if let Some(io_mmu) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu.with_gpio_mut(|g| g.set_out(mask));
+                                }
+                            }
                         }
-                        regview::Command::UiSetGpio(_present, _bits, _out, _dir) => { }
-                        regview::Command::UiSetMmu(_sys, _task, _map) => { }
-                        regview::Command::UiSetTimer(_, _) | regview::Command::UiSetGpioOnColor(_) => { }
+                        regview::Command::UiSetGpio(_present, _bits, _out, _dir) => {}
+                        regview::Command::UiSetMmu(_sys, _task, _map) => {}
+                        regview::Command::UiSetTimer(_, _)
+                        | regview::Command::UiSetGpioOnColor(_) => {}
                     }
                 }
                 // Event-driven recompute of HEX disassembly when tracked writes occurred
@@ -1926,7 +2600,7 @@ fn main() {
                                 let (consumed, text) =
                                     em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                 use core::fmt::Write as _;
-                                let _ = writeln!(&mut out, "{:04X}: {}", cur, text);
+                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                 let step = core::cmp::max(consumed as usize, 1);
                                 processed += step;
                                 cur = cur.wrapping_add(step as u16);
@@ -1952,7 +2626,7 @@ fn main() {
                                 while processed < total_len {
                                     let (consumed, text) =
                                         em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
-                                    let line = format!("{:04X}: {}", cur, text);
+                                    let line = format!("{cur:04X}: {text}");
                                     replacements.push((cur, line));
                                     let step = core::cmp::max(consumed as usize, 1);
                                     processed += step;

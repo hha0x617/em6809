@@ -17,7 +17,10 @@ fn timer_irq_asserts_on_wrap_and_clear_pending() {
     let mut saw_irq = false;
     for _ in 0..16 {
         let (_n, _f, i) = bus.irq_lines();
-        if i { saw_irq = true; break; }
+        if i {
+            saw_irq = true;
+            break;
+        }
     }
     assert!(saw_irq, "Timer should assert IRQ after wrap");
 
@@ -48,8 +51,10 @@ fn timer_firq_mode_routes_to_firq_line() {
     let mut firq_on = false;
     for _ in 0..16 {
         let (_n, f, i) = bus.irq_lines();
-        if f && !i { firq_on = true; break; }
+        if f && !i {
+            firq_on = true;
+            break;
+        }
     }
     assert!(firq_on, "Timer in FIRQ mode should assert FIRQ line only");
 }
-

@@ -1,10 +1,7 @@
 use em6809::bus::Memory;
 use em6809::cpu::Cpu;
 
-// Helper to get 16-bit D from A/B
-fn d(cpu: &Cpu) -> u16 {
-    ((cpu.r.a as u16) << 8) | cpu.r.b as u16
-}
+// Helper to get 16-bit D from A/B (inline at call sites to avoid dead code).
 
 #[test]
 fn ldy_imm_and_sty_direct_cycles() {
