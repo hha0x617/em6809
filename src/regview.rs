@@ -202,6 +202,10 @@ mod gui {
         pub about_open: bool,
         #[cfg(windows)]
         pub about_icon_tex: Option<egui::TextureHandle>,
+        #[cfg(target_os = "linux")]
+        pub about_open: bool,
+        #[cfg(target_os = "linux")]
+        pub about_icon_tex: Option<egui::TextureHandle>,
         // Memory view state
         pub mem_follow_pc: Arc<AtomicBool>,
         pub mem_window_len: Arc<AtomicUsize>,
@@ -418,6 +422,120 @@ mod gui {
                                     let img = egui::Image::new(tex)
                                         .fit_to_exact_size(egui::vec2(32.0, 32.0));
                                     ui.add(img);
+                                }
+                                ui.heading("em6809");
+                            });
+                            ui.separator();
+                            ui.add(egui::Label::new(format!("Version: {}", version)).wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("Copyright (c) 2025 hha0x617").wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0").wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)").wrap(false));
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new("This software is provided \"AS IS\" without warranty.").wrap(false));
+                            ui.add_space(12.0);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("OK").clicked() { self.about_open = false; }
+                            });
+                        });
+                }
+            }
+
+            // Linux: simple menu bar with About (mirrors Windows content, no icon capture)
+            #[cfg(target_os = "linux")]
+            {
+                eframe::egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+                    eframe::egui::menu::bar(ui, |ui| {
+                        ui.menu_button("Help", |ui| {
+                            if ui.button("About em6809…").clicked() {
+                                self.about_open = true;
+                                ui.close_menu();
+                            }
+                        });
+                    });
+                });
+                if self.about_open {
+                    if self.about_icon_tex.is_none() {
+                        // Try to load an external PNG so Linux can match the Windows About icon.
+                        // Priority: EM6809_ABOUT_ICON env -> assets/app_icon_32.png -> assets/icon32.png -> assets/icon.png
+                        use std::path::Path;
+                        let mut loaded = false;
+                        fn load_icon_png(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+                            if !Path::new(path).exists() { return None; }
+                            match std::fs::read(path) {
+                                Ok(bytes) => {
+                                    if let Ok(img) = image::load_from_memory(&bytes) {
+                                        let mut rgba = img.to_rgba8();
+                                        // Resize to 32x32 for consistency with Windows About small icon
+                                        if rgba.width() != 32 || rgba.height() != 32 {
+                                            rgba = image::imageops::resize(&rgba, 32, 32, image::imageops::FilterType::Lanczos3);
+                                        }
+                                        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                                        let mut pixels = Vec::with_capacity(w * h);
+                                        for chunk in rgba.as_raw().chunks_exact(4) {
+                                            pixels.push(egui::Color32::from_rgba_unmultiplied(chunk[0], chunk[1], chunk[2], chunk[3]));
+                                        }
+                                        let color_img = egui::ColorImage { size: [w, h], pixels };
+                                        let tex = ctx.load_texture(
+                                            "about_em6809_icon_linux",
+                                            egui::ImageData::Color(color_img.into()),
+                                            egui::TextureOptions::LINEAR,
+                                        );
+                                        Some(tex)
+                                    } else { None }
+                                }
+                                Err(_) => None,
+                            }
+                        }
+                        if let Ok(p) = std::env::var("EM6809_ABOUT_ICON") {
+                            if !p.is_empty() {
+                                if let Some(tex) = load_icon_png(ctx, &p) { self.about_icon_tex = Some(tex); loaded = true; }
+                            }
+                        }
+                        if !loaded {
+                            for cand in [
+                                "assets/app_icon_32.png",
+                                "assets/icon32.png",
+                                "assets/icon.png",
+                            ] {
+                                if let Some(tex) = load_icon_png(ctx, cand) { self.about_icon_tex = Some(tex); loaded = true; break; }
+                            }
+                        }
+                        // If not loaded, we'll draw a vector fallback (rounded-rect + 'e') directly in the UI below.
+                    }
+                    let version = env!("CARGO_PKG_VERSION");
+                    eframe::egui::Window::new("About em6809")
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_width(420.0)
+                        .default_height(180.0)
+                        .show(ctx, |ui| {
+                            ui.horizontal(|ui| {
+                                if let Some(tex) = &self.about_icon_tex {
+                                    let img = egui::Image::new(tex)
+                                        .fit_to_exact_size(egui::vec2(32.0, 32.0));
+                                    ui.add(img);
+                                } else {
+                                    // Vector fallback: mid-gray rounded-rect background + centered lowercase 'e'
+                                    let desired = egui::vec2(32.0, 32.0);
+                                    let (rect, _resp) = ui.allocate_exact_size(desired, egui::Sense::hover());
+                                    let base = egui::Color32::from_rgb(120, 128, 140); // slightly darker mid-gray (step 2)
+                                    let fg = egui::Color32::from_rgb(30, 30, 30);
+                                    let rounding = 10.0;
+
+                                    let painter = ui.painter_at(rect);
+                                    painter.rect_filled(rect, rounding, base);
+                                    let font = egui::FontId::proportional(26.0); // larger 'e'
+                                    let pos = egui::pos2(rect.center().x, rect.center().y - 2.0); // shift slightly upward
+                                    painter.text(
+                                        pos,
+                                        egui::Align2::CENTER_CENTER,
+                                        "e",
+                                        font,
+                                        fg,
+                                    );
                                 }
                                 ui.heading("em6809");
                             });
@@ -1562,6 +1680,10 @@ mod gui {
                     about_open: false,
                     #[cfg(windows)]
                     about_icon_tex: None,
+                    #[cfg(target_os = "linux")]
+                    about_open: false,
+                    #[cfg(target_os = "linux")]
+                    about_icon_tex: None,
                     mem_follow_pc: mem_follow_pc_thread.clone(),
                     mem_window_len: mem_window_len_thread.clone(),
                     mem_window_start: mem_window_start_thread.clone(),
@@ -1855,6 +1977,10 @@ mod gui {
                 #[cfg(windows)]
                 about_open: false,
                 #[cfg(windows)]
+                about_icon_tex: None,
+                #[cfg(target_os = "linux")]
+                about_open: false,
+                #[cfg(target_os = "linux")]
                 about_icon_tex: None,
                 mem_follow_pc: mem_follow_pc_thread,
                 mem_window_len: mem_window_len_thread,
