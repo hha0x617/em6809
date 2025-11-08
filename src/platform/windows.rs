@@ -1,6 +1,9 @@
 #![allow(unused_imports)]
 
 #[cfg(windows)]
+pub mod native_settings;
+
+#[cfg(windows)]
 use eframe::egui;
 
 /// Capture the current window's HICON and convert to an egui texture.

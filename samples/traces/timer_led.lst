@@ -15,14 +15,14 @@
      E100             (    timer_led.asm):00015         LED_STATE       EQU     $E100      ; current LED state (mirrors OUT bit0)
      E101             (    timer_led.asm):00016         TICK_COUNT      EQU     $E101      ; tick accumulator (0..59)
                       (    timer_led.asm):00017         
-E000 1CAF             (    timer_led.asm):00018         start           ANDCC   #$AF        ; enable IRQ and FIRQ (clear I and F masks)
-E002 7FE100           (    timer_led.asm):00019                         CLR     LED_STATE
-E005 7FE101           (    timer_led.asm):00020                         CLR     TICK_COUNT
-                      (    timer_led.asm):00021                         ; Configure GPIO bit0 as output, initialize OFF
-E008 8600             (    timer_led.asm):00022                         LDA     #$00
-E00A B7FF30           (    timer_led.asm):00023                         STA     GPIO_BASE      ; OUT=0 (LED OFF)
-E00D 8601             (    timer_led.asm):00024                         LDA     #$01
-E00F B7FF32           (    timer_led.asm):00025                         STA     GPIO_BASE+2    ; DIR=1 for bit0 (output)
+E000 7FE100           (    timer_led.asm):00018         start           CLR     LED_STATE
+E003 7FE101           (    timer_led.asm):00019                         CLR     TICK_COUNT
+                      (    timer_led.asm):00020                         ; Configure GPIO bit0 as output, initialize OFF
+E006 8600             (    timer_led.asm):00021                         LDA     #$00
+E008 B7FF30           (    timer_led.asm):00022                         STA     GPIO_BASE      ; OUT=0 (LED OFF)
+E00B 8601             (    timer_led.asm):00023                         LDA     #$01
+E00D B7FF32           (    timer_led.asm):00024                         STA     GPIO_BASE+2    ; DIR=1 for bit0 (output)
+E010 1CAF             (    timer_led.asm):00025                         ANDCC   #$AF           ; enable IRQ and FIRQ (clear I and F masks)
                       (    timer_led.asm):00026         
 E012 20FE             (    timer_led.asm):00027         main_loop       BRA     main_loop       ; idle - timer ISR does the work
                       (    timer_led.asm):00028         

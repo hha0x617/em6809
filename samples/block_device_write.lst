@@ -1,0 +1,171 @@
+                      (_device_write.asm):00001         ; Block device write demonstration for em6809
+                      (_device_write.asm):00002         ; Writes a length-prefixed payload to LBA 1, then reads it back and prints
+                      (_device_write.asm):00003         ; the contents on the console.
+                      (_device_write.asm):00004         
+     FF00             (_device_write.asm):00005         CONBASE   EQU   $FF00
+     FF00             (_device_write.asm):00006         CONDATA   EQU   CONBASE
+     FF01             (_device_write.asm):00007         CONSTAT   EQU   CONBASE+1
+     0001             (_device_write.asm):00008         TXRDY     EQU   $01
+                      (_device_write.asm):00009         
+     FF20             (_device_write.asm):00010         BLKBASE   EQU   $FF20
+     FF20             (_device_write.asm):00011         BLKDATA   EQU   BLKBASE
+     FF21             (_device_write.asm):00012         BLKSTAT   EQU   BLKBASE+1
+     FF22             (_device_write.asm):00013         BLKCMD    EQU   BLKBASE+2
+     FF23             (_device_write.asm):00014         BLKSECC   EQU   BLKBASE+3
+     FF24             (_device_write.asm):00015         BLKLBA0   EQU   BLKBASE+4
+     FF25             (_device_write.asm):00016         BLKLBA1   EQU   BLKBASE+5
+     FF26             (_device_write.asm):00017         BLKLBA2   EQU   BLKBASE+6
+     FF27             (_device_write.asm):00018         BLKLBA3   EQU   BLKBASE+7
+                      (_device_write.asm):00019         
+     0001             (_device_write.asm):00020         STAT_BUSY EQU   $01
+     0002             (_device_write.asm):00021         STAT_DRDY EQU   $02
+     0001             (_device_write.asm):00022         CMD_READ  EQU   $01
+     00FF             (_device_write.asm):00023         CMD_RESET EQU   $FF
+     0002             (_device_write.asm):00024         CMD_WRITE EQU   $02
+                      (_device_write.asm):00025         
+     0001             (_device_write.asm):00026         WRITE_LBA EQU   $0001
+                      (_device_write.asm):00027         
+                      (_device_write.asm):00028                 ORG   $E000
+                      (_device_write.asm):00029         
+E000 8EE0DD           (_device_write.asm):00030         START   LDX   #MSG_HELLO
+E003 BDE0AA           (_device_write.asm):00031                 JSR   PRINT_STR
+                      (_device_write.asm):00032         
+E006 BDE020           (_device_write.asm):00033                 JSR   LOAD_BUFFER
+E009 BDE048           (_device_write.asm):00034                 JSR   ISSUE_WRITE
+                      (_device_write.asm):00035         
+E00C 8EE10C           (_device_write.asm):00036                 LDX   #MSG_WRITE_OK
+E00F BDE0AA           (_device_write.asm):00037                 JSR   PRINT_STR
+                      (_device_write.asm):00038         
+E012 BDE06E           (_device_write.asm):00039                 JSR   ISSUE_READ
+E015 BDE094           (_device_write.asm):00040                 JSR   STREAM_BLOCK
+                      (_device_write.asm):00041         
+E018 8EE12E           (_device_write.asm):00042                 LDX   #MSG_DONE
+E01B BDE0AA           (_device_write.asm):00043                 JSR   PRINT_STR
+                      (_device_write.asm):00044         
+E01E 20FE             (_device_write.asm):00045         HALT    BRA   HALT
+                      (_device_write.asm):00046         
+                      (_device_write.asm):00047         ; Load payload into the block device's sector buffer (length byte + data + zero padding)
+E020                  (_device_write.asm):00048         LOAD_BUFFER
+E020 3436             (_device_write.asm):00049                 PSHS  A,B,X,Y
+E022 86FF             (_device_write.asm):00050                 LDA   #CMD_RESET
+E024 B7FF22           (_device_write.asm):00051                 STA   BLKCMD
+E027 C619             (_device_write.asm):00052                 LDB   #PAYLOAD_LEN
+E029 F7FF20           (_device_write.asm):00053                 STB   BLKDATA
+E02C 8EE0C4           (_device_write.asm):00054                 LDX   #PAYLOAD_TEXT
+E02F C619             (_device_write.asm):00055                 LDB   #PAYLOAD_LEN
+E031 A680             (_device_write.asm):00056         WRMSG   LDA   ,X+
+E033 B7FF20           (_device_write.asm):00057                 STA   BLKDATA
+E036 5A               (_device_write.asm):00058                 DECB
+E037 26F8             (_device_write.asm):00059                 BNE   WRMSG
+E039 108E01E6         (_device_write.asm):00060                 LDY   #PAD_COUNT
+E03D 2707             (_device_write.asm):00061                 BEQ   ZPAD_DONE
+E03F 7FFF20           (_device_write.asm):00062         ZPAD    CLR   BLKDATA
+E042 313F             (_device_write.asm):00063                 LEAY  -1,Y
+E044 26F9             (_device_write.asm):00064                 BNE   ZPAD
+E046                  (_device_write.asm):00065         ZPAD_DONE
+E046 35B6             (_device_write.asm):00066                 PULS  A,B,X,Y,PC
+                      (_device_write.asm):00067         
+                      (_device_write.asm):00068         ; Program a single-sector WRITE to WRITE_LBA and wait for BUSY to clear
+E048                  (_device_write.asm):00069         ISSUE_WRITE
+E048 3402             (_device_write.asm):00070                 PSHS  A
+E04A 8601             (_device_write.asm):00071                 LDA   #$01
+E04C B7FF23           (_device_write.asm):00072                 STA   BLKSECC
+E04F 4F               (_device_write.asm):00073                 CLRA
+E050 B7FF27           (_device_write.asm):00074                 STA   BLKLBA3
+E053 B7FF26           (_device_write.asm):00075                 STA   BLKLBA2
+E056 8600             (_device_write.asm):00076                 LDA   #WRITE_LBA/256
+E058 B7FF25           (_device_write.asm):00077                 STA   BLKLBA1
+E05B 8601             (_device_write.asm):00078                 LDA   #WRITE_LBA&$FF
+E05D B7FF24           (_device_write.asm):00079                 STA   BLKLBA0
+E060 8602             (_device_write.asm):00080                 LDA   #CMD_WRITE
+E062 B7FF22           (_device_write.asm):00081                 STA   BLKCMD
+E065 B6FF21           (_device_write.asm):00082         WRWAIT  LDA   BLKSTAT
+E068 8501             (_device_write.asm):00083                 BITA  #STAT_BUSY
+E06A 26F9             (_device_write.asm):00084                 BNE   WRWAIT
+E06C 3582             (_device_write.asm):00085                 PULS  A,PC
+                      (_device_write.asm):00086         
+                      (_device_write.asm):00087         ; Program and wait for a single-sector READ of WRITE_LBA
+E06E                  (_device_write.asm):00088         ISSUE_READ
+E06E 3402             (_device_write.asm):00089                 PSHS  A
+E070 8601             (_device_write.asm):00090                 LDA   #$01
+E072 B7FF23           (_device_write.asm):00091                 STA   BLKSECC
+E075 4F               (_device_write.asm):00092                 CLRA
+E076 B7FF27           (_device_write.asm):00093                 STA   BLKLBA3
+E079 B7FF26           (_device_write.asm):00094                 STA   BLKLBA2
+E07C 8600             (_device_write.asm):00095                 LDA   #WRITE_LBA/256
+E07E B7FF25           (_device_write.asm):00096                 STA   BLKLBA1
+E081 8601             (_device_write.asm):00097                 LDA   #WRITE_LBA&$FF
+E083 B7FF24           (_device_write.asm):00098                 STA   BLKLBA0
+E086 8601             (_device_write.asm):00099                 LDA   #CMD_READ
+E088 B7FF22           (_device_write.asm):00100                 STA   BLKCMD
+E08B B6FF21           (_device_write.asm):00101         RDWAIT  LDA   BLKSTAT
+E08E 8502             (_device_write.asm):00102                 BITA  #STAT_DRDY
+E090 27F9             (_device_write.asm):00103                 BEQ   RDWAIT
+E092 3582             (_device_write.asm):00104                 PULS  A,PC
+                      (_device_write.asm):00105         
+                      (_device_write.asm):00106         ; Read length byte then stream that many bytes from DATA port
+E094                  (_device_write.asm):00107         STREAM_BLOCK
+E094 3414             (_device_write.asm):00108                 PSHS  X,B
+E096 F6FF20           (_device_write.asm):00109                 LDB   BLKDATA
+E099 5D               (_device_write.asm):00110                 TSTB
+E09A 270C             (_device_write.asm):00111                 BEQ   RDDONE
+E09C 4F               (_device_write.asm):00112                 CLRA
+E09D 1F01             (_device_write.asm):00113                 TFR   D,X
+E09F F6FF20           (_device_write.asm):00114         READLP  LDB   BLKDATA
+E0A2 8D12             (_device_write.asm):00115                 BSR   TXB
+E0A4 301F             (_device_write.asm):00116                 LEAX  -1,X
+E0A6 26F7             (_device_write.asm):00117                 BNE   READLP
+E0A8 3594             (_device_write.asm):00118         RDDONE  PULS  B,X,PC
+                      (_device_write.asm):00119         
+                      (_device_write.asm):00120         ; Print null-terminated string pointed to by X
+E0AA                  (_device_write.asm):00121         PRINT_STR
+E0AA 3414             (_device_write.asm):00122                 PSHS  B,X
+E0AC E680             (_device_write.asm):00123         PLOOP   LDB   ,X+
+E0AE 2704             (_device_write.asm):00124                 BEQ   PDONE
+E0B0 8D04             (_device_write.asm):00125                 BSR   TXB
+E0B2 20F8             (_device_write.asm):00126                 BRA   PLOOP
+E0B4 3594             (_device_write.asm):00127         PDONE   PULS  B,X,PC
+                      (_device_write.asm):00128         
+                      (_device_write.asm):00129         ; Transmit byte in B via polling TXRDY
+E0B6 3402             (_device_write.asm):00130         TXB     PSHS  A
+E0B8 B6FF01           (_device_write.asm):00131         TWAIT   LDA   CONSTAT
+E0BB 8501             (_device_write.asm):00132                 BITA  #TXRDY
+E0BD 27F9             (_device_write.asm):00133                 BEQ   TWAIT
+E0BF F7FF00           (_device_write.asm):00134                 STB   CONDATA
+E0C2 3582             (_device_write.asm):00135                 PULS  A,PC
+                      (_device_write.asm):00136         
+E0C4                  (_device_write.asm):00137         PAYLOAD_TEXT
+E0C4 426C6F636B207772 (_device_write.asm):00138                 FCC   "Block write demo payload!"
+     6974652064656D6F
+     207061796C6F6164
+     21
+E0DD                  (_device_write.asm):00139         PAYLOAD_END
+     0019             (_device_write.asm):00140         PAYLOAD_LEN EQU   PAYLOAD_END-PAYLOAD_TEXT
+     01E6             (_device_write.asm):00141         PAD_COUNT  EQU   511-PAYLOAD_LEN
+                      (_device_write.asm):00142         
+E0DD                  (_device_write.asm):00143         MSG_HELLO
+E0DD 0D0A             (_device_write.asm):00144                 FCB   $0D,$0A
+E0DF 57726974696E6720 (_device_write.asm):00145                 FCC   "Writing payload to block device (LBA 1)..."
+     7061796C6F616420
+     746F20626C6F636B
+     2064657669636520
+     284C42412031292E
+     2E2E
+E109 0D0A00           (_device_write.asm):00146                 FCB   $0D,$0A,0
+                      (_device_write.asm):00147         
+E10C                  (_device_write.asm):00148         MSG_WRITE_OK
+E10C 0D0A             (_device_write.asm):00149                 FCB   $0D,$0A
+E10E 577269746520636F (_device_write.asm):00150                 FCC   "Write complete, reading back:"
+     6D706C6574652C20
+     72656164696E6720
+     6261636B3A
+E12B 0D0A00           (_device_write.asm):00151                 FCB   $0D,$0A,0
+                      (_device_write.asm):00152         
+E12E                  (_device_write.asm):00153         MSG_DONE
+E12E 0D0A             (_device_write.asm):00154                 FCB   $0D,$0A
+E130 5B64656D6F20636F (_device_write.asm):00155                 FCC   "[demo complete]"
+     6D706C6574655D
+E13F 0D0A00           (_device_write.asm):00156                 FCB   $0D,$0A,0
+                      (_device_write.asm):00157         
+                      (_device_write.asm):00158                 ORG   $FFFE
+FFFE E000             (_device_write.asm):00159                 FDB   START

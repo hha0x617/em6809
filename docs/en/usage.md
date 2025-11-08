@@ -62,6 +62,39 @@ I/O (see console_io.md for details)
 - Attach stdin with echo:
   - `... --console-stdin --console-echo`
 
+### Block storage sample
+
+- Assemble the samples (requires `lwasm` from lwtools):
+  - `lwasm -9 --format=srec -o samples/block_device_read.s19 samples/block_device_read.asm`
+  - `lwasm -9 --format=srec -o samples/block_device_write.s19 samples/block_device_write.asm`
+- Read demo (pre-populated image included):
+
+```bash
+cargo run -- samples/block_device_read.s19 \
+  --block 0xFF20 \
+  --block-file samples/block_device_image.bin \
+  --console 0xFF00 \
+  --console-echo \
+  --run
+```
+
+The guest programs the block controller at `$FF20`, reads sector 0 (single‑sector READ command), and streams the returned text to the console. The accompanying `samples/block_device_image.bin` file already contains the payload (length‑prefixed) and is large enough to satisfy a 512‑byte read, so you can edit it directly to experiment with different messages.
+
+- Write demo (creates/updates a file on the host, then reads it back):
+
+```bash
+BLOCK_IMG=/tmp/block_write_demo.bin
+cargo run -- samples/block_device_write.s19 \
+  --block 0xFF20 \
+  --block-file ${BLOCK_IMG} \
+  --console 0xFF00 \
+  --console-echo \
+  --run
+hexdump -C -n 64 ${BLOCK_IMG}
+```
+
+The program fills the block device’s sector buffer with a length-prefixed payload, issues a WRITE to LBA 1, waits for BUSY to clear, and finally issues a READ to show the persisted bytes. Inspect `${BLOCK_IMG}` (or reopen it with the read demo) to verify the data that was written.
+
 For deeper I/O control see console_io.md; for debugging/tracing see tracing.md; for GUI memory editing see memory_editing.md; for OS‑9 integration see os9_guide.md.
 
 ## Environment variables
@@ -74,6 +107,12 @@ The following variables affect the GUI register viewer (when building with `--fe
 Linux client-side decorations (CSD):
 
 - `EM6809_CSD`: When set to `1` or `true` on Linux, enables a custom client‑side decorated header (icon/title, Help→About, Minimize/Maximize/Close). Example: `EM6809_CSD=1 cargo run --release -- samples/echo/echo.s19 --format srec`.
+  - Note: the native Settings dialog on Linux always uses CSD even when this env var is unset. Current winit/eframe (0.27) cannot reliably disable minimize/maximize buttons on Mutter/GNOME via server-side decorations, so the dialog forces `with_decorations(false)` and draws its own header to keep only the Close button.
+  - Future direction: once upstream winit/eframe exposes reliable SSD button control for Wayland/X11 (e.g., via new `xdg_toplevel` capabilities), we can revisit this and drop the forced CSD path if Close-only becomes possible with standard decorations.
+
+Other environment variables:
+
+- `EM6809_FALLBACK_SETTINGS`: When set to `1` or `true`, forces the in-app Settings dialog to be used for Preferences (instead of the native window). Equivalent to passing the `--fallback-settings` CLI option.
 
 Additional (About dialog icon on Linux):
 
@@ -88,7 +127,7 @@ Additional (About dialog icon on Linux):
 
 ## GPIO and Timer options (CLI)
 
-- `--gpio-bits N`: Number of GPIO LEDs (default 8)
+- `--gpio-bits N`: Number of GPIO LEDs (default 8, up to 32). Internally the GPIO is laid out in 4-byte slots per 8-bit chunk: `+0` OUT (write), `+1` IN/READ, `+2` DIR (write), `+3` control (slot 0 only: bit0=1 clears input latch). Bits above `N` are masked to 0; accesses beyond the required slots are ignored.
 - `--gpio-on-color 0xRRGGBB`: LED ON color (e.g., `0xFFD000`)
 - `--timer 0xADDR`: Attach periodic timer at base (e.g., `0xFF10`)
 - `--timer-reload 0xNNNN`: Timer period in instruction ticks

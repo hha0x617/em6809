@@ -11,6 +11,8 @@
 - `--console-tee-stderr`: 出力を `stderr` にもミラー
 - `--console-flush-every {off|byte|<N>}`: フラッシュ間隔（既定: 1 = 毎バイト、最大 128）
 - `--console-flush-newline`: 改行検出時にもフラッシュ（追従出力向け）
+- `--console-rx-watermark <N>`: 受信バッファに N バイト以上たまったときに IRQ をアサートするウォーターマーク。0 なら 1 バイト受信で即 IRQ。
+- `--console-irq-hold <N>`: IRQ をアサートしてから N クロック保持するホールド時間。短いパルスを取りこぼしたくない場合に非 0 を指定。0 の場合、イベント後すぐに IRQ を落とす。
 
 ## 実用レシピ
 
@@ -30,4 +32,3 @@
 - 入力が反映されない: `--console-stdin` と `--console-echo` を確認
 - 文字化け: 実ホストの端末の文字コード/フォント設定を確認（UTF‑8 推奨）
 - キー割り込み: Ctrl+C はエミュレータを終了します
-

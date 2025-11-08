@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use once_cell::sync::OnceCell;
 
 pub trait Device: Send {
     fn contains(&self, addr: u16) -> bool;
@@ -36,6 +38,16 @@ pub struct ConsoleDev {
     utf8_need: usize,
 }
 
+static CONSOLE_LOG: AtomicBool = AtomicBool::new(false);
+pub fn set_console_log(on: bool) {
+    CONSOLE_LOG.store(on, Ordering::SeqCst);
+}
+
+static BLOCK_LOG: AtomicBool = AtomicBool::new(false);
+pub fn set_block_log(on: bool) {
+    BLOCK_LOG.store(on, Ordering::SeqCst);
+}
+
 impl ConsoleDev {
     pub fn new(base: u16) -> Self {
         Self {
@@ -59,6 +71,9 @@ impl ConsoleDev {
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.rx.push_back(b);
+            if CONSOLE_LOG.load(Ordering::SeqCst) {
+                eprintln!("[console-rx] queued ${:02X}", b);
+            }
         }
     }
     pub fn set_rx_watermark(&mut self, wm: usize) {
@@ -178,7 +193,7 @@ impl Device for ConsoleDev {
             0 => {
                 // TXDATA: print ASCII
                 // Print and flush to ensure visibility in buffered consoles
-                if self.tee_stderr {
+                if self.tee_stderr || CONSOLE_LOG.load(Ordering::SeqCst) {
                     let _ = writeln!(
                         std::io::stderr(),
                         "[console-tx] addr={addr:04X} data={data:02X}"
@@ -253,6 +268,8 @@ pub struct BlockDev {
     use_firq: bool,
     irq_hold_cycles: u32,
     irq_countdown: u32,
+    last_data_byte: u8,
+    state_dirty: bool,
 }
 
 impl BlockDev {
@@ -276,6 +293,8 @@ impl BlockDev {
             use_firq: false,
             irq_hold_cycles: 0,
             irq_countdown: 0,
+            last_data_byte: 0,
+            state_dirty: true,
         }
     }
     pub fn set_backing_file(&mut self, path: &str) {
@@ -290,8 +309,31 @@ impl BlockDev {
             }
         }
     }
+    pub fn backing_file(&self) -> Option<&str> {
+        self.backing_path.as_deref()
+    }
     pub fn set_image(&mut self, data: Vec<u8>) {
         self.image = data;
+    }
+    pub fn last_cmd(&self) -> u8 {
+        self.last_cmd
+    }
+    pub fn last_data(&self) -> u8 {
+        self.last_data_byte
+    }
+    pub fn status(&self) -> u8 {
+        self.status
+    }
+    pub fn take_dirty(&mut self) -> bool {
+        if self.state_dirty {
+            self.state_dirty = false;
+            true
+        } else {
+            false
+        }
+    }
+    fn mark_dirty(&mut self) {
+        self.state_dirty = true;
     }
     pub fn set_irq_hold_cycles(&mut self, n: u32) {
         self.irq_hold_cycles = n;
@@ -306,24 +348,36 @@ impl BlockDev {
         addr.wrapping_sub(self.base) < 8
     }
     fn set_status_busy(&mut self, on: bool) {
+        let prev = self.status;
         if on {
             self.status |= 0x01;
         } else {
             self.status &= !0x01;
         }
+        if self.status != prev {
+            self.mark_dirty();
+        }
     }
     fn set_status_drdy(&mut self, on: bool) {
+        let prev = self.status;
         if on {
             self.status |= 0x02;
         } else {
             self.status &= !0x02;
         }
+        if self.status != prev {
+            self.mark_dirty();
+        }
     }
     fn set_status_err(&mut self, on: bool) {
+        let prev = self.status;
         if on {
             self.status |= 0x04;
         } else {
             self.status &= !0x04;
+        }
+        if self.status != prev {
+            self.mark_dirty();
         }
     }
     #[allow(dead_code)]
@@ -412,6 +466,8 @@ impl Device for BlockDev {
                 if (self.status & 0x02) != 0 && self.buf_idx < self.sector_size {
                     let b = self.buf[self.buf_idx];
                     self.buf_idx += 1;
+                    self.last_data_byte = b;
+                    self.mark_dirty();
                     self.xfer_remaining = self.xfer_remaining.saturating_sub(1);
                     if self.buf_idx >= self.sector_size {
                         // Sector exhausted; if more remains and READ op, load next sector
@@ -429,6 +485,8 @@ impl Device for BlockDev {
                     }
                     b
                 } else {
+                    self.last_data_byte = 0;
+                    self.mark_dirty();
                     0x00
                 }
             }
@@ -454,6 +512,8 @@ impl Device for BlockDev {
                 if self.buf_idx < self.sector_size {
                     self.buf[self.buf_idx] = data;
                     self.buf_idx += 1;
+                    self.last_data_byte = data;
+                    self.mark_dirty();
                     if self.op_write {
                         // Streaming multi-sector write
                         if self.buf_idx >= self.sector_size {
@@ -480,7 +540,18 @@ impl Device for BlockDev {
             1 => { /* STATUS write ignored */ }
             2 => {
                 // COMMAND
-                self.last_cmd = data;
+                if self.last_cmd != data {
+                    self.last_cmd = data;
+                    self.mark_dirty();
+                } else {
+                    self.last_cmd = data;
+                }
+                if BLOCK_LOG.load(Ordering::SeqCst) {
+                    eprintln!(
+                        "[block] CMD=${:02X} LBA=${:08X} SECCNT=${:02X} irq={}",
+                        data, self.lba, self.sec_cnt, self.irq_enable
+                    );
+                }
                 match data {
                     0x00 => { /* NOP */ }
                     0x01 => {
@@ -621,35 +692,63 @@ impl GpioDev {
 
 impl Device for GpioDev {
     fn contains(&self, addr: u16) -> bool {
-        addr.wrapping_sub(self.base) < 4
+        let span = ((self.bits as u32 + 7) / 8).max(1) * 4;
+        (addr.wrapping_sub(self.base) as u32) < span
     }
     fn read8(&mut self, addr: u16) -> u8 {
-        match addr.wrapping_sub(self.base) {
-            0 => (self.out & 0xFF) as u8,
+        let off = addr.wrapping_sub(self.base) as usize;
+        let group = off / 4;
+        let sub = off % 4;
+        let slots = ((self.bits as usize + 7) / 8).max(1);
+        if group >= slots {
+            return 0xFF;
+        }
+        let shift = (group * 8) as u32;
+        match sub {
+            0 => ((self.out >> shift) & 0xFF) as u8,
             1 => {
                 let mask = Self::mask_for(self.bits);
                 let actual = (self.out & self.dir) | (self.in_mask & !self.dir);
-                (actual & mask & 0xFF) as u8
+                ((actual & mask) >> shift & 0xFF) as u8
             }
-            2 => (self.dir & 0xFF) as u8,
+            2 => ((self.dir >> shift) & 0xFF) as u8,
             3 => 0x00,
             _ => 0xFF,
         }
     }
     fn write8(&mut self, addr: u16, data: u8) {
-        match addr.wrapping_sub(self.base) {
+        let off = addr.wrapping_sub(self.base) as usize;
+        let group = off / 4;
+        let sub = off % 4;
+        let slots = ((self.bits as usize + 7) / 8).max(1);
+        if group >= slots {
+            return;
+        }
+        let shift = (group * 8) as u32;
+        let byte_mask = 0xFFu32 << shift;
+        let full_mask = Self::mask_for(self.bits);
+        match sub {
             0 => {
-                self.out = (self.out & !0xFF) | (data as u32);
+                let new_out = (self.out & !byte_mask) | ((data as u32) << shift);
+                self.out = new_out & full_mask;
                 if GPIO_LOG.load(Ordering::SeqCst) {
-                    eprintln!("[gpio] OUT @${:04X} <= ${:02X}", self.base, data);
+                    eprintln!(
+                        "[gpio] OUT @${:04X}+{} <= ${:02X}",
+                        self.base,
+                        group * 4,
+                        data
+                    );
                 }
+                publish_gpio_broadcast(true, self.bits, self.out, self.dir);
             }
             1 => { /* read-only */ }
             2 => {
-                self.dir = (self.dir & !0xFF) | (data as u32);
+                let new_dir = (self.dir & !byte_mask) | ((data as u32) << shift);
+                self.dir = new_dir & full_mask;
+                publish_gpio_broadcast(true, self.bits, self.out, self.dir);
             }
             3 => {
-                if (data & 0x01) != 0 {
+                if group == 0 && (data & 0x01) != 0 {
                     self.in_mask = 0;
                 }
             }
@@ -665,6 +764,32 @@ impl Device for GpioDev {
 static GPIO_LOG: AtomicBool = AtomicBool::new(false);
 pub fn set_gpio_log(on: bool) {
     GPIO_LOG.store(on, Ordering::SeqCst);
+}
+
+// Cross-thread GPIO snapshot broadcast (for UI pickup even if UiSetGpio drops)
+static GPIO_BROADCAST: OnceCell<Mutex<Option<(bool, u8, u32, u32)>>> = OnceCell::new();
+pub fn publish_gpio_broadcast(present: bool, bits: u8, out: u32, dir: u32) {
+    if let Some(m) = GPIO_BROADCAST.get() {
+        if let Ok(mut g) = m.lock() {
+            *g = Some((present, bits, out, dir));
+        }
+    } else {
+        let _ = GPIO_BROADCAST.set(Mutex::new(Some((present, bits, out, dir))));
+    }
+}
+pub fn take_gpio_broadcast() -> Option<(bool, u8, u32, u32)> {
+    GPIO_BROADCAST
+        .get()
+        .and_then(|m| m.lock().ok())
+        .and_then(|mut g| g.take())
+}
+
+// Non-consuming read of the latest snapshot (UI can poll every frame)
+pub fn peek_gpio_broadcast() -> Option<(bool, u8, u32, u32)> {
+    GPIO_BROADCAST
+        .get()
+        .and_then(|m| m.lock().ok())
+        .and_then(|g| (*g).clone())
 }
 
 pub struct IoBus<B: Bus> {
@@ -745,6 +870,164 @@ impl<B: Bus> IoBus<B> {
             false
         }
     }
+    pub fn take_block_dirty(&mut self) -> bool {
+        for d in self.devices.iter_mut() {
+            if let Some(b) = d.as_any_mut().downcast_mut::<BlockDev>() {
+                if b.take_dirty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    // Dynamic device management helpers (used by Settings Apply)
+    pub fn ensure_console(&mut self, enable: bool, base: u16) {
+        let mut has = false;
+        for d in self.devices.iter_mut() {
+            if d.as_any_mut().downcast_mut::<ConsoleDev>().is_some() {
+                has = true;
+            }
+        }
+        if enable {
+            if !has {
+                self.add_device(ConsoleDev::new(base));
+            }
+        } else if has {
+            let mut new_list = Vec::with_capacity(self.devices.len());
+            for mut dev in self.devices.drain(..) {
+                let is_console = dev.as_any_mut().downcast_mut::<ConsoleDev>().is_some();
+                if !is_console {
+                    new_list.push(dev);
+                }
+            }
+            self.devices = new_list;
+        }
+    }
+    pub fn with_console_mut_opt<F: FnOnce(&mut ConsoleDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(c) = d.as_any_mut().downcast_mut::<ConsoleDev>() {
+                f(c);
+                return;
+            }
+        }
+    }
+    pub fn ensure_block(&mut self, enable: bool, base: u16) {
+        let mut has = false;
+        for d in self.devices.iter_mut() {
+            if d.as_any_mut().downcast_mut::<BlockDev>().is_some() {
+                has = true;
+            }
+        }
+        if enable {
+            if !has {
+                self.add_device(BlockDev::new(base));
+            }
+        } else if has {
+            let mut new_list = Vec::with_capacity(self.devices.len());
+            for mut dev in self.devices.drain(..) {
+                let is_blk = dev.as_any_mut().downcast_mut::<BlockDev>().is_some();
+                if !is_blk {
+                    new_list.push(dev);
+                }
+            }
+            self.devices = new_list;
+        }
+    }
+    pub fn with_block_mut_opt<F: FnOnce(&mut BlockDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(b) = d.as_any_mut().downcast_mut::<BlockDev>() {
+                f(b);
+                return;
+            }
+        }
+    }
+    pub fn ensure_gpio(&mut self, enable: bool, base: u16, bits: u8) {
+        let mut has = false;
+        for d in self.devices.iter_mut() {
+            if d.as_any_mut().downcast_mut::<GpioDev>().is_some() {
+                has = true;
+            }
+        }
+        if enable {
+            if !has {
+                self.add_device(GpioDev::new(base, bits));
+            } else {
+                // Update existing GPIO device's base/bits and clamp state to new mask
+                let new_bits = bits.min(32);
+                let mask: u32 = if new_bits >= 32 {
+                    0xFFFF_FFFF
+                } else {
+                    (1u32 << new_bits) - 1
+                };
+                for d in self.devices.iter_mut() {
+                    if let Some(g) = d.as_any_mut().downcast_mut::<GpioDev>() {
+                        g.base = base;
+                        g.bits = new_bits;
+                        // Clamp current latches to new bit width
+                        g.out &= mask;
+                        g.dir &= mask;
+                        g.in_mask &= mask;
+                        break;
+                    }
+                }
+            }
+        } else if has {
+            let mut new_list = Vec::with_capacity(self.devices.len());
+            for mut dev in self.devices.drain(..) {
+                let is_gpio = dev.as_any_mut().downcast_mut::<GpioDev>().is_some();
+                if !is_gpio {
+                    new_list.push(dev);
+                }
+            }
+            self.devices = new_list;
+        }
+    }
+    pub fn with_gpio_mut_opt<F: FnOnce(&mut GpioDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(g) = d.as_any_mut().downcast_mut::<GpioDev>() {
+                f(g);
+                return;
+            }
+        }
+    }
+    pub fn ensure_timer(&mut self, enable: bool, base: u16) {
+        let mut has = false;
+        for d in self.devices.iter_mut() {
+            if d.as_any_mut()
+                .downcast_mut::<crate::timer::TimerDev>()
+                .is_some()
+            {
+                has = true;
+            }
+        }
+        if enable {
+            if !has {
+                self.add_device(crate::timer::TimerDev::new(base));
+            }
+        } else if has {
+            let mut new_list = Vec::with_capacity(self.devices.len());
+            for mut dev in self.devices.drain(..) {
+                let is_t = dev
+                    .as_any_mut()
+                    .downcast_mut::<crate::timer::TimerDev>()
+                    .is_some();
+                if !is_t {
+                    new_list.push(dev);
+                }
+            }
+            self.devices = new_list;
+        }
+    }
+    pub fn with_timer_mut_opt<F: FnOnce(&mut crate::timer::TimerDev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(t) = d.as_any_mut().downcast_mut::<crate::timer::TimerDev>() {
+                f(t);
+                return;
+            }
+        }
+    }
+
     pub fn with_timer_mut<F: FnOnce(&mut crate::timer::TimerDev)>(&mut self, f: F) {
         for d in self.devices.iter_mut() {
             if let Some(t) = d.as_any_mut().downcast_mut::<crate::timer::TimerDev>() {

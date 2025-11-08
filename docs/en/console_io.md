@@ -11,6 +11,8 @@ Options to control the emulator’s console input/output with practical recipes.
 - `--console-tee-stderr`: Also tee output to stderr
 - `--console-flush-every {off|byte|<N>}`: Flush strategy (default: 1 = every byte, max 128)
 - `--console-flush-newline`: Also flush on newline (line-oriented output)
+- `--console-rx-watermark <N>`: Assert IRQ when the RX buffer holds at least N bytes. `0` means IRQ on the first byte received.
+- `--console-irq-hold <N>`: Keep the IRQ line asserted for N cycles after raising it. Use a nonzero value to avoid missing short IRQ pulses; `0` drops IRQ immediately after the event.
 
 ## Recipes
 

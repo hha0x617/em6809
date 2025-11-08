@@ -1,0 +1,102 @@
+                      (block_device_read.asm):00001         ; Block device read demonstration for em6809
+                      (block_device_read.asm):00002         ; Reads LBA 0 from the block storage controller at $FF20
+                      (block_device_read.asm):00003         ; and streams the payload (length-prefixed text) to the console.
+                      (block_device_read.asm):00004         
+     FF00             (block_device_read.asm):00005         CONBASE   EQU   $FF00
+     FF00             (block_device_read.asm):00006         CONDATA   EQU   CONBASE
+     FF01             (block_device_read.asm):00007         CONSTAT   EQU   CONBASE+1
+     0001             (block_device_read.asm):00008         TXRDY     EQU   $01
+                      (block_device_read.asm):00009         
+     FF20             (block_device_read.asm):00010         BLKBASE   EQU   $FF20
+     FF20             (block_device_read.asm):00011         BLKDATA   EQU   BLKBASE
+     FF21             (block_device_read.asm):00012         BLKSTAT   EQU   BLKBASE+1
+     FF22             (block_device_read.asm):00013         BLKCMD    EQU   BLKBASE+2
+     FF23             (block_device_read.asm):00014         BLKSECC   EQU   BLKBASE+3
+     FF24             (block_device_read.asm):00015         BLKLBA0   EQU   BLKBASE+4
+     FF25             (block_device_read.asm):00016         BLKLBA1   EQU   BLKBASE+5
+     FF26             (block_device_read.asm):00017         BLKLBA2   EQU   BLKBASE+6
+     FF27             (block_device_read.asm):00018         BLKLBA3   EQU   BLKBASE+7
+                      (block_device_read.asm):00019         
+     0001             (block_device_read.asm):00020         STAT_BUSY EQU   $01
+     0002             (block_device_read.asm):00021         STAT_DRDY EQU   $02
+     0004             (block_device_read.asm):00022         STAT_ERR  EQU   $04
+                      (block_device_read.asm):00023         
+     0001             (block_device_read.asm):00024         CMD_READ  EQU   $01
+                      (block_device_read.asm):00025         
+                      (block_device_read.asm):00026                 ORG   $E000
+                      (block_device_read.asm):00027         
+E000 8EE066           (block_device_read.asm):00028         START   LDX   #MSG_HELLO
+E003 BDE014           (block_device_read.asm):00029                 JSR   PRINT_STR
+                      (block_device_read.asm):00030         
+E006 BDE02E           (block_device_read.asm):00031                 JSR   ISSUE_READ
+E009 BDE050           (block_device_read.asm):00032                 JSR   STREAM_BLOCK
+                      (block_device_read.asm):00033         
+E00C 8EE08F           (block_device_read.asm):00034                 LDX   #MSG_DONE
+E00F BDE014           (block_device_read.asm):00035                 JSR   PRINT_STR
+                      (block_device_read.asm):00036         
+E012 20FE             (block_device_read.asm):00037         HALT    BRA   HALT
+                      (block_device_read.asm):00038         
+                      (block_device_read.asm):00039         ; Print null-terminated string pointed to by X.
+E014                  (block_device_read.asm):00040         PRINT_STR
+E014 3414             (block_device_read.asm):00041                 PSHS  B,X
+E016 E680             (block_device_read.asm):00042         PLOOP   LDB   ,X+
+E018 2704             (block_device_read.asm):00043                 BEQ   PDONE
+E01A 8D04             (block_device_read.asm):00044                 BSR   TXB
+E01C 20F8             (block_device_read.asm):00045                 BRA   PLOOP
+E01E 3594             (block_device_read.asm):00046         PDONE   PULS  B,X,PC
+                      (block_device_read.asm):00047         
+                      (block_device_read.asm):00048         ; Transmit byte in B via polling TXRDY.
+E020 3402             (block_device_read.asm):00049         TXB     PSHS  A
+E022 B6FF01           (block_device_read.asm):00050         TWAIT   LDA   CONSTAT
+E025 8501             (block_device_read.asm):00051                 BITA  #TXRDY
+E027 27F9             (block_device_read.asm):00052                 BEQ   TWAIT
+E029 F7FF00           (block_device_read.asm):00053                 STB   CONDATA
+E02C 3582             (block_device_read.asm):00054                 PULS  A,PC
+                      (block_device_read.asm):00055         
+                      (block_device_read.asm):00056         ; Program and wait for a single-sector READ of LBA 0.
+E02E                  (block_device_read.asm):00057         ISSUE_READ
+E02E 3402             (block_device_read.asm):00058                 PSHS  A
+E030 8601             (block_device_read.asm):00059                 LDA   #$01
+E032 B7FF23           (block_device_read.asm):00060                 STA   BLKSECC
+E035 4F               (block_device_read.asm):00061                 CLRA
+E036 B7FF24           (block_device_read.asm):00062                 STA   BLKLBA0
+E039 B7FF25           (block_device_read.asm):00063                 STA   BLKLBA1
+E03C B7FF26           (block_device_read.asm):00064                 STA   BLKLBA2
+E03F B7FF27           (block_device_read.asm):00065                 STA   BLKLBA3
+E042 8601             (block_device_read.asm):00066                 LDA   #CMD_READ
+E044 B7FF22           (block_device_read.asm):00067                 STA   BLKCMD
+E047 B6FF21           (block_device_read.asm):00068         RDWAIT  LDA   BLKSTAT
+E04A 8502             (block_device_read.asm):00069                 BITA  #STAT_DRDY
+E04C 27F9             (block_device_read.asm):00070                 BEQ   RDWAIT
+E04E 3582             (block_device_read.asm):00071                 PULS  A,PC
+                      (block_device_read.asm):00072         
+                      (block_device_read.asm):00073         ; Read length byte then stream that many bytes from DATA.
+E050                  (block_device_read.asm):00074         STREAM_BLOCK
+E050 3414             (block_device_read.asm):00075                 PSHS  X,B
+E052 F6FF20           (block_device_read.asm):00076                 LDB   BLKDATA
+E055 5D               (block_device_read.asm):00077                 TSTB
+E056 270C             (block_device_read.asm):00078                 BEQ   RDDONE
+E058 4F               (block_device_read.asm):00079                 CLRA
+E059 1F01             (block_device_read.asm):00080                 TFR   D,X
+E05B F6FF20           (block_device_read.asm):00081         READLP  LDB   BLKDATA
+E05E 8DC0             (block_device_read.asm):00082                 BSR   TXB
+E060 301F             (block_device_read.asm):00083                 LEAX  -1,X
+E062 26F7             (block_device_read.asm):00084                 BNE   READLP
+E064 3594             (block_device_read.asm):00085         RDDONE  PULS  B,X,PC
+                      (block_device_read.asm):00086         
+E066                  (block_device_read.asm):00087         MSG_HELLO
+E066 0D0A             (block_device_read.asm):00088                 FCB   $0D,$0A
+E068 52656164696E6720 (block_device_read.asm):00089                 FCC   "Reading sector 0 via block device..."
+     736563746F722030
+     2076696120626C6F
+     636B206465766963
+     652E2E2E
+E08C 0D0A00           (block_device_read.asm):00090                 FCB   $0D,$0A,0
+                      (block_device_read.asm):00091         
+E08F                  (block_device_read.asm):00092         MSG_DONE
+E08F 0D0A             (block_device_read.asm):00093                 FCB   $0D,$0A
+E091 5B646F6E655D     (block_device_read.asm):00094                 FCC   "[done]"
+E097 0D0A00           (block_device_read.asm):00095                 FCB   $0D,$0A,0
+                      (block_device_read.asm):00096         
+                      (block_device_read.asm):00097                 ORG   $FFFE
+FFFE E000             (block_device_read.asm):00098                 FDB   START

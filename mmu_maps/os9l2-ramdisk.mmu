@@ -1,0 +1,10 @@
+; os9l2-ramdisk
+
+task 0
+mode user
+prot 0x03
+map 0=0  map 1=1  map 2=2  map 3=3
+map 4=4  map 5=5  map 6=6  map 7=7
+map 8=0xC0  map 9=0xC1  map A=0xC2  map B=0xC3   ; 16KB RAM-disk
+map C=C  map D=D  map E=E  map F=F
+attr 0F=0x01   ; WPROT vectors

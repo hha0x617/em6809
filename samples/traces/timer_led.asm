@@ -15,14 +15,14 @@ TIMER_BASE      EQU     $FF10      ; CTRL/STATUS=$FF10
 LED_STATE       EQU     $E100      ; current LED state (mirrors OUT bit0)
 TICK_COUNT      EQU     $E101      ; tick accumulator (0..59)
 
-start           ANDCC   #$AF        ; enable IRQ and FIRQ (clear I and F masks)
-                CLR     LED_STATE
+start           CLR     LED_STATE
                 CLR     TICK_COUNT
                 ; Configure GPIO bit0 as output, initialize OFF
                 LDA     #$00
                 STA     GPIO_BASE      ; OUT=0 (LED OFF)
                 LDA     #$01
                 STA     GPIO_BASE+2    ; DIR=1 for bit0 (output)
+                ANDCC   #$AF           ; enable IRQ and FIRQ (clear I and F masks)
 
 main_loop       BRA     main_loop       ; idle - timer ISR does the work
 

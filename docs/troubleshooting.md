@@ -69,3 +69,4 @@ WSL2 + WSLg（Wayland）の環境で GUI を表示するための準備と手順
 - 既知の注意点
   - Wayland 環境で `XDG_RUNTIME_DIR` が未設定だと GUI 起動に失敗する場合があります（WSLg では通常 `/mnt/wslg/runtime-dir`）。
   - バックエンド切替（`WINIT_UNIX_BACKEND=wayland|x11`）と `WGPU_BACKEND=gl|vulkan` の組み合わせで改善することがあります。
+  - マルチビューポートの挙動を調べる際は `RUST_LOG=egui_winit=debug` を付けて実行すると、`ViewportCommand::InnerSize ignored by winit` などの詳細ログを確認できます（Linux でのネイティブ Settings の描画不具合調査に有効）。

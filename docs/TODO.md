@@ -4,6 +4,9 @@ This file tracks planned enhancements for the GUI and tooling. Please keep items
 
 ## Short‑term
 
+- Boot settings tab (GUI): see `docs/boot_tab_todo.md` for scope, tasks, and open questions.
+- Settings persistence: see `docs/settings_persistence.md` for precedence (CLI > persisted > defaults) and UI plan for effective values.
+
 - Memory dump pane (GUI):
   - [done] Add a dedicated memory view next to the listing pane
   - [done] Features: start address + length, Hex + ASCII columns, scrolling, copy selection, optional highlight of the current address/PC
@@ -43,6 +46,9 @@ This file tracks planned enhancements for the GUI and tooling. Please keep items
 GUI とツールの今後の拡張を管理します。簡潔に記載し、進捗に応じて更新してください。
 
 ## 直近
+
+- Boot（ブートスクリプト）設定タブ（GUI）: 範囲/タスク/要相談は `docs/boot_tab_todo.md` を参照。
+- 設定の永続化: 優先順位（CLI > 保存 > 既定）と「実効値」の UI 表示方針は `docs/settings_persistence.md` を参照。
 
 - メモリダンプ表示ペイン（GUI）
   - [done] 右ペインの隣にメモリビューを追加

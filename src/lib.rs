@@ -8,4 +8,5 @@ pub mod io;
 pub mod loader;
 pub mod mmu;
 pub mod platform;
+pub mod prefs;
 pub mod timer;

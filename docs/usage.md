@@ -75,9 +75,54 @@ WSL2 + WSLg（Wayland）のセットアップ手順・既知の注意点は `doc
 - 標準入力とエコー ON（Console 接続）:
   - `... --console 0xFF00 --console-stdin --console-echo`
 
+### ブロックデバイスを使ったサンプル
+
+- lwasm (lwtools) でアセンブル:
+  - `lwasm -9 --format=srec -o samples/block_device_read.s19 samples/block_device_read.asm`
+  - `lwasm -9 --format=srec -o samples/block_device_write.s19 samples/block_device_write.asm`
+- 読み出しデモ (付属イメージを使用):
+
+```bash
+cargo run -- samples/block_device_read.s19 \
+  --block 0xFF20 \
+  --block-file samples/block_device_image.bin \
+  --console 0xFF00 \
+  --console-echo \
+  --run
+```
+
+ゲストは `$FF20` のブロックコントローラに 1 セクタ読み込み（LBA 0）を要求し、戻ってきたテキストを長さバイトに従ってコンソールへストリームします。`samples/block_device_image.bin` は 512 バイト以上あり、先頭 1 バイトにメッセージ長、続く領域に ASCII テキスト（512 バイトを満たすためにパディングあり）が入っているので、そのまま書き換えるだけで表示内容を差し替えられます。
+
+- 書き込みデモ (任意のファイルへ書き込み、読み戻し表示):
+
+```bash
+BLOCK_IMG=/tmp/block_write_demo.bin
+cargo run -- samples/block_device_write.s19 \
+  --block 0xFF20 \
+  --block-file ${BLOCK_IMG} \
+  --console 0xFF00 \
+  --console-echo \
+  --run
+hexdump -C -n 64 ${BLOCK_IMG}
+```
+
+LBA 1 へ長さ付きペイロードをストリームし、BUSY ビットが落ちるまで待機したのちに READ を実行して内容を確認します。`hexdump` で `${BLOCK_IMG}` の先頭を確認したり、読み出しサンプルに同じファイルを渡して表示内容を検証できます。
+
 詳細は console_io.md（I/O 制御）、tracing.md（リスティング/逆アセンブルの考え方）、memory_editing.md（メモリ編集）、os9_guide.md（OS‑9 連携）を参照してください。
+
+## GPIO / Timer の CLI オプション
+
+- `--gpio-bits N`: GPIO LED の本数（デフォルト 8、最大 32）。GPIO は 8bit ごとの 4 バイトスロットで構成されます: `+0` OUT(書き込み)、`+1` IN/READ、`+2` DIR(書き込み)、`+3` 制御(スロット0のみ: bit0=1 で入力ラッチクリア)。指定ビット数を超えるビットはマスクされ常に 0 になり、必要スロット外のアクセスは無視されます。
+- `--gpio-on-color 0xRRGGBB`: LED ON 時の色（例: `0xFFD000`）
+- `--timer` 系のオプションは英語版 usage.md と同等で、ベースアドレス/リロード値/IRQ/FIRQ/start などを指定できます。
 
 ## 環境変数（Linux の CSD ヘッダー）
 
 - `EM6809_CSD`: Linux で `1` または `true` を設定すると、ウィンドウのクライアントサイド装飾（CSD）モードを有効化します（アイコン＋タイトル、Help→About、最小化/最大化/閉じるのカスタムヘッダー）。
   - 例: `EM6809_CSD=1 cargo run --release -- samples/echo/echo.s19 --format srec`
+  - 備考: Linux のネイティブ Settings ダイアログは、Wayland/X11 の標準装飾（SSD）経由では最小化/最大化ボタンの無効化ができないため、常に CSD を使用します。winit/eframe 0.27 では `ViewportCommand::EnableButtons` が Mutter/GNOME などに無視されるため、Close だけを確実に残す手段が CSD しかありません。GTK/Qt のようなネイティブツールキットとは異なる制限がある点に注意してください。
+  - 将来的には winit/eframe 側で Wayland/X11 の SSD ボタン制御がサポートされた際に再検討します（例: `xdg_toplevel` の `set_minimize/maximize` 相当 API が公開された場合に、CSD なしで Close のみを残せるか確認する）。
+
+## その他の環境変数
+
+- `EM6809_FALLBACK_SETTINGS`: `1` または `true` を指定すると、Preferences/Settings で in-app 版ダイアログを使用します（デフォルトはネイティブウィンドウ）。CLI の `--fallback-settings` オプションでも同じ効果があります。
