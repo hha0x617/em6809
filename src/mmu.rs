@@ -80,11 +80,13 @@ impl Mc6829 {
         let t = self.task as usize;
         let mut out = [0u16; NUM_LOG_PAGES];
         for i in 0..NUM_LOG_PAGES {
-            out[i] = if self.sys_mode {
+            let frame = if self.sys_mode {
                 self.map_sys[t][i]
             } else {
                 self.map_user[t][i]
-            };
+            } & 0x00FF;
+            let attr = self.attr[t][i] as u16;
+            out[i] = frame | (attr << 8);
         }
         (out, self.sys_mode, self.task)
     }

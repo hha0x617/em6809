@@ -34,7 +34,6 @@ pub fn force_close_settings_window(title: &str) -> bool {
     ok_post
 }
 
-
 /// Initial retry budget (frames) for scheduling the native Settings viewport.
 pub fn retry_budget_ticks() -> u8 {
     12

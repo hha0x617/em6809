@@ -1,11 +1,11 @@
 use crate::bus::Bus;
+use once_cell::sync::OnceCell;
 use std::any::Any;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use once_cell::sync::OnceCell;
 
 pub trait Device: Send {
     fn contains(&self, addr: u16) -> bool;

@@ -52,10 +52,7 @@ fn log_program_info(loaded: &LoadedImage, pc: u16) {
         loaded_bytes_sum = loaded_bytes_sum.saturating_add(e.wrapping_sub(*s) as usize);
     }
     let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-    let mut span = spans
-        .iter()
-        .find(|(s, e)| *s <= pc && pc < *e)
-        .copied();
+    let mut span = spans.iter().find(|(s, e)| *s <= pc && pc < *e).copied();
     if span.is_none() && !spans.is_empty() {
         let min_start = spans.iter().map(|(s, _)| *s).min().unwrap();
         let max_end = spans.iter().map(|(_, e)| *e).max().unwrap();
@@ -941,8 +938,9 @@ fn main() {
         debug_gpio_log = d.gpio_log.unwrap_or(debug_gpio_log);
         debug_mmu_log = d.mmu_log.unwrap_or(debug_mmu_log);
         debug_settings_log = d.settings_log.unwrap_or(debug_settings_log);
-        debug_show_settings_origins =
-            d.show_settings_origins.unwrap_or(debug_show_settings_origins);
+        debug_show_settings_origins = d
+            .show_settings_origins
+            .unwrap_or(debug_show_settings_origins);
     }
 
     let (image_data, inferred_format): (Option<Vec<u8>>, Option<ImageFormat>) = if let Some(path) =
@@ -1362,6 +1360,11 @@ fn main() {
                 lst_fallback_text,
                 start,
             ));
+            if let Some(view) = &v {
+                if loaded.loaded_ranges.is_empty() {
+                    view.set_span_policy_pc_window();
+                }
+            }
             if let (Some(view), Some(rgb)) = (&v, gpio_on_color) {
                 view.set_gpio_on_color(rgb);
             }
@@ -1378,6 +1381,11 @@ fn main() {
                 lst_fallback_text,
                 start,
             ));
+            if let Some(view) = &v {
+                if loaded.loaded_ranges.is_empty() {
+                    view.set_span_policy_pc_window();
+                }
+            }
             if let (Some(view), Some(rgb)) = (&v, gpio_on_color) {
                 view.set_gpio_on_color(rgb);
             }
@@ -1974,6 +1982,7 @@ fn main() {
                                     regview::Command::UiAckSettings { .. } => {}
                                     regview::Command::SetPc(a) => {
                                         cpu_worker.set_pc(a);
+                                        viewer_cpu.set_memory_window(cpu_worker.r.pc, None, Some(true));
                                         let snap2 = regview::RegSnapshot {
                                             a: cpu_worker.r.a,
                                             b: cpu_worker.r.b,
@@ -1990,33 +1999,33 @@ fn main() {
                                         viewer_cpu.push(snap2);
                                     }
                                     regview::Command::RefreshHexListing => {
-                                        // Rebuild hex listing for current PC's loaded span (worker thread)
                                         let spans = coalesce_ranges(loaded_ranges_worker.clone());
-                                        if let Some((start, end)) = spans
+                                        let (policy, _win_len) = viewer_cpu.get_span_policy();
+                                        let span_for_pc = spans
                                             .iter()
-                                            .find(|(s, e)| {
-                                                *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
-                                            })
-                                            .copied()
-                                        {
-                                            let mut cur = start;
-                                            let mut out = String::new();
-                                            let mut processed: usize = 0;
-                                            let total_len: usize = end.wrapping_sub(start) as usize;
-                                            while processed < total_len {
-                                                let (consumed, text) =
-                                                    em6809::disasm::disasm_one_hex(
-                                                        bus_worker.as_mut(),
-                                                        cur,
-                                                    );
-                                                use core::fmt::Write as _;
-                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                                let step = core::cmp::max(consumed as usize, 1);
-                                                processed += step;
-                                                cur = cur.wrapping_add(step as u16);
-                                            }
-                                            viewer_cpu.update_hex_listing(out);
+                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .copied();
+                                        let (start, total_len) = if policy == 1 {
+                                            let (ws, wl, _) = viewer_cpu.get_memory_window();
+                                            (ws, std::cmp::max(wl, 256))
+                                        } else if let Some((s, e)) = span_for_pc {
+                                            (s, e.wrapping_sub(s) as usize)
+                                        } else {
+                                            let (ws, wl, _) = viewer_cpu.get_memory_window();
+                                            (ws, std::cmp::max(wl, 256))
+                                        };
+                                        let mut cur = start;
+                                        let mut out = String::new();
+                                        let mut processed: usize = 0;
+                                        while processed < total_len {
+                                            let (consumed, text) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cur);
+                                            use core::fmt::Write as _;
+                                            let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                            let step = core::cmp::max(consumed as usize, 1);
+                                            processed += step;
+                                            cur = cur.wrapping_add(step as u16);
                                         }
+                                        viewer_cpu.update_hex_listing(out);
                                     }
                                     regview::Command::RunUntil(a) => {
                                         run_until_target = Some(a);
@@ -2109,6 +2118,8 @@ fn main() {
                                                 }
                                                 if let Some(pc) = new_pc {
                                                     cpu_worker.r.pc = pc;
+                                                    // Also align memory pane to program start for visibility
+                                                    viewer_cpu.set_memory_window(pc, None, Some(true));
                                                 }
                                                 log_program_info(&new_loaded, cpu_worker.r.pc);
                                                 let snap = regview::RegSnapshot {
@@ -2360,35 +2371,38 @@ fn main() {
                                     regview::Command::UiSetMmu(..) => {}
                                     regview::Command::UiSetTimer(..) => {}
                                     regview::Command::ApplyMmuPreset { name } => {
-                                    let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
-                                        let _ = em6809::config::apply_preset(mmu, &name);
-                                        let (map, sys, task) = mmu.snapshot_current_map();
-                                        if let Some(v) = viewer {
-                                            v.sync_mmu(sys, task, map);
-                                        }
-                                        if let Some((mut s, _origins, color_opt)) =
-                                            regview::get_latest_settings_baseline()
-                                        {
-                                            s.use_mmu = true;
-                                            s.mmu_mode_sys = sys;
-                                            s.mmu_task = format!("{}", task & 0x07);
-                                            s.mmu_preset_name = name.clone();
-                                            let prot = mmu.read8(mmu.regs_base + 0x12);
-                                            s.mmu_prot_hex = format!("{:02X}", prot);
-                                            for (i, f) in map.iter().enumerate() {
-                                                s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
-                                            }
-                                                for i in 0..16 {
-                                                    let attr =
-                                                        mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                                    s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                        let apply =
+                                            |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
+                                                let _ = em6809::config::apply_preset(mmu, &name);
+                                                let (map, sys, task) = mmu.snapshot_current_map();
+                                                if let Some(v) = viewer {
+                                                    v.sync_mmu(sys, task, map);
                                                 }
-                                                publish_settings_baseline(
-                                                    &s,
-                                                    color_opt.unwrap_or(0),
-                                                );
-                                            }
-                                        };
+                                                if let Some((mut s, _origins, color_opt)) =
+                                                    regview::get_latest_settings_baseline()
+                                                {
+                                                    s.use_mmu = true;
+                                                    s.mmu_mode_sys = sys;
+                                                    s.mmu_task = format!("{}", task & 0x07);
+                                                    s.mmu_preset_name = name.clone();
+                                                    let prot = mmu.read8(mmu.regs_base + 0x12);
+                                                    s.mmu_prot_hex = format!("{:02X}", prot);
+                                                    for (i, f) in map.iter().enumerate() {
+                                                        s.mmu_map_frames[i] =
+                                                            format!("{:02X}", f & 0x00FF);
+                                                    }
+                                                    for i in 0..16 {
+                                                        let attr = mmu
+                                                            .read8(mmu.regs_base + 0x18 + i as u16);
+                                                        s.mmu_attr_bytes[i] =
+                                                            format!("{:02X}", attr);
+                                                    }
+                                                    publish_settings_baseline(
+                                                        &s,
+                                                        color_opt.unwrap_or(0),
+                                                    );
+                                                }
+                                            };
                                         if let Some(io_mmu) = bus_worker
                                             .as_mut()
                                             .as_any_mut()
@@ -2425,39 +2439,40 @@ fn main() {
                                         }
                                     }
                                     regview::Command::ApplyMmuMapFileText { text } => {
-                                        let apply_text = |mmu: &mut Mc6829,
-                                                          viewer: Option<&regview::Viewer>| {
-                                            let _ = em6809::config::apply_mmu_config_from_str(
-                                                mmu, &text,
-                                            );
-                                            let (map, sys, task) = mmu.snapshot_current_map();
-                                            if let Some(v) = viewer {
-                                                v.sync_mmu(sys, task, map);
-                                            }
-                                            if let Some((mut s, _origins, color_opt)) =
-                                                regview::get_latest_settings_baseline()
-                                            {
-                                                s.use_mmu = true;
-                                                s.mmu_mode_sys = sys;
-                                                s.mmu_task = format!("{}", task & 0x07);
-                                                s.mmu_preset_name.clear();
-                                                let prot = mmu.read8(mmu.regs_base + 0x12);
-                                                s.mmu_prot_hex = format!("{:02X}", prot);
-                                                for (i, f) in map.iter().enumerate() {
-                                                    s.mmu_map_frames[i] =
-                                                        format!("{:02X}", f & 0x00FF);
-                                                }
-                                                for i in 0..16 {
-                                                    let attr =
-                                                        mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                                    s.mmu_attr_bytes[i] = format!("{:02X}", attr);
-                                                }
-                                                publish_settings_baseline(
-                                                    &s,
-                                                    color_opt.unwrap_or(0),
+                                        let apply_text =
+                                            |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
+                                                let _ = em6809::config::apply_mmu_config_from_str(
+                                                    mmu, &text,
                                                 );
-                                            }
-                                        };
+                                                let (map, sys, task) = mmu.snapshot_current_map();
+                                                if let Some(v) = viewer {
+                                                    v.sync_mmu(sys, task, map);
+                                                }
+                                                if let Some((mut s, _origins, color_opt)) =
+                                                    regview::get_latest_settings_baseline()
+                                                {
+                                                    s.use_mmu = true;
+                                                    s.mmu_mode_sys = sys;
+                                                    s.mmu_task = format!("{}", task & 0x07);
+                                                    s.mmu_preset_name.clear();
+                                                    let prot = mmu.read8(mmu.regs_base + 0x12);
+                                                    s.mmu_prot_hex = format!("{:02X}", prot);
+                                                    for (i, f) in map.iter().enumerate() {
+                                                        s.mmu_map_frames[i] =
+                                                            format!("{:02X}", f & 0x00FF);
+                                                    }
+                                                    for i in 0..16 {
+                                                        let attr = mmu
+                                                            .read8(mmu.regs_base + 0x18 + i as u16);
+                                                        s.mmu_attr_bytes[i] =
+                                                            format!("{:02X}", attr);
+                                                    }
+                                                    publish_settings_baseline(
+                                                        &s,
+                                                        color_opt.unwrap_or(0),
+                                                    );
+                                                }
+                                            };
                                         if let Some(io_mmu) = bus_worker
                                             .as_mut()
                                             .as_any_mut()
@@ -3258,6 +3273,11 @@ fn main() {
             if let Some(viewer) = &reg_viewer {
                 if viewer.is_closed() {
                     // GUI window closed -> exit
+                    STOP_REQUESTED.store(true, Ordering::SeqCst);
+                    break 'run_loop;
+                }
+                if viewer.quit_requested() {
+                    STOP_REQUESTED.store(true, Ordering::SeqCst);
                     break 'run_loop;
                 }
             }
@@ -3277,6 +3297,177 @@ fn main() {
                     cc: cpu.r.cc,
                 };
                 viewer.push(snap);
+                // Handle queued commands even when not paused
+                while let Some(cmd) = viewer.take_command_worker() {
+                    match cmd {
+                        regview::Command::UiOpenSettings
+                        | regview::Command::UiOpenSettingsExternal => {}
+                        regview::Command::UiSetSettingsBaseline(_, _, _) => {}
+                        regview::Command::UiAckSettings { .. } => {}
+                        regview::Command::UiSetGpioOnColor(_) => {}
+                        regview::Command::UiSetBlockStatus { .. } => {}
+                        regview::Command::SavePrefs {
+                            settings,
+                            gpio_on_color,
+                            instance_id,
+                        } => {
+                            let payload = settings_worker::SettingsPayload {
+                                settings,
+                                gpio_on_color,
+                                instance_id,
+                            };
+                            if apply_settings_runtime(Some(viewer), bus.as_mut(), &payload) {
+                                persist_settings_snapshot(
+                                    &payload.settings,
+                                    payload.gpio_on_color,
+                                );
+                                publish_settings_baseline(
+                                    &payload.settings,
+                                    payload.gpio_on_color,
+                                );
+                                send_settings_ack(payload.instance_id);
+                            }
+                        }
+                        regview::Command::ApplyRegs(ns) => {
+                            cpu.r.a = ns.a;
+                            cpu.r.b = ns.b;
+                            cpu.r.x = ns.x;
+                            cpu.r.y = ns.y;
+                            cpu.r.u = ns.u;
+                            cpu.r.s = ns.s;
+                            cpu.r.dp = ns.dp;
+                            cpu.r.pc = ns.pc;
+                            cpu.r.cc = ns.cc;
+                            let snap2 = regview::RegSnapshot {
+                                a: cpu.r.a,
+                                b: cpu.r.b,
+                                d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                x: cpu.r.x,
+                                y: cpu.r.y,
+                                u: cpu.r.u,
+                                s: cpu.r.s,
+                                dp: cpu.r.dp,
+                                pc: cpu.r.pc,
+                                cc: cpu.r.cc,
+                            };
+                            viewer.push(snap2);
+                            let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
+                            let eff_start2: u16 =
+                                if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                            let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
+                            let mut a2 = eff_start2;
+                            for _ in 0..mlen2 {
+                                buf2.push(bus.as_mut().read8(a2));
+                                a2 = a2.wrapping_add(1);
+                            }
+                            viewer.update_memory_window(eff_start2, buf2);
+                            let (consumed, _) =
+                                em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                            let clen2 = core::cmp::max(consumed as usize, 1);
+                            viewer.set_memory_highlight(cpu.r.pc, clen2);
+                        }
+                        regview::Command::MemWrite(items) => {
+                            for (addr, val) in items {
+                                bus.as_mut().write8(addr, val);
+                            }
+                            let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
+                            let eff_start2: u16 =
+                                if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                            let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
+                            let mut a2 = eff_start2;
+                            for _ in 0..mlen2 {
+                                buf2.push(bus.as_mut().read8(a2));
+                                a2 = a2.wrapping_add(1);
+                            }
+                            viewer.update_memory_window(eff_start2, buf2);
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc =
+                                spans.iter().find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e).copied();
+                            let (start, end, total_len_override) = span_for_pc
+                                .map(|(s, e)| (s, e, None))
+                                .unwrap_or_else(|| {
+                                    let (ws, wl, _) = viewer.get_memory_window();
+                                    (ws, ws.wrapping_add(wl as u16), Some(wl))
+                                });
+                            let mut cur = start;
+                            let mut out = String::new();
+                            let mut processed: usize = 0;
+                            let total_len: usize = total_len_override.unwrap_or_else(|| {
+                                let span = end.wrapping_sub(start) as usize;
+                                std::cmp::max(span, 256)
+                            });
+                            while processed < total_len {
+                                let (consumed, text) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                use core::fmt::Write as _;
+                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                let step = core::cmp::max(consumed as usize, 1);
+                                processed += step;
+                                cur = cur.wrapping_add(step as u16);
+                            }
+                            viewer.update_hex_listing(out);
+                        }
+                        regview::Command::SetPc(a) => {
+                            cpu.set_pc(a);
+                            
+                            let snap2 = regview::RegSnapshot {
+                                a: cpu.r.a,
+                                b: cpu.r.b,
+                                d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                x: cpu.r.x,
+                                y: cpu.r.y,
+                                u: cpu.r.u,
+                                s: cpu.r.s,
+                                dp: cpu.r.dp,
+                                pc: cpu.r.pc,
+                                cc: cpu.r.cc,
+                            };
+                            viewer.push(snap2);
+                            let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
+                            let eff_start2: u16 =
+                                if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                            let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
+                            let mut a2 = eff_start2;
+                            for _ in 0..mlen2 {
+                                buf2.push(bus.as_mut().read8(a2));
+                                a2 = a2.wrapping_add(1);
+                            }
+                            viewer.update_memory_window(eff_start2, buf2);
+                            let (consumed, _) =
+                                em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                            let clen2 = core::cmp::max(consumed as usize, 1);
+                            viewer.set_memory_highlight(cpu.r.pc, clen2);
+                        }
+                        regview::Command::RefreshHexListing => {
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let (policy, _win_len) = viewer.get_span_policy();
+                            let span_for_pc =
+                                spans.iter().find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e).copied();
+                            let (start, total_len) = if policy == 1 {
+                                let (ws, wl, _) = viewer.get_memory_window();
+                                (ws, std::cmp::max(wl, 256))
+                            } else if let Some((s, e)) = span_for_pc {
+                                (s, e.wrapping_sub(s) as usize)
+                            } else {
+                                let (ws, wl, _) = viewer.get_memory_window();
+                                (ws, std::cmp::max(wl, 256))
+                            };
+                            let mut cur = start;
+                            let mut out = String::new();
+                            let mut processed: usize = 0;
+                            while processed < total_len {
+                                let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                use core::fmt::Write as _;
+                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                let step = core::cmp::max(consumed as usize, 1);
+                                processed += step;
+                                cur = cur.wrapping_add(step as u16);
+                            }
+                            viewer.update_hex_listing(out);
+                        }
+                        _ => {}
+                    }
+                }
                 // Update memory pane based on current settings
                 let (mut mstart, mut mlen, mut mfollow) = viewer.get_memory_window();
                 let mut eff_start: u16 = if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
@@ -3322,47 +3513,121 @@ fn main() {
                             clen = core::cmp::max(consumed as usize, 1);
                             viewer.set_memory_highlight(cpu.r.pc, clen);
                         }
-                            }
-                            // Handle queued commands even while paused
-                            while let Some(cmd) = viewer.take_command_worker() {
-                                match cmd {
+                    }
+                    // Handle queued commands even while paused
+                    while let Some(cmd) = viewer.take_command_worker() {
+                        match cmd {
                             regview::Command::UiOpenSettings
                             | regview::Command::UiOpenSettingsExternal => {}
-                                    regview::Command::UiSetSettingsBaseline(_, _, _) => {}
-                                    regview::Command::UiAckSettings { .. } => {}
-                                    regview::Command::UiSetGpioOnColor(_) => {}
-                                    regview::Command::UiSetBlockStatus { .. } => {}
-                                    regview::Command::SavePrefs {
-                                        settings,
-                                        gpio_on_color,
-                                        instance_id,
-                                    } => {
-                                        let payload = settings_worker::SettingsPayload {
-                                            settings,
-                                            gpio_on_color,
-                                            instance_id,
-                                        };
-                                        if apply_settings_runtime(
-                                            Some(viewer),
-                                            bus.as_mut(),
-                                            &payload,
-                                        ) {
-                                            persist_settings_snapshot(
-                                                &payload.settings,
-                                                payload.gpio_on_color,
-                                            );
-                                            publish_settings_baseline(
-                                                &payload.settings,
-                                                payload.gpio_on_color,
-                                            );
-                                            send_settings_ack(payload.instance_id);
-                                        }
-                                    }
-                                    regview::Command::SetPc(a) => {
-                                        cpu.set_pc(a);
-                                        // push updated snapshot
-                                        let snap2 = regview::RegSnapshot {
-                                            a: cpu.r.a,
+                            regview::Command::UiSetSettingsBaseline(_, _, _) => {}
+                            regview::Command::UiAckSettings { .. } => {}
+                            regview::Command::UiSetGpioOnColor(_) => {}
+                            regview::Command::UiSetBlockStatus { .. } => {}
+                            regview::Command::SavePrefs {
+                                settings,
+                                gpio_on_color,
+                                instance_id,
+                            } => {
+                                let payload = settings_worker::SettingsPayload {
+                                    settings,
+                                    gpio_on_color,
+                                    instance_id,
+                                };
+                                if apply_settings_runtime(Some(viewer), bus.as_mut(), &payload) {
+                                    persist_settings_snapshot(
+                                        &payload.settings,
+                                        payload.gpio_on_color,
+                                    );
+                                    publish_settings_baseline(
+                                        &payload.settings,
+                                        payload.gpio_on_color,
+                                    );
+                                    send_settings_ack(payload.instance_id);
+                                }
+                            }
+                            regview::Command::ApplyRegs(ns) => {
+                                cpu.r.a = ns.a;
+                                cpu.r.b = ns.b;
+                                cpu.r.x = ns.x;
+                                cpu.r.y = ns.y;
+                                cpu.r.u = ns.u;
+                                cpu.r.s = ns.s;
+                                cpu.r.dp = ns.dp;
+                                cpu.r.pc = ns.pc;
+                                cpu.r.cc = ns.cc;
+                                let snap2 = regview::RegSnapshot {
+                                    a: cpu.r.a,
+                                    b: cpu.r.b,
+                                    d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+                                    x: cpu.r.x,
+                                    y: cpu.r.y,
+                                    u: cpu.r.u,
+                                    s: cpu.r.s,
+                                    dp: cpu.r.dp,
+                                    pc: cpu.r.pc,
+                                    cc: cpu.r.cc,
+                                };
+                                viewer.push(snap2);
+                                // Refresh memory pane after register change (e.g., PC)
+                                let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
+                                let eff_start2: u16 =
+                                    if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                                let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
+                                let mut a2 = eff_start2;
+                                for _ in 0..mlen2 {
+                                    buf2.push(bus.as_mut().read8(a2));
+                                    a2 = a2.wrapping_add(1);
+                                }
+                                viewer.update_memory_window(eff_start2, buf2);
+                                let (consumed, _) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
+                                let clen2 = core::cmp::max(consumed as usize, 1);
+                                viewer.set_memory_highlight(cpu.r.pc, clen2);
+                            }
+                        regview::Command::MemWrite(items) => {
+                            for (addr, val) in items {
+                                bus.as_mut().write8(addr, val);
+                            }
+                            // Refresh memory window after edits
+                            let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
+                            let eff_start2: u16 =
+                                if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                            let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
+                            let mut a2 = eff_start2;
+                            for _ in 0..mlen2 {
+                                buf2.push(bus.as_mut().read8(a2));
+                                a2 = a2.wrapping_add(1);
+                            }
+                            viewer.update_memory_window(eff_start2, buf2);
+                            // Refresh listing for current PC span
+                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let span_for_pc =
+                                spans.iter().find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e).copied();
+                            let (start, end) = span_for_pc.unwrap_or_else(|| {
+                                let (ws, wl, _) = viewer.get_memory_window();
+                                (ws, ws.wrapping_add(wl as u16))
+                            });
+                            let mut cur = start;
+                            let mut out = String::new();
+                            let mut processed: usize = 0;
+                            let total_len: usize = end.wrapping_sub(start) as usize;
+                            while processed < total_len {
+                                let (consumed, text) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                use core::fmt::Write as _;
+                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                let step = core::cmp::max(consumed as usize, 1);
+                                processed += step;
+                                cur = cur.wrapping_add(step as u16);
+                            }
+                            viewer.update_hex_listing(out);
+                        }
+                            regview::Command::SetPc(a) => {
+                                cpu.set_pc(a);
+                                viewer.set_memory_window(cpu.r.pc, None, Some(true));
+                                // push updated snapshot
+                                let snap2 = regview::RegSnapshot {
+                                    a: cpu.r.a,
                                     b: cpu.r.b,
                                     d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
                                     x: cpu.r.x,
@@ -3415,26 +3680,33 @@ fn main() {
                             regview::Command::RefreshHexListing => {
                                 // Rebuild hex listing for current PC's loaded span
                                 let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-                                if let Some((start, end)) = spans
+                                let (policy, _win_len) = viewer.get_span_policy();
+                                let span_for_pc = spans
                                     .iter()
                                     .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
-                                    .copied()
-                                {
-                                    let mut cur = start;
-                                    let mut out = String::new();
-                                    let mut processed: usize = 0;
-                                    let total_len: usize = end.wrapping_sub(start) as usize;
-                                    while processed < total_len {
-                                        let (consumed, text) =
-                                            em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
-                                        use core::fmt::Write as _;
-                                        let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                        let step = core::cmp::max(consumed as usize, 1);
-                                        processed += step;
-                                        cur = cur.wrapping_add(step as u16);
-                                    }
-                                    viewer.update_hex_listing(out);
+                                    .copied();
+                                let (start, total_len) = if policy == 1 {
+                                    let (ws, wl, _) = viewer.get_memory_window();
+                                    (ws, std::cmp::max(wl, 256))
+                                } else if let Some((s, e)) = span_for_pc {
+                                    (s, e.wrapping_sub(s) as usize)
+                                } else {
+                                    let (ws, wl, _) = viewer.get_memory_window();
+                                    (ws, std::cmp::max(wl, 256))
+                                };
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                while processed < total_len {
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
                                 }
+                                viewer.update_hex_listing(out);
                             }
                             regview::Command::RunUntil(a) => {
                                 run_until_target = Some(a);
@@ -3678,34 +3950,33 @@ fn main() {
                             regview::Command::UiLoadLst(_) => {
                                 // UI-only; handled by GUI thread
                             }
-                        regview::Command::ApplyMmuPreset { name } => {
-                            let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
-                                let _ = em6809::config::apply_preset(mmu, &name);
-                                let (map, sys, task) = mmu.snapshot_current_map();
-                                if let Some(v) = viewer {
-                                    v.sync_mmu(sys, task, map);
-                                }
-                                if let Some((mut s, _origins, color_opt)) =
-                                    regview::get_latest_settings_baseline()
-                                {
-                                    s.use_mmu = true;
-                                    s.mmu_mode_sys = sys;
-                                    s.mmu_task = format!("{}", task & 0x07);
-                                    s.mmu_preset_name = name.clone();
-                                    let prot = mmu.read8(mmu.regs_base + 0x12);
-                                    s.mmu_prot_hex = format!("{:02X}", prot);
-                                    for (i, f) in map.iter().enumerate() {
-                                        s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                            regview::Command::ApplyMmuPreset { name } => {
+                                let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
+                                    let _ = em6809::config::apply_preset(mmu, &name);
+                                    let (map, sys, task) = mmu.snapshot_current_map();
+                                    if let Some(v) = viewer {
+                                        v.sync_mmu(sys, task, map);
                                     }
-                                    for i in 0..16 {
-                                        let attr =
-                                            mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                        s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                    if let Some((mut s, _origins, color_opt)) =
+                                        regview::get_latest_settings_baseline()
+                                    {
+                                        s.use_mmu = true;
+                                        s.mmu_mode_sys = sys;
+                                        s.mmu_task = format!("{}", task & 0x07);
+                                        s.mmu_preset_name = name.clone();
+                                        let prot = mmu.read8(mmu.regs_base + 0x12);
+                                        s.mmu_prot_hex = format!("{:02X}", prot);
+                                        for (i, f) in map.iter().enumerate() {
+                                            s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                        }
+                                        for i in 0..16 {
+                                            let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
+                                            s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                        }
+                                        publish_settings_baseline(&s, color_opt.unwrap_or(0));
                                     }
-                                    publish_settings_baseline(&s, color_opt.unwrap_or(0));
-                                }
-                            };
-                            if let Some(io_mmu) =
+                                };
+                                if let Some(io_mmu) =
                                     bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
                                 {
                                     let inner = io_mmu.inner_any_mut();
@@ -3718,45 +3989,48 @@ fn main() {
                                     apply(mmu, Some(viewer));
                                 }
                             }
-                        regview::Command::ApplyMmuMapFileText { text } => {
-                            let apply_text = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
-                                let _ = em6809::config::apply_mmu_config_from_str(mmu, &text);
-                                let (map, sys, task) = mmu.snapshot_current_map();
-                                if let Some(v) = viewer {
-                                    v.sync_mmu(sys, task, map);
-                                }
-                                if let Some((mut s, _origins, color_opt)) =
-                                    regview::get_latest_settings_baseline()
+                            regview::Command::ApplyMmuMapFileText { text } => {
+                                let apply_text =
+                                    |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
+                                        let _ =
+                                            em6809::config::apply_mmu_config_from_str(mmu, &text);
+                                        let (map, sys, task) = mmu.snapshot_current_map();
+                                        if let Some(v) = viewer {
+                                            v.sync_mmu(sys, task, map);
+                                        }
+                                        if let Some((mut s, _origins, color_opt)) =
+                                            regview::get_latest_settings_baseline()
+                                        {
+                                            s.use_mmu = true;
+                                            s.mmu_mode_sys = sys;
+                                            s.mmu_task = format!("{}", task & 0x07);
+                                            s.mmu_preset_name.clear();
+                                            let prot = mmu.read8(mmu.regs_base + 0x12);
+                                            s.mmu_prot_hex = format!("{:02X}", prot);
+                                            for (i, f) in map.iter().enumerate() {
+                                                s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                            }
+                                            for i in 0..16 {
+                                                let attr =
+                                                    mmu.read8(mmu.regs_base + 0x18 + i as u16);
+                                                s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                            }
+                                            publish_settings_baseline(&s, color_opt.unwrap_or(0));
+                                        }
+                                    };
+                                if let Some(io_mmu) =
+                                    bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
                                 {
-                                    s.use_mmu = true;
-                                    s.mmu_mode_sys = sys;
-                                    s.mmu_task = format!("{}", task & 0x07);
-                                    s.mmu_preset_name.clear();
-                                    let prot = mmu.read8(mmu.regs_base + 0x12);
-                                    s.mmu_prot_hex = format!("{:02X}", prot);
-                                    for (i, f) in map.iter().enumerate() {
-                                        s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                    let inner = io_mmu.inner_any_mut();
+                                    if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                        apply_text(mmu, Some(viewer));
                                     }
-                                    for i in 0..16 {
-                                        let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                        s.mmu_attr_bytes[i] = format!("{:02X}", attr);
-                                    }
-                                    publish_settings_baseline(&s, color_opt.unwrap_or(0));
-                                }
-                            };
-                            if let Some(io_mmu) =
-                                bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
-                            {
-                                let inner = io_mmu.inner_any_mut();
-                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                } else if let Some(mmu) =
+                                    bus.as_mut().as_any_mut().downcast_mut::<Mc6829>()
+                                {
                                     apply_text(mmu, Some(viewer));
                                 }
-                            } else if let Some(mmu) =
-                                bus.as_mut().as_any_mut().downcast_mut::<Mc6829>()
-                            {
-                                apply_text(mmu, Some(viewer));
                             }
-                        }
                             regview::Command::ApplyConsole {
                                 enable,
                                 base,
@@ -3891,123 +4165,6 @@ fn main() {
                                     } else {
                                         viewer.sync_timer(false, false, false);
                                     }
-                                }
-                            }
-                            regview::Command::ApplyRegs(ns) => {
-                                cpu.r.a = ns.a;
-                                cpu.r.b = ns.b;
-                                cpu.r.x = ns.x;
-                                cpu.r.y = ns.y;
-                                cpu.r.u = ns.u;
-                                cpu.r.s = ns.s;
-                                cpu.r.dp = ns.dp;
-                                cpu.r.pc = ns.pc;
-                                cpu.r.cc = ns.cc;
-                                let snap2 = regview::RegSnapshot {
-                                    a: cpu.r.a,
-                                    b: cpu.r.b,
-                                    d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
-                                    x: cpu.r.x,
-                                    y: cpu.r.y,
-                                    u: cpu.r.u,
-                                    s: cpu.r.s,
-                                    dp: cpu.r.dp,
-                                    pc: cpu.r.pc,
-                                    cc: cpu.r.cc,
-                                };
-                                viewer.push(snap2);
-                                // refresh memory view to reflect edits
-                                let (mstart3, mlen3, mfollow3) = viewer.get_memory_window();
-                                let eff_start3: u16 =
-                                    if mfollow3 { cpu.r.pc & 0xFFF0 } else { mstart3 };
-                                let mut buf3: Vec<u8> = Vec::with_capacity(mlen3);
-                                let mut a3 = eff_start3;
-                                for _ in 0..mlen3 {
-                                    buf3.push(bus.as_mut().read8(a3));
-                                    a3 = a3.wrapping_add(1);
-                                }
-                                viewer.update_memory_window(eff_start3, buf3);
-                                let (consumed, _) =
-                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
-                                let clen3 = core::cmp::max(consumed as usize, 1);
-                                viewer.set_memory_highlight(cpu.r.pc, clen3);
-                                // refresh listing for current PC span
-                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-                                if let Some((start, end)) = spans
-                                    .iter()
-                                    .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
-                                    .copied()
-                                {
-                                    let mut cur = start;
-                                    let mut out = String::new();
-                                    let mut processed: usize = 0;
-                                    let total_len: usize = end.wrapping_sub(start) as usize;
-                                    while processed < total_len {
-                                        let (consumed, text) =
-                                            em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
-                                        use core::fmt::Write as _;
-                                        let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                        let step = core::cmp::max(consumed as usize, 1);
-                                        processed += step;
-                                        cur = cur.wrapping_add(step as u16);
-                                    }
-                                    viewer.update_hex_listing(out);
-                                }
-                            }
-                            regview::Command::MemWrite(items) => {
-                                for (addr, val) in items {
-                                    bus.as_mut().write8(addr, val);
-                                }
-                                // Sync GPIO state immediately after edits
-                                {
-                                    let mut pushed = false;
-                                    if let Some(io_mem) =
-                                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
-                                    {
-                                        if io_mem.take_gpio_dirty() {
-                                            io_mem.with_gpio_mut(|g| {
-                                                let (o, d, b) = g.get_state();
-                                                viewer.sync_gpio(true, b, o, d);
-                                                pushed = true;
-                                            });
-                                        }
-                                    } else if let Some(io_mmu) =
-                                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
-                                    {
-                                        if io_mmu.take_gpio_dirty() {
-                                            io_mmu.with_gpio_mut(|g| {
-                                                let (o, d, b) = g.get_state();
-                                                viewer.sync_gpio(true, b, o, d);
-                                                pushed = true;
-                                            });
-                                        }
-                                    } else if let Some(wt) =
-                                        bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
-                                    {
-                                        let inner_any = wt.inner_any_mut();
-                                        if let Some(io_mem) =
-                                            inner_any.downcast_mut::<IoBus<Memory>>()
-                                        {
-                                            if io_mem.take_gpio_dirty() {
-                                                io_mem.with_gpio_mut(|g| {
-                                                    let (o, d, b) = g.get_state();
-                                                    viewer.sync_gpio(true, b, o, d);
-                                                    pushed = true;
-                                                });
-                                            }
-                                        } else if let Some(io_mmu) =
-                                            inner_any.downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            if io_mmu.take_gpio_dirty() {
-                                                io_mmu.with_gpio_mut(|g| {
-                                                    let (o, d, b) = g.get_state();
-                                                    viewer.sync_gpio(true, b, o, d);
-                                                    pushed = true;
-                                                });
-                                            }
-                                        }
-                                    }
-                                    let _ = pushed;
                                 }
                             }
                             regview::Command::GpioSetOut(mask) => {
@@ -4190,19 +4347,14 @@ fn main() {
                                 instance_id,
                             };
                             if apply_settings_runtime(Some(viewer), bus.as_mut(), &payload) {
-                                persist_settings_snapshot(
-                                    &payload.settings,
-                                    payload.gpio_on_color,
-                                );
-                                publish_settings_baseline(
-                                    &payload.settings,
-                                    payload.gpio_on_color,
-                                );
+                                persist_settings_snapshot(&payload.settings, payload.gpio_on_color);
+                                publish_settings_baseline(&payload.settings, payload.gpio_on_color);
                                 send_settings_ack(payload.instance_id);
                             }
                         }
                         regview::Command::SetPc(a) => {
                             cpu.set_pc(a);
+                            viewer.set_memory_window(cpu.r.pc, None, Some(true));
                             // push updated snapshot immediately to reflect PC change
                             let snap2 = regview::RegSnapshot {
                                 a: cpu.r.a,
@@ -4249,26 +4401,33 @@ fn main() {
                         regview::Command::RefreshHexListing => {
                             // Rebuild hex listing for current PC's loaded span
                             let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let (policy, _win_len) = viewer.get_span_policy();
                             let span_for_pc = spans
                                 .iter()
                                 .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
                                 .copied();
-                            if let Some((start, end)) = span_for_pc {
-                                let mut cur = start;
-                                let mut out = String::new();
-                                let mut processed: usize = 0;
-                                let total_len: usize = end.wrapping_sub(start) as usize;
-                                while processed < total_len {
-                                    let (consumed, text) =
-                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
-                                    use core::fmt::Write as _;
-                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                    let step = core::cmp::max(consumed as usize, 1);
-                                    processed += step;
-                                    cur = cur.wrapping_add(step as u16);
-                                }
-                                viewer.update_hex_listing(out);
+                            let (start, total_len) = if policy == 1 {
+                                let (ws, wl, _) = viewer.get_memory_window();
+                                (ws, std::cmp::max(wl, 256))
+                            } else if let Some((s, e)) = span_for_pc {
+                                (s, e.wrapping_sub(s) as usize)
+                            } else {
+                                let (ws, wl, _) = viewer.get_memory_window();
+                                (ws, std::cmp::max(wl, 256))
+                            };
+                            let mut cur = start;
+                            let mut out = String::new();
+                            let mut processed: usize = 0;
+                            while processed < total_len {
+                                let (consumed, text) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                use core::fmt::Write as _;
+                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                let step = core::cmp::max(consumed as usize, 1);
+                                processed += step;
+                                cur = cur.wrapping_add(step as u16);
                             }
+                            viewer.update_hex_listing(out);
                         }
                         regview::Command::RunUntil(a) => {
                             run_until_target = Some(a);
@@ -4364,51 +4523,12 @@ fn main() {
                                         let off = 0x18u16 + (pg as u16);
                                         mmu.write8(mmu.regs_base + off, at);
                                     }
-                    }
-                }
-            }
-            regview::Command::ApplyMmuPreset { name } => {
-                let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
-                    let _ = em6809::config::apply_preset(mmu, &name);
-                    let (map, sys, task) = mmu.snapshot_current_map();
-                    if let Some(v) = viewer {
-                        v.sync_mmu(sys, task, map);
-                    }
-                    if let Some((mut s, _origins, color_opt)) =
-                        regview::get_latest_settings_baseline()
-                    {
-                        s.use_mmu = true;
-                        s.mmu_mode_sys = sys;
-                        s.mmu_task = format!("{}", task & 0x07);
-                        s.mmu_preset_name = name.clone();
-                        let prot = mmu.read8(mmu.regs_base + 0x12);
-                        s.mmu_prot_hex = format!("{:02X}", prot);
-                        for (i, f) in map.iter().enumerate() {
-                            s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                }
+                            }
                         }
-                        for i in 0..16 {
-                            let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                            s.mmu_attr_bytes[i] = format!("{:02X}", attr);
-                        }
-                        publish_settings_baseline(&s, color_opt.unwrap_or(0));
-                    }
-                };
-                if let Some(io_mmu) =
-                    bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
-                {
-                    let inner = io_mmu.inner_any_mut();
-                    if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                        apply(mmu, Some(viewer));
-                    }
-                } else if let Some(mmu) =
-                    bus.as_mut().as_any_mut().downcast_mut::<Mc6829>()
-                {
-                    apply(mmu, Some(viewer));
-                }
-            }
-                        regview::Command::ApplyMmuMapFileText { text } => {
-                            let apply_text = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
-                                let _ = em6809::config::apply_mmu_config_from_str(mmu, &text);
+                        regview::Command::ApplyMmuPreset { name } => {
+                            let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
+                                let _ = em6809::config::apply_preset(mmu, &name);
                                 let (map, sys, task) = mmu.snapshot_current_map();
                                 if let Some(v) = viewer {
                                     v.sync_mmu(sys, task, map);
@@ -4419,7 +4539,7 @@ fn main() {
                                     s.use_mmu = true;
                                     s.mmu_mode_sys = sys;
                                     s.mmu_task = format!("{}", task & 0x07);
-                                    s.mmu_preset_name.clear();
+                                    s.mmu_preset_name = name.clone();
                                     let prot = mmu.read8(mmu.regs_base + 0x12);
                                     s.mmu_prot_hex = format!("{:02X}", prot);
                                     for (i, f) in map.iter().enumerate() {
@@ -4432,6 +4552,46 @@ fn main() {
                                     publish_settings_baseline(&s, color_opt.unwrap_or(0));
                                 }
                             };
+                            if let Some(io_mmu) =
+                                bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                let inner = io_mmu.inner_any_mut();
+                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                    apply(mmu, Some(viewer));
+                                }
+                            } else if let Some(mmu) =
+                                bus.as_mut().as_any_mut().downcast_mut::<Mc6829>()
+                            {
+                                apply(mmu, Some(viewer));
+                            }
+                        }
+                        regview::Command::ApplyMmuMapFileText { text } => {
+                            let apply_text =
+                                |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
+                                    let _ = em6809::config::apply_mmu_config_from_str(mmu, &text);
+                                    let (map, sys, task) = mmu.snapshot_current_map();
+                                    if let Some(v) = viewer {
+                                        v.sync_mmu(sys, task, map);
+                                    }
+                                    if let Some((mut s, _origins, color_opt)) =
+                                        regview::get_latest_settings_baseline()
+                                    {
+                                        s.use_mmu = true;
+                                        s.mmu_mode_sys = sys;
+                                        s.mmu_task = format!("{}", task & 0x07);
+                                        s.mmu_preset_name.clear();
+                                        let prot = mmu.read8(mmu.regs_base + 0x12);
+                                        s.mmu_prot_hex = format!("{:02X}", prot);
+                                        for (i, f) in map.iter().enumerate() {
+                                            s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                        }
+                                        for i in 0..16 {
+                                            let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
+                                            s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                        }
+                                        publish_settings_baseline(&s, color_opt.unwrap_or(0));
+                                    }
+                                };
                             if let Some(io_mmu) =
                                 bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
                             {
@@ -5190,26 +5350,33 @@ fn apply_settings_runtime(
 
     if let Some(view) = viewer {
         // Reflect current MMU map/state back to the viewer after applying changes.
+        let push_map = |mmu: &mut Mc6829| {
+            let (mut map, sys, task) = mmu.snapshot_current_map();
+            // If settings provided explicit attr bytes, ensure they are merged into the snapshot.
+            for (idx, entry) in settings.mmu_attr_bytes.iter().enumerate() {
+                if let Some(v) = parse_settings_u16(entry) {
+                    let attr = (v & 0xFF) as u16;
+                    map[idx] = (map[idx] & 0x00FF) | (attr << 8);
+                }
+            }
+            view.sync_mmu(sys, task, map);
+        };
         if let Some(io_mmu) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
             let inner = io_mmu.inner_any_mut();
             if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                let (map, sys, task) = mmu.snapshot_current_map();
-                view.sync_mmu(sys, task, map);
+                push_map(mmu);
             }
         } else if let Some(mmu) = bus.as_any_mut().downcast_mut::<Mc6829>() {
-            let (map, sys, task) = mmu.snapshot_current_map();
-            view.sync_mmu(sys, task, map);
+            push_map(mmu);
         } else if let Some(wt) = bus.as_any_mut().downcast_mut::<bus::WriteTrack>() {
             let inner_any = wt.inner_any_mut();
             if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
                 let inner2 = io_mmu.inner_any_mut();
                 if let Some(mmu) = inner2.downcast_mut::<Mc6829>() {
-                    let (map, sys, task) = mmu.snapshot_current_map();
-                    view.sync_mmu(sys, task, map);
+                    push_map(mmu);
                 }
             } else if let Some(mmu) = inner_any.downcast_mut::<Mc6829>() {
-                let (map, sys, task) = mmu.snapshot_current_map();
-                view.sync_mmu(sys, task, map);
+                push_map(mmu);
             }
         }
         view.set_gpio_on_color(payload.gpio_on_color);
@@ -5410,13 +5577,13 @@ fn persist_settings_snapshot(state: &regview::SettingsState, gpio_on_color: u32)
         rate_hz: parse_settings_u32(&state.timer_rate_hz),
         ips_est: parse_settings_usize(&state.timer_ips).map(|v| v as u64),
     });
-        let mut frames: Vec<(usize, u16)> = Vec::new();
-        for (idx, entry) in state.mmu_map_frames.iter().enumerate() {
-            if let Some(v) = parse_settings_u16(entry) {
-                frames.push((idx, v & 0x00FF));
-            }
+    let mut frames: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in state.mmu_map_frames.iter().enumerate() {
+        if let Some(v) = parse_settings_u16(entry) {
+            frames.push((idx, v & 0x00FF));
         }
-        let mut attrs: Vec<(usize, u8)> = Vec::new();
+    }
+    let mut attrs: Vec<(usize, u8)> = Vec::new();
     for (idx, entry) in state.mmu_attr_bytes.iter().enumerate() {
         if let Some(v) = parse_settings_u16(entry) {
             attrs.push((idx, (v & 0xFF) as u8));
@@ -5539,7 +5706,9 @@ fn parse_settings_u8(s: &str) -> Option<u8> {
     } else {
         (10, sl)
     };
-    u32::from_str_radix(digits, base).ok().map(|v| (v & 0xFF) as u8)
+    u32::from_str_radix(digits, base)
+        .ok()
+        .map(|v| (v & 0xFF) as u8)
 }
 
 fn sync_gpio_from_bus(bus: &mut dyn bus::Bus, viewer: &regview::Viewer) {

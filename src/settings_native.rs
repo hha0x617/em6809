@@ -1,9 +1,12 @@
+#![allow(dead_code, unused_imports)]
+
 use eframe::egui;
 use std::collections::HashMap;
 
 use crate::i18n::LOADER;
 use crate::regview::{
-    get_latest_settings_baseline, push_global_command, Command as UiCommand, SettingsState,
+    draw_origin_badge, format_color_hex, get_latest_settings_baseline, parse_color_hex,
+    push_global_command, Command as UiCommand, SettingsState,
 };
 use crate::settings_worker::{self, CloseReason, SettingsPayload, WorkerCommand};
 #[cfg(windows)]
@@ -205,9 +208,8 @@ impl SettingsNativeApp {
                                 );
                                 draw_origin_badge(ui, &self.settings_origins, "console.out_path");
                                 if ui.button(fl!(LOADER, "browse")).clicked() {
-                                    if let Some(path) = FileDialog::new()
-                                        .set_directory(".")
-                                        .pick_file()
+                                    if let Some(path) =
+                                        FileDialog::new().set_directory(".").pick_file()
                                     {
                                         self.settings.console_out_path =
                                             path.to_string_lossy().to_string();
@@ -678,7 +680,7 @@ static APP: OnceCell<Mutex<SettingsNativeApp>> = OnceCell::new();
 static SETTINGS_LOG_ENABLED: OnceCell<bool> = OnceCell::new();
 static SETTINGS_LOG_OVERRIDE: OnceCell<AtomicBool> = OnceCell::new();
 
-fn settings_debug_enabled() -> bool {
+pub fn settings_debug_enabled() -> bool {
     if let Some(flag) = SETTINGS_LOG_OVERRIDE.get() {
         return flag.load(Ordering::SeqCst);
     }
@@ -874,7 +876,8 @@ pub fn open_native_settings_viewport(ctx: &egui::Context) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 #[cfg(windows)]
                 {
-                    let _ = win_settings::force_close_settings_window(&fl!(LOADER, "settings-title"));
+                    let _ =
+                        win_settings::force_close_settings_window(&fl!(LOADER, "settings-title"));
                 }
                 if let Ok(app_guard) = app.lock() {
                     request_worker_close(app_guard.dialog_instance, CloseReason::CloseRequested);
@@ -1134,70 +1137,4 @@ pub fn pump_native_settings_viewport(ctx: &egui::Context) {
 fn close_native_viewport(ctx: &egui::Context) {
     let id = egui::ViewportId::from_hash_of("settings_native");
     ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
-}
-
-fn format_color_hex(c: egui::Color32) -> String {
-    format!("0x{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
-}
-
-fn parse_color_hex(s: &str) -> Option<egui::Color32> {
-    let sl = s.trim();
-    let digits = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-        rest
-    } else if let Some(rest) = sl.strip_prefix('#') {
-        rest
-    } else {
-        sl
-    };
-    if digits.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&digits[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&digits[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&digits[4..6], 16).ok()?;
-    Some(egui::Color32::from_rgb(r, g, b))
-}
-
-fn settings_origin_badges_enabled() -> bool {
-    static SHOW: OnceCell<bool> = OnceCell::new();
-    *SHOW.get_or_init(|| {
-        let env_enabled = std::env::var("EM6809_SHOW_SETTINGS_ORIGINS")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let cli_enabled = std::env::args().any(|arg| arg == "--show-settings-origins");
-        env_enabled || cli_enabled
-    })
-}
-
-fn draw_origin_badge(
-    ui: &mut egui::Ui,
-    origins: &std::collections::HashMap<String, u8>,
-    key: &str,
-) {
-    if !settings_origin_badges_enabled() {
-        return;
-    }
-    use egui::{Color32, Rounding, Stroke, TextStyle, Vec2};
-    let (label, bg) = match origins.get(key).copied().unwrap_or(0) {
-        2 => ("CLI", Color32::from_rgb(220, 80, 60)),
-        1 => ("Saved", Color32::from_rgb(70, 130, 200)),
-        _ => ("Default", Color32::from_gray(110)),
-    };
-    let text_color = Color32::WHITE;
-    let padding = Vec2::new(6.0, 2.0);
-    let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        TextStyle::Small.resolve(ui.style()),
-        text_color,
-    );
-    let size = galley.size() + padding * 2.0;
-    let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, Rounding::same(6.0), bg);
-    let border = Stroke {
-        width: 1.0,
-        color: bg.gamma_multiply(0.8),
-    };
-    ui.painter().rect_stroke(rect, Rounding::same(6.0), border);
-    ui.painter()
-        .galley(rect.left_top() + padding, galley, egui::Color32::WHITE);
 }

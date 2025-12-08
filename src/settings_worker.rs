@@ -1,5 +1,5 @@
-use crate::regview::SettingsState;
 use crate::prefs;
+use crate::regview::SettingsState;
 use once_cell::sync::OnceCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};

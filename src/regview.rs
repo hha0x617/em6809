@@ -1,15 +1,47 @@
 #![allow(dead_code)]
 
+mod helpers;
 mod settings;
 pub use settings::SettingsState;
 // Expose GPIO snapshot publisher to outer modules
 #[allow(unused_imports)]
 pub use em6809::io::publish_gpio_broadcast as publish_gpio_snapshot;
+pub use helpers::{
+    draw_origin_badge, format_color_hex, format_memory_dump, parse_color_hex,
+    parse_num_u16_any_gui, parse_num_usize_any_gui, parse_u16_any,
+};
 
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use eframe::egui;
+use once_cell::sync::OnceCell;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
+
+// macOS Preferences… (Cmd+,) fallback flag and context to wake UI
+static PREFS_REQUEST: OnceCell<AtomicBool> = OnceCell::new();
+#[cfg(target_os = "macos")]
+static PREFS_WAKE_TICKS: OnceCell<AtomicUsize> = OnceCell::new();
+#[cfg(target_os = "macos")]
+static GUI_CTX: OnceCell<egui::Context> = OnceCell::new();
+
+#[cfg(target_os = "macos")]
+pub fn request_prefs_open() {
+    PREFS_REQUEST
+        .get_or_init(|| AtomicBool::new(false))
+        .store(true, Ordering::SeqCst);
+    PREFS_WAKE_TICKS
+        .get_or_init(|| AtomicUsize::new(0))
+        .store(10, Ordering::SeqCst); // wake for ~10 frames
+    if let Some(ctx) = GUI_CTX.get() {
+        ctx.request_repaint();
+        ctx.request_repaint_after(Duration::from_millis(10));
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RegSnapshot {
@@ -56,13 +88,21 @@ impl RegSnapshot {
     }
 }
 
-    pub mod gui {
-        use super::*;
-        use crate::i18n::LOADER;
-        use crate::settings_worker::{self, SettingsPayload, WorkerCommand};
-        use eframe::{egui, App};
-    use egui_extras::{Column, TableBuilder};
-    use i18n_embed_fl::fl;
+pub static SHOW_ORIGINS_OVERRIDE: OnceCell<AtomicBool> = OnceCell::new();
+
+pub mod gui {
+    mod list_ui;
+    mod mem_ui;
+    mod regs_ui;
+    mod settings_ui;
+    use super::*;
+    use super::{
+        draw_origin_badge, format_color_hex, format_memory_dump, parse_color_hex,
+        parse_num_u16_any_gui, parse_num_usize_any_gui, parse_u16_any, SHOW_ORIGINS_OVERRIDE,
+    };
+    use crate::i18n::LOADER;
+    use crate::settings_worker;
+    use eframe::{egui, App};
     use memmap2::Mmap;
     use std::collections::HashMap;
     use std::fs::File;
@@ -72,18 +112,18 @@ impl RegSnapshot {
     type GpioSyncState = Option<(bool, u8, u32, u32)>;
     type MmuSyncState = Option<(bool, u8, [u16; 16])>;
 
-        // macOS-specific helpers moved to crate::platform::macos
+    // macOS-specific helpers moved to crate::platform::macos
 
-        use once_cell::sync::OnceCell;
+    use once_cell::sync::OnceCell;
 
-        pub fn parse_u8_hex(s: &str) -> Option<u8> {
-            let sl = s.trim();
-            if sl.is_empty() {
-                return None;
-            }
-            let t = sl.trim_start_matches("0x").trim_start_matches("0X");
-            u16::from_str_radix(t, 16).ok().map(|v| (v & 0xFF) as u8)
+    pub fn parse_u8_hex(s: &str) -> Option<u8> {
+        let sl = s.trim();
+        if sl.is_empty() {
+            return None;
         }
+        let t = sl.trim_start_matches("0x").trim_start_matches("0X");
+        u16::from_str_radix(t, 16).ok().map(|v| (v & 0xFF) as u8)
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum DeviceTab {
@@ -193,7 +233,6 @@ impl RegSnapshot {
         Arc<Mutex<(SettingsState, HashMap<String, u8>, Option<u32>)>>,
     > = OnceCell::new();
     pub(super) static FORCE_IN_APP_SETTINGS: OnceCell<bool> = OnceCell::new();
-    pub static SHOW_ORIGINS_OVERRIDE: OnceCell<AtomicBool> = OnceCell::new();
 
     pub fn set_force_in_app_settings(v: bool) {
         let _ = FORCE_IN_APP_SETTINGS.set(v);
@@ -362,6 +401,22 @@ impl RegSnapshot {
             if self.gpio_on_color_text.is_empty() {
                 self.gpio_on_color_text = format_color_hex(self.gpio_on_color);
             }
+            // macOS: ensure GUI_CTX is set so external triggers can repaint
+            #[cfg(target_os = "macos")]
+            {
+                let _ = GUI_CTX.get_or_init(|| ctx.clone());
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(w) = PREFS_WAKE_TICKS.get() {
+                    let ticks = w.load(Ordering::SeqCst);
+                    if ticks > 0 {
+                        ctx.request_repaint();
+                        ctx.request_repaint_after(Duration::from_millis(10));
+                        w.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
+            }
             // Failsafe: if busy state lingers too long, clear it
             if self.settings_busy {
                 if let Some(since) = self.settings_busy_since {
@@ -387,6 +442,18 @@ impl RegSnapshot {
                 self.gpio_out = out;
                 self.gpio_dir = dir;
             }
+            // macOS: check pending Preferences request flag (App menu) and open in-app settings
+            #[cfg(target_os = "macos")]
+            if let Some(flag) = PREFS_REQUEST.get() {
+                if flag.swap(false, Ordering::SeqCst) {
+                    if crate::settings_native::settings_debug_enabled() {
+                        eprintln!("[macos-debug] prefs flag set -> open_in_app_settings()");
+                    }
+                    self.open_in_app_settings();
+                    ctx.request_repaint();
+                    ctx.request_repaint_after(Duration::from_millis(16));
+                }
+            }
             // Drain UI sync commands injected by emulator thread
             let drained_cmds = if let Ok(mut q) = self.cmds.lock() {
                 q.drain(..).collect()
@@ -400,26 +467,15 @@ impl RegSnapshot {
                         self.open_in_app_settings();
                     }
                     Command::UiOpenSettingsExternal => {
-                        #[cfg(windows)]
-                        {
-                            self.open_in_app_settings();
-                        }
-                        #[cfg(not(windows))]
-                        {
-                            if force_in_app_settings() {
-                                self.open_in_app_settings();
-                            } else {
-                                settings::open_native_settings(ctx);
-                            }
-                        }
+                        self.open_in_app_settings();
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
-                                self.settings_baseline = s.clone();
-                                // Update origins map
-                                self.settings_origins.clear();
-                                for (k, v) in origins.into_iter() {
-                                    self.settings_origins.insert(k, v);
-                                }
+                        self.settings_baseline = s.clone();
+                        // Update origins map
+                        self.settings_origins.clear();
+                        for (k, v) in origins.into_iter() {
+                            self.settings_origins.insert(k, v);
+                        }
                         // Settings were just applied; clear busy state
                         self.settings_busy = false;
                         self.settings_busy_since = None;
@@ -438,16 +494,15 @@ impl RegSnapshot {
                             );
                         }
                         // Also refresh current fields even if dialog is open so UI matches applied preset
-                                // Keep current preset selection if it was set locally and baseline is empty.
-                                if !self.settings.mmu_preset_name.is_empty()
-                                    && s.mmu_preset_name.is_empty()
-                                {
-                                    self.settings = self.settings_baseline.clone();
-                                    self.settings.mmu_preset_name =
-                                        self.settings_baseline.mmu_preset_name.clone();
-                                } else {
-                                    self.settings = self.settings_baseline.clone();
-                                }
+                        // Keep current preset selection if it was set locally and baseline is empty.
+                        if !self.settings.mmu_preset_name.is_empty() && s.mmu_preset_name.is_empty()
+                        {
+                            self.settings = self.settings_baseline.clone();
+                            self.settings.mmu_preset_name =
+                                self.settings_baseline.mmu_preset_name.clone();
+                        } else {
+                            self.settings = self.settings_baseline.clone();
+                        }
                         if let Some(rgb) = color_opt {
                             let col = egui::Color32::from_rgb(
                                 ((rgb >> 16) & 0xFF) as u8,
@@ -604,7 +659,17 @@ impl RegSnapshot {
                 {
                     em6809::platform::macos::install_preferences_handler_once(Box::new(
                         move || {
-                            let _ = push_global_command(Command::UiOpenSettings);
+                            #[cfg(target_os = "macos")]
+                            {
+                                if crate::settings_native::settings_debug_enabled() {
+                                    eprintln!(
+                                        "[macos-debug] Preferences handler fired -> flag + cmd"
+                                    );
+                                }
+                                crate::regview::request_prefs_open();
+                                let _ =
+                                    crate::regview::push_global_command(Command::UiOpenSettings);
+                            }
                         },
                     ));
                 }
@@ -809,6 +874,17 @@ impl RegSnapshot {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
 
+            // Windows: ensure title-bar close triggers a full shutdown
+            #[cfg(windows)]
+            {
+                let input = ctx.input(|i| i.viewport().clone());
+                if input.close_requested() {
+                    // Signal backend loop to stop and close the viewport
+                    self.quit_flag.store(true, Ordering::SeqCst);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+
             // Modal to request BIN base address after selecting a file
             if self.open_dialog_active {
                 egui::Window::new("Open Binary: Base Address")
@@ -848,2118 +924,48 @@ impl RegSnapshot {
                     });
             }
 
-            // Settings dialog (tabbed)
-            if self.settings_open {
-                let mut close_req = false;
-                egui::Window::new(fl!(LOADER, "settings-title"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .fixed_size(egui::vec2(640.0, 400.0))
-                    .min_size(egui::vec2(480.0, 400.0))
-                    .max_size(egui::vec2(640.0, 400.0))
-                    .id(egui::Id::new(("settings", self.settings_instance)))
-                    .open(&mut self.settings_open)
-                    .show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            let tabs = [
-                                (0, fl!(LOADER, "tab-general")),
-                                (1, fl!(LOADER, "tab-console")),
-                                (2, fl!(LOADER, "tab-block")),
-                                (3, fl!(LOADER, "tab-gpio")),
-                                (4, fl!(LOADER, "tab-timer")),
-                                (5, fl!(LOADER, "tab-mmu")),
-                                (6, fl!(LOADER, "tab-debug")),
-                            ];
-                            for (idx, label) in tabs.into_iter() {
-                                let selected = self.settings_tab == idx;
-                                if ui.selectable_label(selected, label).clicked() {
-                                    self.settings_tab = idx;
-                                }
-                            }
-                        });
-                        ui.separator();
-                        ui.add_space(4.0);
-                        let available_height = ui.available_height();
-                        let footer_reserved = 70.0;
-                        let scroll_height = (available_height - footer_reserved).max(200.0);
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .max_height(scroll_height)
-                            .show(ui, |ui| {
-                                match self.settings_tab {
-                            0 => {
-                                // General tab: (moved protect_vectors to MMU tab)
-                            }
-                            1 => {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.use_console,
-                                            fl!(LOADER, "use-console"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.enable",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "console-base-hex"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.console_base_hex,
-                                            )
-                                            .hint_text("0xFF00")
-                                            .desired_width(160.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.base",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.console_stdin,
-                                            fl!(LOADER, "console-read-stdin"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.stdin",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.console_echo,
-                                            fl!(LOADER, "console-local-echo"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.echo",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.console_tee_stderr,
-                                            fl!(LOADER, "console-tee-stderr"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.tee_stderr",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.console_flush_newline,
-                                            fl!(LOADER, "console-flush-newline"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.flush_newline",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "console-flush-every"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.console_flush_every,
-                                            )
-                                            .hint_text("1")
-                                            .desired_width(120.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.flush_every",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "console-output-file"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.console_out_path,
-                                            )
-                                            .hint_text("/tmp/console.txt")
-                                            .desired_width(260.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.out_path",
-                                        );
-                                        if ui.button(fl!(LOADER, "browse")).clicked() {
-                                            if let Some(path) = rfd::FileDialog::new()
-                                                .set_directory(".")
-                                                .pick_file()
-                                            {
-                                                self.settings.console_out_path =
-                                                    path.to_string_lossy().to_string();
-                                            }
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "console-rx-watermark"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.console_rx_wm,
-                                            )
-                                            .hint_text("1")
-                                            .desired_width(120.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.rx_watermark",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "irq-hold"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.console_irq_hold,
-                                            )
-                                            .hint_text("0")
-                                            .desired_width(120.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "console.irq_hold",
-                                        );
-                                    });
-                                });
-                            }
-                            2 => {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.use_block,
-                                            fl!(LOADER, "use-block"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "block.enable",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "block-base-hex"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.block_base_hex,
-                                            )
-                                            .hint_text("0xFF20")
-                                            .desired_width(100.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "block.base",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "block-file-path"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.block_file_path,
-                                            )
-                                            .hint_text("/tmp/disk.img")
-                                            .desired_width(260.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "block.file_path",
-                                        );
-                                        if ui.button(fl!(LOADER, "browse")).clicked() {
-                                            if let Some(path) = rfd::FileDialog::new()
-                                                .add_filter("Disk image", &["img", "bin", "raw"])
-                                                .pick_file()
-                                            {
-                                                self.settings.block_file_path =
-                                                    path.to_string_lossy().to_string();
-                                            }
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.block_irq_enable,
-                                            fl!(LOADER, "irq"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "block.irq_enable",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.block_firq,
-                                            fl!(LOADER, "firq"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "block.firq",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "irq-hold"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.block_irq_hold,
-                                            )
-                                            .hint_text("0")
-                                            .desired_width(80.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "block.irq_hold",
-                                        );
-                                    });
-                                });
-                            }
-                            3 => {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.use_gpio,
-                                            fl!(LOADER, "use-gpio"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "gpio.enable",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "gpio-base-hex"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.gpio_base_hex,
-                                            )
-                                            .hint_text("0xFF40")
-                                            .desired_width(100.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "gpio.base",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "gpio-bits"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.settings.gpio_bits)
-                                                .hint_text("8")
-                                                .desired_width(60.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "gpio.bits",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "on-color"));
-                                        // Direct hex input (e.g., 0xFF0000 or #FF0000)
-                                        let te = egui::TextEdit::singleline(
-                                            &mut self.gpio_on_color_text,
-                                        )
-                                        .desired_width(100.0)
-                                        .hint_text("0xRRGGBB");
-                                        let resp = ui.add(te);
-                                        if resp.changed() {
-                                            if let Some(col) =
-                                                parse_color_hex(&self.gpio_on_color_text)
-                                            {
-                                                self.gpio_on_color = col;
-                                            }
-                                        }
-                                        // Color picker stays in sync with text and vice versa
-                                        let mut col = self.gpio_on_color;
-                                        if egui::widgets::color_picker::color_edit_button_srgba(
-                                            ui,
-                                            &mut col,
-                                            egui::widgets::color_picker::Alpha::Opaque,
-                                        )
-                                        .changed()
-                                        {
-                                            self.gpio_on_color = col;
-                                            self.gpio_on_color_text = format_color_hex(col);
-                                        }
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "gpio.on_color",
-                                        );
-                                    });
-                                });
-                            }
-                            4 => {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.use_timer,
-                                            fl!(LOADER, "use-timer"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.enable",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "timer-base-hex"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.timer_base_hex,
-                                            )
-                                            .hint_text("0xFF10")
-                                            .desired_width(100.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.base",
-                                        );
-                                    });
-                                    ui.separator();
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "timer-reload-hex"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.timer_reload_hex,
-                                            )
-                                            .hint_text("0x03E8")
-                                            .desired_width(100.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.reload",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(fl!(LOADER, "timer-rate-hz"));
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.settings.timer_rate_hz,
-                                            )
-                                            .hint_text("6000")
-                                            .desired_width(100.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.rate",
-                                        );
-                                    ui.label(fl!(LOADER, "timer-ips"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(
-                                            &mut self.settings.timer_ips,
-                                        )
-                                            .hint_text("1000000")
-                                            .desired_width(120.0),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.ips",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.timer_irq_enable,
-                                            fl!(LOADER, "irq"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.irq_enable",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.timer_firq,
-                                            fl!(LOADER, "firq"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.firq",
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(
-                                            &mut self.settings.timer_start,
-                                            fl!(LOADER, "start"),
-                                        );
-                                        super::gui::draw_origin_badge(
-                                            ui,
-                                            &self.settings_origins,
-                                            "timer.start",
-                                        );
-                                    });
-                                });
-                            }
-                            5 => {
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(&mut self.settings.use_mmu, fl!(LOADER, "use-mmu"));
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.enable",
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(fl!(LOADER, "mmu-regs-base-hex"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(
-                                            &mut self.settings.mmu_regs_base_hex,
-                                        )
-                                        .hint_text("0xFFA0")
-                                        .desired_width(100.0),
-                                    );
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.regs_base",
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(fl!(LOADER, "mmu-phys-bytes"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(
-                                            &mut self.settings.mmu_phys_bytes,
-                                        )
-                                        .hint_text("1048576")
-                                        .desired_width(120.0),
-                                    );
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.phys_bytes",
-                                    );
-                                });
-                                ui.weak(fl!(LOADER, "mmu-restart-note"));
-                                ui.separator();
-                                // Runtime controls (apply without restart when MMU is active)
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(
-                                        &mut self.settings.mmu_mode_sys,
-                                        fl!(LOADER, "system-mode"),
-                                    );
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.mode",
-                                    );
-                                    ui.label(fl!(LOADER, "task"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.settings.mmu_task)
-                                            .desired_width(40.0)
-                                            .hint_text("0"),
-                                    );
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.task",
-                                    );
-                                    ui.checkbox(
-                                        &mut self.settings.mmu_log_maps,
-                                        fl!(LOADER, "log-maps"),
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(
-                                        &mut self.settings.protect_vectors,
-                                        fl!(LOADER, "protect-vectors"),
-                                    );
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.protect_vectors",
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(fl!(LOADER, "prot-hex"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.settings.mmu_prot_hex)
-                                            .desired_width(70.0)
-                                            .hint_text("0x03"),
-                                    );
-                                    super::gui::draw_origin_badge(
-                                        ui,
-                                        &self.settings_origins,
-                                        "mmu.prot",
-                                    );
-                                    if ui.button(fl!(LOADER, "idmap-current")).clicked() {
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::MmuIdentityMap);
-                                        }
-                                    }
-                                });
-                                ui.add_space(4.0);
-                                // Page->Frame map editor (hex)
-                                ui.label(fl!(LOADER, "mmu-map-heading"));
-                                let map_width = 42.0;
-                                let map_grid_width = 200.0;
-                                ui.scope(|ui| {
-                                    ui.set_width(map_grid_width);
-                                    egui::Grid::new("mmu_map_grid")
-                                        .num_columns(4)
-                                        .spacing(egui::vec2(12.0, 4.0))
-                                        .show(ui, |ui| {
-                                            for row in 0..4 {
-                                                for col in 0..4 {
-                                                    let p = row * 4 + col;
-                                                    let cell_resp = ui.horizontal(|ui| {
-                                                        ui.monospace(format!("P{:X}", p));
-                                                        let h = ui.text_style_height(&egui::TextStyle::Monospace);
-                                                        let resp = ui.add_sized(
-                                                            (map_width, h + 6.0),
-                                                            egui::TextEdit::singleline(
-                                                                &mut self.settings.mmu_map_frames[p],
-                                                            )
-                                                            .hint_text("0x00")
-                                                            .char_limit(4),
-                                                        );
-                                                        resp
-                                                    });
-                                                    // Clamp to 8-bit hex if user entered wider
-                                                    if cell_resp.response.changed() {
-                                                        let txt = self.settings.mmu_map_frames[p].trim();
-                                                        if let Some(v) = super::gui::parse_u8_hex(txt) {
-                                                            self.settings.mmu_map_frames[p] =
-                                                                format!("{:02X}", v);
-                                                        } else if !txt.is_empty() {
-                                                            // keep last valid or reset
-                                                            self.settings.mmu_map_frames[p].clear();
-                                                        }
-                                                    }
-                                                }
-                                                ui.end_row();
-                                            }
-                                        });
-                                });
-                                ui.add_space(6.0);
-                                // Attributes per page (hex)
-                                ui.label(fl!(LOADER, "attributes-note"));
-                                let attr_width = 42.0;
-                                let attr_grid_width = 200.0;
-                                ui.scope(|ui| {
-                                    ui.set_width(attr_grid_width);
-                                    egui::Grid::new("mmu_attr_grid")
-                                        .num_columns(4)
-                                        .spacing(egui::vec2(12.0, 4.0))
-                                        .show(ui, |ui| {
-                                            for row in 0..4 {
-                                                for col in 0..4 {
-                                                    let p = row * 4 + col;
-                                                    ui.horizontal(|ui| {
-                                                        ui.monospace(format!("P{:X}", p));
-                                                        let h = ui.text_style_height(&egui::TextStyle::Monospace);
-                                                        ui.add_sized(
-                                                            (attr_width, h + 6.0),
-                                                            egui::TextEdit::singleline(
-                                                                &mut self.settings.mmu_attr_bytes[p],
-                                                            )
-                                                            .hint_text("0x00"),
-                                                        );
-                                                    });
-                                                }
-                                                ui.end_row();
-                                            }
-                                        });
-                                });
-                                ui.add_space(6.0);
-                                // Preset selection and apply
-                                ui.horizontal(|ui| {
-                                    ui.label(fl!(LOADER, "preset"));
-                                    let presets = em6809::config::list_presets();
-                                    let mut current = if !self.settings.mmu_preset_name.is_empty() {
-                                        self.settings.mmu_preset_name.clone()
-                                    } else if !self.settings_baseline.mmu_preset_name.is_empty() {
-                                        self.settings_baseline.mmu_preset_name.clone()
-                                    } else {
-                                        "__custom__".to_string()
-                                    };
-                                    let display_text = if current == "__custom__" {
-                                        "(Custom)".to_string()
-                                    } else {
-                                        current.clone()
-                                    };
-                                    egui::ComboBox::from_id_source("mmu_preset_combo")
-                                        .width(180.0)
-                                        .selected_text(display_text)
-                                        .show_ui(ui, |ui| {
-                                            ui.selectable_value(
-                                                &mut current,
-                                                "__custom__".to_string(),
-                                                "(Custom)",
-                                            );
-                                            for &name in presets.iter() {
-                                                ui.selectable_value(
-                                                    &mut current,
-                                                    name.to_string(),
-                                                    name,
-                                                );
-                                            }
-                                        });
-                                    if current == "__custom__" {
-                                        self.settings.mmu_preset_name.clear();
-                                    } else if current != self.settings.mmu_preset_name {
-                                        self.settings.mmu_preset_name = current;
-                                    }
-                                    if ui.button(fl!(LOADER, "apply-preset")).clicked() {
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::ApplyMmuPreset {
-                                                name: self.settings.mmu_preset_name.clone(),
-                                            });
-                                        }
-                                    }
-                                    if ui.button(fl!(LOADER, "load-map-file")).clicked() {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("MMU map", &["txt", "cfg", "mmu"])
-                                            .pick_file()
-                                        {
-                                            if let Ok(text) = std::fs::read_to_string(&path) {
-                                                if let Ok(mut q) = self.cmds.lock() {
-                                                    q.push(Command::ApplyMmuMapFileText { text });
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                            6 => {
-                                let mut changed = false;
-                                ui.vertical(|ui| {
-                                    changed |= ui
-                                        .checkbox(
-                                            &mut self.settings.debug_settings_log,
-                                            fl!(LOADER, "debug-settings-log"),
-                                        )
-                                        .changed();
-                                    changed |= ui
-                                        .checkbox(
-                                            &mut self.settings.debug_show_origins,
-                                            fl!(LOADER, "debug-show-origins"),
-                                        )
-                                        .changed();
-                                    ui.separator();
-                                    changed |= ui
-                                        .checkbox(
-                                            &mut self.settings.debug_console_log,
-                                            fl!(LOADER, "debug-console-log"),
-                                        )
-                                        .changed();
-                                    changed |= ui
-                                        .checkbox(
-                                            &mut self.settings.debug_block_log,
-                                            fl!(LOADER, "debug-block-log"),
-                                        )
-                                        .changed();
-                                    changed |= ui
-                                        .checkbox(
-                                            &mut self.settings.debug_gpio_log,
-                                            fl!(LOADER, "debug-gpio-log"),
-                                        )
-                                        .changed();
-                                    changed |= ui
-                                        .checkbox(
-                                            &mut self.settings.debug_mmu_log,
-                                            fl!(LOADER, "debug-mmu-log"),
-                                        )
-                                        .changed();
-                                });
-                                if changed {
-                                    let payload = SettingsPayload {
-                                        settings: self.settings.clone(),
-                                        gpio_on_color: ((self.gpio_on_color.r() as u32) << 16)
-                                            | ((self.gpio_on_color.g() as u32) << 8)
-                                            | (self.gpio_on_color.b() as u32),
-                                        instance_id: self.settings_instance,
-                                    };
-                                    settings_worker::push_worker_command(
-                                        WorkerCommand::Apply(payload),
-                                    );
-                                    self.settings_busy = true;
-                                    self.settings_busy_since = Some(std::time::Instant::now());
-                                }
-                            }
-                            _ => {}
-                        }
-                            });
-                        ui.separator();
-                        ui.add_space(4.0);
-                        // Wrap the right-aligned row in a horizontal layout so it takes only row height
-                        ui.horizontal(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    // Right-aligned buttons: Apply | Revert | Cancel
-                                    if ui.button(fl!(LOADER, "cancel")).clicked() {
-                                        close_req = true;
-                                    }
-                                    if ui.button(fl!(LOADER, "revert")).clicked() {
-                                        // Restore fields to baseline and close dialog
-                                        self.settings = self.settings_baseline.clone();
-                                        self.gpio_on_color = self.gpio_on_color_baseline;
-                                        self.gpio_on_color_text =
-                                            format_color_hex(self.gpio_on_color);
-                                    }
-                                    let apply_clicked = ui
-                                        .add_enabled(
-                                            !self.settings_busy,
-                                            egui::Button::new(fl!(LOADER, "apply")),
-                                        )
-                                        .clicked();
-                                    if apply_clicked {
-                                        let payload = SettingsPayload {
-                                            settings: self.settings.clone(),
-                                            gpio_on_color: ((self.gpio_on_color.r() as u32) << 16)
-                                                | ((self.gpio_on_color.g() as u32) << 8)
-                                                | (self.gpio_on_color.b() as u32),
-                                            instance_id: self.settings_instance,
-                                        };
-                                        settings_worker::push_worker_command(
-                                            WorkerCommand::SavePrefs(payload),
-                                        );
-                                        // Also enqueue to the viewer->worker command queue so paused GUI runs apply.
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::SavePrefs {
-                                                settings: self.settings.clone(),
-                                                gpio_on_color: ((self.gpio_on_color.r() as u32)
-                                                    << 16)
-                                                    | ((self.gpio_on_color.g() as u32) << 8)
-                                                    | (self.gpio_on_color.b() as u32),
-                                                instance_id: self.settings_instance,
-                                            });
-                                        }
-                                        self.settings_busy = true;
-                                        self.settings_busy_since = Some(std::time::Instant::now());
-                                    }
-                                    ui.label(fl!(LOADER, "note-apply-now"));
-                                    if self.settings_busy {
-                                        ui.add(egui::Spinner::new().size(16.0));
-                                    }
-                                    ui.add_space(6.0);
-                                },
-                            );
-                        });
-                    });
-                // Honor explicit close request from Cancel/Revert buttons
-                if close_req {
-                    self.settings_open = false;
-                }
-            }
+            settings_ui::render_settings_dialog(self, ctx);
+
+            let prev_edit_mode = self.edit_mode;
+            mem_ui::render_memory_panel(self, ctx);
+            list_ui::render_listing_panel(self, ctx);
+
+            regs_ui::render_regs_panel(self, ctx);
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
             let editing = self.edit_mode;
             // Initialize edit buffers from current snapshot the first time we enter editing mode
-            if editing {
-                if !self.edit_initialized {
-                    if let Ok(s) = self.snap.lock() {
-                        self.edit_a = format!("0x{:02X}", s.a);
-                        self.edit_b = format!("0x{:02X}", s.b);
-                        self.edit_d = format!("0x{:04X}", s.d);
-                        self.edit_x = format!("0x{:04X}", s.x);
-                        self.edit_y = format!("0x{:04X}", s.y);
-                        self.edit_u = format!("0x{:04X}", s.u);
-                        self.edit_s = format!("0x{:04X}", s.s);
-                        self.edit_dp = format!("0x{:02X}", s.dp);
-                        self.edit_pc = format!("0x{:04X}", s.pc);
-                        self.cc_e = (s.cc & 0x80) != 0;
-                        self.cc_f = (s.cc & 0x40) != 0;
-                        self.cc_h = (s.cc & 0x20) != 0;
-                        self.cc_i = (s.cc & 0x10) != 0;
-                        self.cc_n = (s.cc & 0x08) != 0;
-                        self.cc_z = (s.cc & 0x04) != 0;
-                        self.cc_v = (s.cc & 0x02) != 0;
-                        self.cc_c = (s.cc & 0x01) != 0;
-                    }
-                    self.input_error = None;
-                    self.edit_initialized = true;
+            if editing && (!self.edit_initialized || !prev_edit_mode) {
+                if let Ok(s) = self.snap.lock() {
+                    self.edit_a = format!("0x{:02X}", s.a);
+                    self.edit_b = format!("0x{:02X}", s.b);
+                    self.edit_d = format!("0x{:04X}", s.d);
+                    self.edit_x = format!("0x{:04X}", s.x);
+                    self.edit_y = format!("0x{:04X}", s.y);
+                    self.edit_u = format!("0x{:04X}", s.u);
+                    self.edit_s = format!("0x{:04X}", s.s);
+                    self.edit_dp = format!("0x{:02X}", s.dp);
+                    self.edit_pc = format!("0x{:04X}", s.pc);
+                    self.cc_e = (s.cc & 0x80) != 0;
+                    self.cc_f = (s.cc & 0x40) != 0;
+                    self.cc_h = (s.cc & 0x20) != 0;
+                    self.cc_i = (s.cc & 0x10) != 0;
+                    self.cc_n = (s.cc & 0x08) != 0;
+                    self.cc_z = (s.cc & 0x04) != 0;
+                    self.cc_v = (s.cc & 0x02) != 0;
+                    self.cc_c = (s.cc & 0x01) != 0;
                 }
-            } else if self.edit_initialized {
+                self.input_error = None;
+                self.edit_initialized = true;
+            } else if !editing && self.edit_initialized {
                 // When leaving editing mode, reset so we sync from latest snapshot next pause
                 self.edit_initialized = false;
             }
 
-            // Memory pane (placed to the left of the listing pane by ordering two right panels)
-            egui::SidePanel::right("mem_panel")
-                .resizable(false)
-                .min_width(440.0)
-                .default_width(440.0)
-                .show(ctx, |ui| {
-                    let mut follow_pc = self.mem_follow_pc.load(Ordering::SeqCst);
-                    let _win_len = self.mem_window_len.load(Ordering::SeqCst);
-                    let mut start = self.mem_window_start.load(Ordering::SeqCst) as u16;
-                    ui.horizontal(|ui| {
-                        ui.heading(fl!(LOADER, "memory"));
-                        ui.separator();
-                        if ui
-                            .checkbox(&mut follow_pc, fl!(LOADER, "follow-pc"))
-                            .clicked()
-                        {
-                            self.mem_follow_pc.store(follow_pc, Ordering::SeqCst);
-                        }
-                        let mut utf8 = self.mem_utf8.load(Ordering::SeqCst);
-                        if ui.checkbox(&mut utf8, "UTF-8").clicked() {
-                            self.mem_utf8.store(utf8, Ordering::SeqCst);
-                        }
-                        let mut use_drag = self.mem_use_drag;
-                        if ui.checkbox(&mut use_drag, fl!(LOADER, "numeric")).clicked() {
-                            self.mem_use_drag = use_drag;
-                        }
-                        ui.separator();
-                        // Edit mode controls: in normal mode show only "Edit"; in edit mode show "Apply" and "Cancel".
-                        let pending_count = self.mem_pending.len();
-                        if !self.mem_edit_mode {
-                            if ui.button(fl!(LOADER, "edit")).clicked() {
-                                self.mem_edit_mode = true;
-                                self.mem_selected = None;
-                                self.mem_edit_buf.clear();
-                            }
-                        } else {
-                            let apply_enabled = pending_count > 0;
-                            if ui
-                                .add_enabled(apply_enabled, egui::Button::new(fl!(LOADER, "apply")))
-                                .clicked()
-                            {
-                                let mut items: Vec<(u16, u8)> =
-                                    self.mem_pending.iter().map(|(a, v)| (*a, *v)).collect();
-                                items.sort_by_key(|(a, _)| *a);
-                                if let Ok(mut q) = self.cmds.lock() {
-                                    q.push(Command::MemWrite(items));
-                                }
-                                self.mem_pending.clear();
-                                self.mem_selected = None;
-                                self.mem_edit_buf.clear();
-                                // Exit edit mode after apply as requested
-                                self.mem_edit_mode = false;
-                                // Reset caret boundary tracking
-                                self.mem_last_sel_addr = None;
-                                self.mem_last_at_start = false;
-                                self.mem_last_at_end = false;
-                            }
-                            if ui.button(fl!(LOADER, "cancel")).clicked() {
-                                // Cancel discards pending edits and exits edit mode
-                                self.mem_pending.clear();
-                                self.mem_selected = None;
-                                self.mem_edit_buf.clear();
-                                self.mem_edit_mode = false;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(fl!(LOADER, "start"));
-                        if self.mem_use_drag {
-                            let mut sv: u16 = self.mem_window_start.load(Ordering::SeqCst) as u16;
-                            let resp = ui.add_enabled(
-                                !follow_pc,
-                                egui::DragValue::new(&mut sv)
-                                    .clamp_range(0u16..=0xFFFF)
-                                    .speed(16.0),
-                            );
-                            ui.monospace(format!(" (0x{sv:04X})"));
-                            if resp.changed() && !follow_pc {
-                                start = sv;
-                                self.mem_window_start.store(sv as usize, Ordering::SeqCst);
-                                self.mem_jump_text = format!("0x{sv:04X}");
-                            }
-                        } else {
-                            let te = egui::TextEdit::singleline(&mut self.mem_jump_text)
-                                .desired_width(80.0)
-                                .hint_text("0x0000");
-                            // Disable editing of Start when following PC
-                            let start_resp = ui.add_enabled(!follow_pc, te);
-                            // Commit Start: Enter while focused or on focus loss
-                            if !follow_pc {
-                                if start_resp.has_focus() {
-                                    if ui.input_mut(|i| {
-                                        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                                    }) {
-                                        if let Some(val) =
-                                            parse_num_u16_any_gui(&self.mem_jump_text)
-                                        {
-                                            start = val;
-                                            self.mem_window_start
-                                                .store(val as usize, Ordering::SeqCst);
-                                            self.mem_jump_text = format!("0x{val:04X}");
-                                        }
-                                    }
-                                } else if start_resp.lost_focus() {
-                                    if let Some(val) = parse_num_u16_any_gui(&self.mem_jump_text) {
-                                        start = val;
-                                        self.mem_window_start.store(val as usize, Ordering::SeqCst);
-                                        self.mem_jump_text = format!("0x{val:04X}");
-                                    }
-                                }
-                            }
-                        }
-                        ui.label(fl!(LOADER, "len"));
-                        if self.mem_use_drag {
-                            let mut lv: usize = self.mem_window_len.load(Ordering::SeqCst);
-                            let old = lv;
-                            let resp = ui.add(
-                                egui::DragValue::new(&mut lv)
-                                    .clamp_range(16..=4096)
-                                    .speed(1.0),
-                            );
-                            ui.label(fl!(LOADER, "bytes"));
-                            if resp.changed() && lv != old {
-                                let v = lv.clamp(16, 4096);
-                                self.mem_window_len.store(v, Ordering::SeqCst);
-                                self.mem_len_text = format!("{v}");
-                            }
-                        } else {
-                            let len_te = egui::TextEdit::singleline(&mut self.mem_len_text)
-                                .desired_width(64.0)
-                                .hint_text("256");
-                            let len_resp = ui.add(len_te);
-                            // Commit Len: Enter while focused or on focus loss
-                            if len_resp.has_focus() {
-                                if ui.input_mut(|i| {
-                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                                }) {
-                                    if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
-                                        let v = v.clamp(16, 4096);
-                                        self.mem_window_len.store(v, Ordering::SeqCst);
-                                        self.mem_len_text = format!("{v}");
-                                    }
-                                }
-                            } else if len_resp.lost_focus() {
-                                if let Some(v) = parse_num_usize_any_gui(&self.mem_len_text) {
-                                    let v = v.clamp(16, 4096);
-                                    self.mem_window_len.store(v, Ordering::SeqCst);
-                                    self.mem_len_text = format!("{v}");
-                                }
-                            }
-                        }
-                        // Jump button removed; Enter/focus-out on Start commits address
-                        if ui.button(fl!(LOADER, "copy")).clicked() {
-                            let dump = if let Ok(g) = self.mem_buf.lock() {
-                                format_memory_dump((g.0, g.1.as_slice()))
-                            } else {
-                                String::new()
-                            };
-                            ui.output_mut(|o| o.copied_text = dump);
-                        }
-                    });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let (s, bytes) = if let Ok(g) = self.mem_buf.lock() {
-                                (g.0, g.1.clone())
-                            } else {
-                                (0u16, Vec::new())
-                            };
-                            let hl = self.mem_hl.lock().ok().and_then(|g| *g);
-                            let (hl_start, hl_end) = if let Some((hs, hl)) = hl {
-                                let end = hs.wrapping_add(hl as u16);
-                                (Some(hs), Some(end))
-                            } else {
-                                (None, None)
-                            };
-                            let hl_color = egui::Color32::RED;
-                            let _utf8_mode = self.mem_utf8.load(Ordering::SeqCst);
-                            let mut off: usize = 0;
-                            while off < bytes.len() {
-                                let chunk = &bytes[off..bytes.len().min(off + 16)];
-                                let addr = s.wrapping_add(off as u16);
-                                ui.scope(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 0.0;
-                                    ui.horizontal(|ui| {
-                                        ui.monospace(format!("{addr:04X}: "));
-                                        // hex bytes
-                                        for (i, b) in chunk.iter().enumerate() {
-                                            let a = addr.wrapping_add(i as u16);
-                                            let in_hl =
-                                                if let (Some(hs), Some(he)) = (hl_start, hl_end) {
-                                                    if hs <= he {
-                                                        a >= hs && a < he
-                                                    } else {
-                                                        a >= hs || a < he
-                                                    }
-                                                } else {
-                                                    false
-                                                };
-                                            let shown = if let Some(v) = self.mem_pending.get(&a) {
-                                                *v
-                                            } else {
-                                                *b
-                                            };
-                                            // Edit mode: selected cell becomes TextEdit, others clickable labels
-                                            if self.mem_edit_mode && self.mem_selected == Some(a) {
-                                                // ensure buffer contains current value
-                                                if self.mem_edit_buf.is_empty() {
-                                                    self.mem_edit_buf = format!("{shown:02X}");
-                                                }
-                                                let cell_id = egui::Id::new(("mem_hex_cell", a));
-                                                // Revert overwrite mode: no need to snapshot buffer/caret pre-state
-                                                let te = egui::TextEdit::singleline(
-                                                    &mut self.mem_edit_buf,
-                                                )
-                                                .desired_width(24.0)
-                                                .id_source(cell_id)
-                                                .cursor_at_end(true);
-                                                let resp = ui.add(te);
-                                                if self.mem_focus_next {
-                                                    resp.request_focus();
-                                                    self.mem_focus_next = false;
-                                                }
-                                                // On focus gain (e.g., via Tab/Enter), select all text so即時上書き可能
-                                                if resp.gained_focus() {
-                                                    if let Some(mut state) =
-                                                        egui::text_edit::TextEditState::load(
-                                                            ui.ctx(),
-                                                            resp.id,
-                                                        )
-                                                    {
-                                                        let len = self.mem_edit_buf.len();
-                                                        let range = egui::text::CCursorRange::two(
-                                                            egui::text::CCursor::new(0),
-                                                            egui::text::CCursor::new(len),
-                                                        );
-                                                        state.cursor.set_char_range(Some(range));
-                                                        state.store(ui.ctx(), resp.id);
-                                                    }
-                                                }
-                                                // Key handling: consume Tab/Enter to avoid default focus changes; arrows remain non-consuming
-                                                let (
-                                                    enter,
-                                                    tab_any,
-                                                    shift_held,
-                                                    arrow_up,
-                                                    arrow_down,
-                                                    left_pressed,
-                                                    right_pressed,
-                                                    home_key,
-                                                    end_key,
-                                                ) = ui.input_mut(|i| {
-                                                    let shift_now = i.modifiers.shift;
-                                                    let enter = i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::Enter,
-                                                    );
-                                                    // Consume both plain Tab and Shift+Tab
-                                                    let tab_plain_c = i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::Tab,
-                                                    );
-                                                    let tab_shift_c = i.consume_key(
-                                                        egui::Modifiers::SHIFT,
-                                                        egui::Key::Tab,
-                                                    );
-                                                    let tab_any = tab_plain_c || tab_shift_c;
-                                                    let arrow_up = i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::ArrowUp,
-                                                    );
-                                                    let arrow_down = i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::ArrowDown,
-                                                    );
-                                                    // Consume left/right to detect a single navigation intent this frame
-                                                    let left_pressed = i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::ArrowLeft,
-                                                    );
-                                                    let right_pressed = i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::ArrowRight,
-                                                    );
-                                                    let home_key = i.key_pressed(egui::Key::Home);
-                                                    let end_key = i.key_pressed(egui::Key::End);
-                                                    (
-                                                        enter,
-                                                        tab_any,
-                                                        shift_now,
-                                                        arrow_up,
-                                                        arrow_down,
-                                                        left_pressed,
-                                                        right_pressed,
-                                                        home_key,
-                                                        end_key,
-                                                    )
-                                                });
-                                                let shift_tab = tab_any && shift_held;
-                                                let tab_plain = tab_any && !shift_held;
-                                                // After TextEdit processed keys, re-check caret; only jump if caret stayed at boundary
-                                                let (at_start_after, at_end_after) = {
-                                                    if let Some(state) =
-                                                        egui::text_edit::TextEditState::load(
-                                                            ui.ctx(),
-                                                            resp.id,
-                                                        )
-                                                    {
-                                                        if let Some(r) = state.cursor.char_range() {
-                                                            let len = self.mem_edit_buf.len();
-                                                            let collapsed =
-                                                                r.primary == r.secondary;
-                                                            let idx = r.primary.index;
-                                                            (
-                                                                collapsed && idx == 0,
-                                                                collapsed && idx == len,
-                                                            )
-                                                        } else {
-                                                            (false, false)
-                                                        }
-                                                    } else {
-                                                        (false, false)
-                                                    }
-                                                };
-                                                // Reverted overwrite mode: rely on TextEdit's default insertion behavior
-                                                // Cross-frame boundary tracking: require端滞在の明確な2度押し
-                                                let now_at_start = at_start_after;
-                                                let now_at_end = at_end_after;
-                                                let same_cell = self.mem_last_sel_addr == Some(a);
-                                                let move_prev = same_cell
-                                                    && left_pressed
-                                                    && self.mem_last_at_start
-                                                    && now_at_start;
-                                                let move_next = same_cell
-                                                    && right_pressed
-                                                    && self.mem_last_at_end
-                                                    && now_at_end;
-                                                let commit = resp.lost_focus()
-                                                    || enter
-                                                    || tab_any
-                                                    || arrow_up
-                                                    || arrow_down
-                                                    || move_prev
-                                                    || move_next
-                                                    || home_key
-                                                    || end_key;
-                                                if commit {
-                                                    if let Ok(v) = u8::from_str_radix(
-                                                        self.mem_edit_buf.trim(),
-                                                        16,
-                                                    ) {
-                                                        // Only keep pending entry if it differs from the original byte
-                                                        if v != *b {
-                                                            self.mem_pending.insert(a, v);
-                                                        } else {
-                                                            self.mem_pending.remove(&a);
-                                                        }
-                                                        // Decide next selection
-                                                        let line_base = a & 0xFFF0;
-                                                        let next_sel = if home_key {
-                                                            line_base
-                                                        } else if end_key {
-                                                            line_base.wrapping_add(15)
-                                                        } else if shift_tab || move_prev {
-                                                            a.wrapping_sub(1)
-                                                        } else if arrow_up {
-                                                            a.wrapping_sub(16)
-                                                        } else if arrow_down {
-                                                            a.wrapping_add(16)
-                                                        } else if enter || tab_plain || move_next {
-                                                            a.wrapping_add(1)
-                                                        } else {
-                                                            a
-                                                        };
-                                                        if next_sel != a {
-                                                            self.mem_selected = Some(next_sel);
-                                                            self.mem_focus_next = true;
-                                                            // Reset boundary tracking so新セルでも2度押しが必要
-                                                            self.mem_last_sel_addr = None;
-                                                            self.mem_last_at_start = false;
-                                                            self.mem_last_at_end = false;
-                                                        }
-                                                        self.mem_edit_buf.clear();
-                                                    } else {
-                                                        // keep selection, but reset buffer to current value
-                                                        self.mem_edit_buf = format!("{shown:02X}");
-                                                    }
-                                                }
-                                                // Update boundary tracking for this cell each frame
-                                                self.mem_last_sel_addr = Some(a);
-                                                self.mem_last_at_start = now_at_start;
-                                                self.mem_last_at_end = now_at_end;
-                                            } else {
-                                                let mut rt =
-                                                    egui::RichText::new(format!("{shown:02X}"))
-                                                        .monospace();
-                                                if in_hl {
-                                                    rt = rt.background_color(hl_color);
-                                                }
-                                                if let Some(&nv) = self.mem_pending.get(&a) {
-                                                    if nv != *b {
-                                                        rt = rt.background_color(
-                                                            egui::Color32::from_rgb(255, 255, 128),
-                                                        );
-                                                    }
-                                                }
-                                                let label = egui::Label::new(rt).sense(
-                                                    if self.mem_edit_mode {
-                                                        egui::Sense::click()
-                                                    } else {
-                                                        egui::Sense::hover()
-                                                    },
-                                                );
-                                                let resp = ui.add(label);
-                                                if self.mem_edit_mode && resp.clicked() {
-                                                    self.mem_selected = Some(a);
-                                                    self.mem_edit_buf = String::new();
-                                                    self.mem_focus_next = true;
-                                                    // Reset boundary tracking on new selection
-                                                    self.mem_last_sel_addr = None;
-                                                    self.mem_last_at_start = false;
-                                                    self.mem_last_at_end = false;
-                                                }
-                                            }
-                                            if i != chunk.len() - 1 {
-                                                ui.monospace(" ");
-                                            }
-                                        }
-                                        // pad if fewer than 16 bytes
-                                        for _ in chunk.len()..16 {
-                                            ui.monospace("   ");
-                                        }
-                                        ui.monospace("| ");
-                                        // ASCII per-cell render so only changed bytes get highlight
-                                        for (i, ob) in chunk.iter().enumerate() {
-                                            let a = addr.wrapping_add(i as u16);
-                                            let shown_b = *self.mem_pending.get(&a).unwrap_or(ob);
-                                            let ch = if (0x20..=0x7E).contains(&shown_b) {
-                                                shown_b as char
-                                            } else {
-                                                '.'
-                                            };
-                                            let mut rt =
-                                                egui::RichText::new(format!("{ch}")).monospace();
-                                            if let Some(&nv) = self.mem_pending.get(&a) {
-                                                if nv != *ob {
-                                                    rt = rt.background_color(
-                                                        egui::Color32::from_rgb(255, 255, 128),
-                                                    );
-                                                }
-                                            }
-                                            ui.add(egui::Label::new(rt));
-                                        }
-                                    });
-                                });
-                                off += 16;
-                            }
-                        });
-                });
-
-            // Right side: listing in its own scroll area and panel (so only listing scrolls)
-            if self.lst_mmap.is_some() || self.lst_text.is_some() {
-                egui::SidePanel::right("lst_panel")
-                    .resizable(false)
-                    .min_width(400.0)
-                    .default_width(600.0)
-                    .show(ctx, |ui| {
-                        egui::ScrollArea::horizontal()
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                ui.set_min_width(400.0);
-                                ui.style_mut().wrap = Some(false);
-
-                                let have_lst = self.lst_mmap.is_some();
-                                let have_hex = self.lst_text.is_some();
-                                let mut use_hex_view = self.use_hex.load(Ordering::SeqCst);
-                                let mut auto_hex = self.auto_hex_on_edit.load(Ordering::SeqCst);
-                                let mut follow_pc = self.follow_pc_flag.load(Ordering::SeqCst);
-                                let mut policy = self.span_policy.load(Ordering::SeqCst);
-                                let mut win_len = self.window_len.load(Ordering::SeqCst);
-                                ui.horizontal(|ui| {
-                                    ui.heading(fl!(LOADER, "listing"));
-                                    let mode = if use_hex_view { "HEX" } else { "LST" };
-                                    let pill = egui::RichText::new(mode)
-                                        .monospace()
-                                        .strong()
-                                        .background_color(egui::Color32::from_rgb(220, 220, 220))
-                                        .color(egui::Color32::BLACK);
-                                    ui.add(egui::Label::new(pill));
-                                    ui.separator();
-                                    if have_lst && have_hex
-                                        && ui.checkbox(&mut use_hex_view, fl!(LOADER, "hex-view")).clicked()
-                                    {
-                                        self.use_hex.store(use_hex_view, Ordering::SeqCst);
-                                        if follow_pc {
-                                            self.scroll_to_pc_req.store(true, Ordering::SeqCst);
-                                        }
-                                        if use_hex_view {
-                                            if let Ok(mut q) = self.cmds.lock() {
-                                                q.push(Command::RefreshHexListing);
-                                            }
-                                        }
-                                    }
-                                    if ui.checkbox(&mut auto_hex, fl!(LOADER, "auto-hex-on-edit")).clicked() {
-                                        self.auto_hex_on_edit.store(auto_hex, Ordering::SeqCst);
-                                    }
-                                    if ui.checkbox(&mut follow_pc, fl!(LOADER, "follow-pc")).clicked() {
-                                        self.follow_pc_flag.store(follow_pc, Ordering::SeqCst);
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(fl!(LOADER, "span-mode"));
-                                    let full = policy == 0;
-                                    let select_full = full;
-                                    if ui.radio(select_full, fl!(LOADER, "full-span")).clicked() {
-                                        policy = 0;
-                                        self.span_policy.store(0, Ordering::SeqCst);
-                                    }
-                                    let select_win = !full;
-                                    if ui.radio(select_win, fl!(LOADER, "pc-window")).clicked() {
-                                        policy = 1;
-                                        self.span_policy.store(1, Ordering::SeqCst);
-                                    }
-                                    ui.add(egui::DragValue::new(&mut win_len).clamp_range(16..=4096).speed(1));
-                                    ui.label(fl!(LOADER, "bytes"));
-                                    if self.window_len.load(Ordering::SeqCst) != win_len {
-                                        self.window_len.store(win_len, Ordering::SeqCst);
-                                    }
-                                });
-                                egui::ScrollArea::both()
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        ui.style_mut().wrap = Some(false);
-                                        let _paused = self.paused.load(Ordering::SeqCst);
-                                        let cur_pc = self.snap.lock().map(|g| g.pc).unwrap_or(0);
-                                        let pc_hex = format!("{cur_pc:04X}");
-                                        // Iterate lines and highlight the one whose address token matches PC when paused.
-                                        let mut highlight_rect: Option<egui::Rect> = None;
-                                        let render_lines = |ui: &mut egui::Ui, text: &str, highlight_rect: &mut Option<egui::Rect>| {
-                                            for line in text.lines() {
-                                                let ltrim = line.trim_start();
-                                                let mut token = ltrim.split_whitespace().next().unwrap_or("");
-                                                if token.ends_with(':') {
-                                                    token = &token[..token.len() - 1];
-                                                }
-                                                let addr_for_line: Option<u16> =
-                                                    if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
-                                                // Avoid highlighting macro definition lines even if they show a PC-like address
-                                                let upper = ltrim.to_ascii_uppercase();
-                                                let is_macro_line = upper.contains(" MACRO")
-                                                    || upper.contains(" ENDM")
-                                                    || upper.starts_with("MACRO ");
-                                                let is_pc_addr_token =
-                                                    addr_for_line.is_some() && token.eq_ignore_ascii_case(&pc_hex) && !is_macro_line;
-                                                let (label_run_until, label_set_pc, label_cancel) = (
-                                                    fl!(LOADER, "run-to-here"),
-                                                    fl!(LOADER, "set-pc-to-here"),
-                                                    fl!(LOADER, "cancel"),
-                                                );
-                                                if is_pc_addr_token {
-                                                    let resp = ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(line)
-                                                                .monospace()
-                                                                .background_color(egui::Color32::from_rgb(255, 0, 0)),
-                                                        )
-                                                        .sense(egui::Sense::hover()),
-                                                    );
-                                                    if let Some(addr) = addr_for_line {
-                                                        resp.context_menu(|ui| {
-                                                            if ui.button(label_run_until).clicked() {
-                                                                if let Ok(mut q) = self.cmds.lock() {
-                                                                    q.push(Command::RunUntil(addr));
-                                                                }
-                                                                ui.close_menu();
-                                                            }
-                                                            if ui.button(label_set_pc).clicked() {
-                                                                if let Ok(mut q) = self.cmds.lock() {
-                                                                    q.push(Command::SetPc(addr));
-                                                                }
-                                                                ui.close_menu();
-                                                            }
-                                                            if ui.button(label_cancel).clicked() {
-                                                                ui.close_menu();
-                                                            }
-                                                        });
-                                                    }
-                                                    *highlight_rect = Some(resp.rect);
-                                                } else {
-                                                    let resp = ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(line).monospace(),
-                                                        )
-                                                        .sense(egui::Sense::hover()),
-                                                    );
-                                                    if let Some(addr) = addr_for_line {
-                                                        resp.context_menu(|ui| {
-                                                            if ui.button(label_run_until).clicked() {
-                                                                if let Ok(mut q) = self.cmds.lock() {
-                                                                    q.push(Command::RunUntil(addr));
-                                                                }
-                                                                ui.close_menu();
-                                                            }
-                                                            if ui.button(label_set_pc).clicked() {
-                                                                if let Ok(mut q) = self.cmds.lock() {
-                                                                    q.push(Command::SetPc(addr));
-                                                                }
-                                                                ui.close_menu();
-                                                            }
-                                                            if ui.button(label_cancel).clicked() {
-                                                                ui.close_menu();
-                                                            }
-                                                        });
-                                                    }
-                                                    // Hover highlight for the line under mouse cursor (non‑PC lines)
-                                                    if resp.hovered() {
-                                                        // Use a translucent fill so text remains readable, plus a subtle stroke
-                                                        let fill =
-                                                            egui::Color32::from_rgba_unmultiplied(128, 128, 128, 40);
-                                                        let stroke_col = ui.visuals().widgets.hovered.fg_stroke.color;
-                                                        ui.painter().rect_filled(
-                                                            resp.rect,
-                                                            egui::Rounding::same(0.0),
-                                                            fill,
-                                                        );
-                                                        ui.painter().rect_stroke(
-                                                            resp.rect,
-                                                            egui::Rounding::same(0.0),
-                                                            egui::Stroke::new(1.0, stroke_col),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        };
-                                        if use_hex_view {
-                                            if let Some(txt) = &self.lst_text {
-                                                if let Ok(s) = txt.lock() {
-                                                    render_lines(ui, s.as_str(), &mut highlight_rect);
-                                                }
-                                            }
-                                        } else if let Some(m) = &self.lst_mmap {
-                                            match std::str::from_utf8(&m[..]) {
-                                                Ok(s) => render_lines(ui, s, &mut highlight_rect),
-                                                Err(_) => {
-                                                    let cow = String::from_utf8_lossy(&m[..]);
-                                                    render_lines(ui, cow.as_ref(), &mut highlight_rect);
-                                                }
-                                            }
-                                        }
-                                        // Auto-scroll when PC changes or a view switch requested a scroll.
-                                        // Make the scroll request sticky until we successfully scroll to a highlighted row.
-                                        let need_scroll = self
-                                            .scroll_to_pc_req
-                                            .load(Ordering::SeqCst)
-                                            || (cur_pc != self.last_pc_for_scroll);
-                                        if follow_pc && need_scroll {
-                                            if let Some(rect) = highlight_rect {
-                                                ui.scroll_to_rect(rect, None);
-                                                // Clear the request only after performing the scroll, and update last_pc marker.
-                                                self.scroll_to_pc_req.store(false, Ordering::SeqCst);
-                                                self.last_pc_for_scroll = cur_pc;
-                                            }
-                                        }
-                                    });
-                            });
-                    });
+            // Keep the UI ticking while emulation is running so highlights and panels update.
+            if !self.paused.load(Ordering::SeqCst) {
+                ctx.request_repaint();
             }
-
-        // Left/center: registers and controls (scrollable)
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Ensure enough width so MMU map grid stays at 4 columns and splitter remains
-            ui.set_min_width(320.0);
-            egui::ScrollArea::both()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.style_mut().wrap = Some(false);
-                    let s = *self.snap.lock().unwrap();
-                    ui.heading(fl!(LOADER, "registers-heading"));
-                    ui.horizontal(|ui| {
-                        if self.paused.load(Ordering::SeqCst) {
-                            if ui.button(fl!(LOADER, "resume")).clicked() {
-                                self.paused.store(false, Ordering::SeqCst);
-                            }
-                            if ui.button(fl!(LOADER, "step")).clicked() {
-                                self.paused.store(true, Ordering::SeqCst);
-                                self.step_requests.fetch_add(1, Ordering::SeqCst);
-                            }
-                        } else {
-                            if ui.button(fl!(LOADER, "pause")).clicked() {
-                                self.paused.store(true, Ordering::SeqCst);
-                            }
-                            if ui.button(fl!(LOADER, "step")).clicked() {
-                                self.paused.store(true, Ordering::SeqCst);
-                                self.step_requests.fetch_add(1, Ordering::SeqCst);
-                            }
-                        }
-                        ui.separator();
-                        if self.edit_mode {
-                            if ui.button(fl!(LOADER, "apply")).clicked() {
-                                // Parse inputs; numbers accept 0x/0o/0b or decimal
-                                let parse8 = |s: &str| -> Option<u8> {
-                                    parse_num_u16_any_gui(s).and_then(|v| {
-                                        if v <= 0xFF {
-                                            Some(v as u8)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                };
-                                let parse16 = |s: &str| -> Option<u16> { parse_num_u16_any_gui(s) };
-                                let a_opt = parse8(&self.edit_a);
-                                let b_opt = parse8(&self.edit_b);
-                                let d_opt = parse16(&self.edit_d);
-                                let x_opt = parse16(&self.edit_x);
-                                let y_opt = parse16(&self.edit_y);
-                                let u_opt = parse16(&self.edit_u);
-                                let s_opt = parse16(&self.edit_s);
-                                let dp_opt = parse8(&self.edit_dp);
-                                let pc_opt = parse16(&self.edit_pc);
-                                let cc_val: u8 = (if self.cc_e { 0x80 } else { 0 })
-                                    | (if self.cc_f { 0x40 } else { 0 })
-                                    | (if self.cc_h { 0x20 } else { 0 })
-                                    | (if self.cc_i { 0x10 } else { 0 })
-                                    | (if self.cc_n { 0x08 } else { 0 })
-                                    | (if self.cc_z { 0x04 } else { 0 })
-                                    | (if self.cc_v { 0x02 } else { 0 })
-                                    | (if self.cc_c { 0x01 } else { 0 });
-                                if let (
-                                    Some(mut a),
-                                    Some(mut b),
-                                    Some(x),
-                                    Some(y),
-                                    Some(u),
-                                    Some(s),
-                                    Some(dp),
-                                    Some(pc),
-                                ) = (a_opt, b_opt, x_opt, y_opt, u_opt, s_opt, dp_opt, pc_opt)
-                                {
-                                    // D takes precedence if provided
-                                    if let Some(dv) = d_opt {
-                                        a = (dv >> 8) as u8;
-                                        b = dv as u8;
-                                    }
-                                    let snap = RegSnapshot {
-                                        a,
-                                        b,
-                                        d: (((a as u16) << 8) | (b as u16)),
-                                        x,
-                                        y,
-                                        u,
-                                        s,
-                                        dp,
-                                        pc,
-                                        cc: cc_val,
-                                    };
-                                    if let Ok(mut q) = self.cmds.lock() {
-                                        q.push(Command::ApplyRegs(snap));
-                                    }
-                                    self.input_error = None;
-                                    // Leave editing mode after successful apply
-                                    self.edit_mode = false;
-                                    self.edit_initialized = false;
-                                } else {
-                                    self.input_error = Some(fl!(LOADER, "invalid-reg-values"));
-                                }
-                            }
-                            if ui.button(fl!(LOADER, "cancel")).clicked() {
-                                if let Ok(s2) = self.snap.lock() {
-                                    self.edit_a = format!("0x{:02X}", s2.a);
-                                    self.edit_b = format!("0x{:02X}", s2.b);
-                                    self.edit_d = format!("0x{:04X}", s2.d);
-                                    self.edit_x = format!("0x{:04X}", s2.x);
-                                    self.edit_y = format!("0x{:04X}", s2.y);
-                                    self.edit_u = format!("0x{:04X}", s2.u);
-                                    self.edit_s = format!("0x{:04X}", s2.s);
-                                    self.edit_dp = format!("0x{:02X}", s2.dp);
-                                    self.edit_pc = format!("0x{:04X}", s2.pc);
-                                    self.cc_e = (s2.cc & 0x80) != 0;
-                                    self.cc_f = (s2.cc & 0x40) != 0;
-                                    self.cc_h = (s2.cc & 0x20) != 0;
-                                    self.cc_i = (s2.cc & 0x10) != 0;
-                                    self.cc_n = (s2.cc & 0x08) != 0;
-                                    self.cc_z = (s2.cc & 0x04) != 0;
-                                    self.cc_v = (s2.cc & 0x02) != 0;
-                                    self.cc_c = (s2.cc & 0x01) != 0;
-                                }
-                                self.input_error = None;
-                                self.edit_mode = false;
-                                self.edit_initialized = false;
-                            }
-                        } else if ui.button(fl!(LOADER, "edit")).clicked() {
-                            self.edit_mode = true;
-                            self.edit_initialized = false;
-                        }
-                    });
-                    if let Some(err) = &self.input_error {
-                        ui.colored_label(egui::Color32::RED, err);
-                    }
-                    ui.separator();
-                    TableBuilder::new(ui)
-                        .striped(true)
-                        .resizable(false)
-                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                        .column(Column::auto().at_least(40.0))
-                        .column(Column::remainder())
-                        .header(22.0, |mut header| {
-                            header.col(|ui| {
-                                ui.strong(fl!(LOADER, "reg"));
-                                let rect = ui.max_rect();
-                                let stroke = egui::Stroke::new(
-                                    1.0,
-                                    ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                );
-                                ui.painter()
-                                    .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
-                            });
-                            header.col(|ui| {
-                                ui.strong(fl!(LOADER, "value"));
-                                let rect = ui.max_rect();
-                                let stroke = egui::Stroke::new(
-                                    1.0,
-                                    ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                );
-                                ui.painter()
-                                    .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
-                            });
-                        })
-                        .body(|mut body| {
-                            // Editable rows while paused; otherwise show live snapshot values
-                            let mut add_row =
-                                |name: &str, edit: &mut String, hint: &str, show_val: String| {
-                                    body.row(22.0, |mut row| {
-                                        row.col(|ui| {
-                                            ui.monospace(name);
-                                            let rect = ui.max_rect();
-                                            let stroke = egui::Stroke::new(
-                                                1.0,
-                                                ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                            );
-                                            ui.painter().rect_stroke(
-                                                rect,
-                                                egui::Rounding::same(0.0),
-                                                stroke,
-                                            );
-                                        });
-                                        row.col(|ui| {
-                                            if editing {
-                                                let te = egui::TextEdit::singleline(edit)
-                                                    .desired_width(100.0)
-                                                    .hint_text(hint);
-                                                let _resp = ui.add(te);
-                                            } else {
-                                                ui.monospace(show_val);
-                                            }
-                                            let rect = ui.max_rect();
-                                            let stroke = egui::Stroke::new(
-                                                1.0,
-                                                ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                            );
-                                            ui.painter().rect_stroke(
-                                                rect,
-                                                egui::Rounding::same(0.0),
-                                                stroke,
-                                            );
-                                        });
-                                    });
-                                };
-                            add_row("A", &mut self.edit_a, "0x00", format!("${:02X}", s.a));
-                            add_row("B", &mut self.edit_b, "0x00", format!("${:02X}", s.b));
-                            add_row("D", &mut self.edit_d, "0x0000", format!("${:04X}", s.d));
-                            add_row("X", &mut self.edit_x, "0x0000", format!("${:04X}", s.x));
-                            add_row("Y", &mut self.edit_y, "0x0000", format!("${:04X}", s.y));
-                            add_row("U", &mut self.edit_u, "0x0000", format!("${:04X}", s.u));
-                            add_row("S", &mut self.edit_s, "0x0000", format!("${:04X}", s.s));
-                            add_row("DP", &mut self.edit_dp, "0x00", format!("${:02X}", s.dp));
-                            add_row("PC", &mut self.edit_pc, "0x0000", format!("${:04X}", s.pc));
-
-                            // CC flags as toggles
-                            body.row(24.0, |mut row| {
-                                row.col(|ui| {
-                                    ui.monospace("CC");
-                                    let rect = ui.max_rect();
-                                    let stroke = egui::Stroke::new(
-                                        1.0,
-                                        ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                    );
-                                    ui.painter()
-                                        .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
-                                });
-                                row.col(|ui| {
-                                    if editing {
-                                        ui.horizontal(|ui| {
-                                            ui.toggle_value(&mut self.cc_e, "E");
-                                            ui.toggle_value(&mut self.cc_f, "F");
-                                            ui.toggle_value(&mut self.cc_h, "H");
-                                            ui.toggle_value(&mut self.cc_i, "I");
-                                            ui.toggle_value(&mut self.cc_n, "N");
-                                            ui.toggle_value(&mut self.cc_z, "Z");
-                                            ui.toggle_value(&mut self.cc_v, "V");
-                                            ui.toggle_value(&mut self.cc_c, "C");
-                                        });
-                                    } else {
-                                        let flags = [
-                                            ('E', 0b1000_0000u8),
-                                            ('F', 0b0100_0000u8),
-                                            ('H', 0b0010_0000u8),
-                                            ('I', 0b0001_0000u8),
-                                            ('N', 0b0000_1000u8),
-                                            ('Z', 0b0000_0100u8),
-                                            ('V', 0b0000_0010u8),
-                                            ('C', 0b0000_0001u8),
-                                        ];
-                                        let mut cc_text = String::with_capacity(17);
-                                        for (i, (ch, mask)) in flags.iter().enumerate() {
-                                            if i > 0 {
-                                                cc_text.push(' ');
-                                            }
-                                            if (s.cc & mask) != 0 {
-                                                cc_text.push(*ch);
-                                            } else {
-                                                cc_text.push(ch.to_ascii_lowercase());
-                                            }
-                                        }
-                                        ui.monospace(cc_text);
-                                    }
-                                    let rect = ui.max_rect();
-                                    let stroke = egui::Stroke::new(
-                                        1.0,
-                                        ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                    );
-                                    ui.painter()
-                                        .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
-                                });
-                            });
-                        });
-
-                    ui.separator();
-                    // Console -> Block -> GPIO -> Timer -> MMU quick panels (tabbed)
-                    ui.horizontal(|ui| {
-                        let mut tab_button = |label: &str, tab: DeviceTab| {
-                            if ui.selectable_label(self.dev_tab == tab, label).clicked() {
-                                self.dev_tab = tab;
-                            }
-                        };
-                        tab_button("Console", DeviceTab::Console);
-                        tab_button("Block", DeviceTab::Block);
-                        tab_button("GPIO", DeviceTab::Gpio);
-                        tab_button("Timer", DeviceTab::Timer);
-                        tab_button("MMU", DeviceTab::Mmu);
-                    });
-                    ui.separator();
-                    match self.dev_tab {
-                        DeviceTab::Console => {
-                            if self.console_enabled {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.monospace("Console:");
-                                        if let Some(base) = self.console_base {
-                                            ui.monospace(format!("@${:04X}", base));
-                                        }
-                                    });
-                                    ui.horizontal_wrapped(|ui| {
-                                        let (label, color) = if self.settings_baseline.console_stdin {
-                                            ("STDIN", egui::Color32::from_rgb(0x4C, 0xAF, 0x50))
-                                        } else {
-                                            ("STDIN OFF", egui::Color32::DARK_GRAY)
-                                        };
-                                        let (rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(70.0, 18.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        ui.painter().rect_filled(rect.shrink(3.0), 4.0, color);
-                                        ui.painter().text(
-                                            rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            label,
-                                            egui::TextStyle::Monospace.resolve(ui.style()),
-                                            egui::Color32::BLACK,
-                                        );
-                                    });
-                                });
-                            } else {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.monospace("Console:");
-                                    ui.small("disabled");
-                                });
-                            }
-                        }
-                        DeviceTab::Block => {
-                            if self.block_present {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.monospace("Block device:");
-                                        if let Some(base) = self.block_base {
-                                            ui.monospace(format!("@${base:04X}"));
-                                        }
-                                        ui.add_space(8.0);
-                                        let badge = |ui: &mut egui::Ui, label: &str, on: bool| {
-                                            let (rect, _) = ui.allocate_exact_size(
-                                                egui::vec2(48.0, 18.0),
-                                                egui::Sense::hover(),
-                                            );
-                                            let color = if on {
-                                                egui::Color32::from_rgb(0x4C, 0xAF, 0x50)
-                                            } else {
-                                                egui::Color32::from_gray(90)
-                                            };
-                                            ui.painter().rect_filled(rect.shrink(3.0), 4.0, color);
-                                            ui.painter().text(
-                                                rect.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                label,
-                                                egui::TextStyle::Monospace.resolve(ui.style()),
-                                                egui::Color32::BLACK,
-                                            );
-                                        };
-                                        let irq_on = self.settings_baseline.block_irq_enable;
-                                        let firq_on = self.settings_baseline.block_firq;
-                                        badge(ui, "IRQ", irq_on);
-                                        ui.add_space(6.0);
-                                        badge(ui, "FIRQ", firq_on);
-                                    });
-                                    ui.horizontal_wrapped(|ui| {
-                                        let (label, color) = if self.block_backing_online {
-                                            ("ONLINE", egui::Color32::from_rgb(0x4C, 0xAF, 0x50))
-                                        } else if self.block_backing_path.is_some() {
-                                            ("MISSING", egui::Color32::from_rgb(0xE6, 0xA8, 0x13))
-                                        } else {
-                                            ("NO FILE", egui::Color32::DARK_GRAY)
-                                        };
-                                        let (rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(70.0, 18.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        ui.painter().rect_filled(rect.shrink(3.0), 4.0, color);
-                                        ui.painter().text(
-                                            rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            label,
-                                            egui::TextStyle::Monospace.resolve(ui.style()),
-                                            egui::Color32::BLACK,
-                                        );
-                                        if let Some(path) = &self.block_backing_path {
-                                            let display = std::path::Path::new(path)
-                                                .file_name()
-                                                .and_then(|s| s.to_str())
-                                                .unwrap_or(path);
-                                            let resp = ui.small(display.to_string());
-                                            resp.on_hover_text(path);
-                                        } else {
-                                            ui.small("[no backing file]");
-                                        }
-                                    });
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.monospace(format!(
-                                            "CMD=${:02X} DATA=${:02X} STAT=${:02X}",
-                                            self.block_last_cmd, self.block_last_data, self.block_status
-                                        ));
-                                    });
-                                });
-                            } else {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.monospace("Block device:");
-                                    ui.small("disabled");
-                                });
-                            }
-                        }
-                        DeviceTab::Gpio => {
-                            if self.gpio_present {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label("GPIO LEDs:");
-                                        if let Some(base) =
-                                            parse_u16_any(&self.settings_baseline.gpio_base_hex)
-                                        {
-                                            ui.monospace(format!("@${base:04X}"));
-                                        }
-                                    });
-                                    let bits = self.gpio_bits as usize;
-                                    let mut new_out = self.gpio_out;
-                                    let rows = (bits + 7) / 8;
-                                    for r in 0..rows {
-                                        let start = r * 8;
-                                        let end = usize::min(bits, start + 8);
-                                        ui.horizontal(|ui| {
-                                            for i in start..end {
-                                                let is_out = ((self.gpio_dir >> i) & 1) != 0;
-                                                let on = ((new_out >> i) & 1) != 0;
-                                                let color = if is_out {
-                                                    if on {
-                                                        self.gpio_on_color
-                                                    } else {
-                                                        egui::Color32::DARK_GRAY
-                                                    }
-                                                } else {
-                                                    egui::Color32::GRAY
-                                                };
-                                                let label = format!("{i:02}");
-                                                let (rect, resp) = ui.allocate_exact_size(
-                                                    egui::vec2(20.0, 20.0),
-                                                    egui::Sense::click(),
-                                                );
-                                                ui.painter().rect_filled(rect.shrink(2.0), 4.0, color);
-                                                ui.painter().text(
-                                                    rect.center(),
-                                                    egui::Align2::CENTER_CENTER,
-                                                    label,
-                                                    egui::TextStyle::Small.resolve(ui.style()),
-                                                    egui::Color32::BLACK,
-                                                );
-                                                if is_out && resp.clicked() {
-                                                    new_out ^= 1u32 << i;
-                                                }
-                                            }
-                                        });
-                                    }
-                                    if new_out != self.gpio_out {
-                                        self.gpio_out = new_out;
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::GpioSetOut(new_out));
-                                        }
-                                    }
-                                });
-                            } else {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.monospace("GPIO:");
-                                    ui.small("disabled");
-                                });
-                            }
-                        }
-                        DeviceTab::Timer => {
-                            if self.timer_present && self.settings_baseline.use_timer {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.monospace("Timer:");
-                                        if let Some(base) =
-                                            parse_u16_any(&self.settings_baseline.timer_base_hex)
-                                        {
-                                            ui.monospace(format!("@${base:04X}"));
-                                        }
-                                        ui.add_space(8.0);
-                                        let badge = |ui: &mut egui::Ui, label: &str, on: bool| {
-                                            let (rect, _) = ui.allocate_exact_size(
-                                                egui::vec2(48.0, 18.0),
-                                                egui::Sense::hover(),
-                                            );
-                                            let color = if on {
-                                                egui::Color32::from_rgb(0x4C, 0xAF, 0x50)
-                                            } else {
-                                                egui::Color32::from_gray(90)
-                                            };
-                                            ui.painter().rect_filled(rect.shrink(3.0), 4.0, color);
-                                            ui.painter().text(
-                                                rect.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                label,
-                                                egui::TextStyle::Monospace.resolve(ui.style()),
-                                                egui::Color32::BLACK,
-                                            );
-                                        };
-                                        badge(ui, "IRQ", self.settings_baseline.timer_irq_enable);
-                                        ui.add_space(6.0);
-                                        badge(ui, "FIRQ", self.settings_baseline.timer_firq);
-                                        ui.add_space(6.0);
-                                        badge(ui, "START", self.settings_baseline.timer_start);
-                                    });
-                                    ui.horizontal(|ui| {
-                                        let run_color = if self.timer_running {
-                                            egui::Color32::LIGHT_GREEN
-                                        } else {
-                                            egui::Color32::DARK_GRAY
-                                        };
-                                        let (rrect, _) = ui
-                                            .allocate_exact_size(egui::vec2(50.0, 18.0), egui::Sense::hover());
-                                        ui.painter().rect_filled(rrect.shrink(3.0), 6.0, run_color);
-                                        let run_label = if self.timer_running { "RUN" } else { "stop" };
-                                        ui.painter().text(
-                                            rrect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            run_label,
-                                            egui::TextStyle::Monospace.resolve(ui.style()),
-                                            egui::Color32::BLACK,
-                                        );
-                                        let color = if self.timer_pending {
-                                            egui::Color32::LIGHT_RED
-                                        } else {
-                                            egui::Color32::DARK_GREEN
-                                        };
-                                        let (rect, _resp) = ui
-                                            .allocate_exact_size(egui::vec2(60.0, 18.0), egui::Sense::hover());
-                                        ui.painter().rect_filled(rect.shrink(3.0), 6.0, color);
-                                        let label = if self.timer_pending { "PENDING" } else { "idle" };
-                                        ui.painter().text(
-                                            rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            label,
-                                            egui::TextStyle::Monospace.resolve(ui.style()),
-                                            egui::Color32::BLACK,
-                                        );
-                                    });
-                                });
-                            } else {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.monospace("Timer:");
-                                    ui.small("disabled");
-                                });
-                            }
-                        }
-                        DeviceTab::Mmu => {
-                            if self.settings_baseline.use_mmu {
-                                if self.mmu_present {
-                                    ui.vertical(|ui| {
-                                        let title = if self.mmu_sys_mode {
-                                            format!("MMU map (SYS) task{}", self.mmu_task)
-                                        } else {
-                                            format!("MMU map (USER) task{}", self.mmu_task)
-                                        };
-                                        ui.monospace(title);
-                                        ui.horizontal_wrapped(|ui| {
-                                            for p in 0..16 {
-                                                let f = self.mmu_map_cur[p];
-                                                let prev = self.mmu_map_prev[p];
-                                                let changed = f != prev;
-                                                let text = format!("P{:X}:F{:02X}", p, f & 0xFF);
-                                                let (rect, _resp) = ui.allocate_exact_size(
-                                                    egui::vec2(70.0, 20.0),
-                                                    egui::Sense::hover(),
-                                                );
-                                                let bg = if changed {
-                                                    egui::Color32::DARK_GREEN
-                                                } else {
-                                                    egui::Color32::DARK_GRAY
-                                                };
-                                                ui.painter().rect_filled(rect.shrink(2.0), 3.0, bg);
-                                                ui.painter().text(
-                                                    rect.center(),
-                                                    egui::Align2::CENTER_CENTER,
-                                                    text,
-                                                    egui::TextStyle::Monospace.resolve(ui.style()),
-                                                    egui::Color32::WHITE,
-                                                );
-                                            }
-                                        });
-                                    });
-                                }
-                            } else {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.monospace("MMU:");
-                                    ui.small("disabled");
-                                });
-                            }
-                        }
-                    }
-
-                    // Error display moved next to the Edit/Apply controls at the top
-
-                    ctx.request_repaint_after(std::time::Duration::from_millis(16));
-                 });
-        });
         }
     }
 
@@ -3080,19 +1086,20 @@ impl RegSnapshot {
                     None
                 }
             });
-            let lst_text: Option<Arc<Mutex<String>>> =
-                lst_fallback_text.map(|s| Arc::new(Mutex::new(s)));
+            let lst_text: Option<Arc<Mutex<String>>> = lst_fallback_text
+                .map(|s| Arc::new(Mutex::new(s)))
+                .or_else(|| Some(Arc::new(Mutex::new(String::new()))));
             let default_use_hex_view: bool = lst_mmap.is_none();
             let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
             let auto_hex_on_edit = Arc::new(AtomicBool::new(true));
             let scroll_to_pc_req = Arc::new(AtomicBool::new(false));
-            let follow_pc_flag = Arc::new(AtomicBool::new(true));
+            let follow_pc_flag = Arc::new(AtomicBool::new(false));
             let span_policy = Arc::new(AtomicUsize::new(0)); // FullSpan
             let window_len = Arc::new(AtomicUsize::new(256));
             let cmds: Arc<Mutex<Vec<Command>>> = Arc::new(Mutex::new(Vec::new()));
 
             // Memory view defaults
-            let mem_follow_pc = Arc::new(AtomicBool::new(true));
+            let mem_follow_pc = Arc::new(AtomicBool::new(false));
             let mem_window_len = Arc::new(AtomicUsize::new(256));
             let mem_window_start = Arc::new(AtomicUsize::new(initial_start as usize));
             let mem_buf: Arc<Mutex<(u16, Vec<u8>)>> = Arc::new(Mutex::new((0, Vec::new())));
@@ -3354,15 +1361,6 @@ impl RegSnapshot {
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
-                #[cfg(windows)]
-                {
-                    started_flag_thread.store(true, Ordering::SeqCst);
-                    alive_flag_thread.store(true, Ordering::SeqCst);
-                    let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
-                    // Window closed: mark not alive. Keep `started` true so is_closed() becomes true.
-                    alive_flag_thread.store(false, Ordering::SeqCst);
-                }
-                #[cfg(not(windows))]
                 {
                     use std::panic::{catch_unwind, AssertUnwindSafe};
                     // Suppress panic noise only during GUI bootstrap on Unix
@@ -3371,8 +1369,25 @@ impl RegSnapshot {
                     started_flag_thread.store(true, Ordering::SeqCst);
                     alive_flag_thread.store(true, Ordering::SeqCst);
                     let _ = catch_unwind(AssertUnwindSafe(|| {
-                        let _ = eframe::run_native(&title, native_options, Box::new(|_| Box::new(app)));
-                    })).map_err(|_| {
+                            let _ = eframe::run_native(
+                                &title,
+                                native_options,
+                                Box::new(|cc| {
+                                    #[cfg(target_os = "macos")]
+                                    {
+                                        if GUI_CTX.set(cc.egui_ctx.clone()).is_ok() {
+                                            eprintln!("[macos-debug] GUI_CTX set from CreationContext");
+                                        }
+                                    }
+                                    #[cfg(not(target_os = "macos"))]
+                                    {
+                                        let _ = cc;
+                                    }
+                                    Box::new(app)
+                                }),
+                            );
+                    }))
+                    .map_err(|_| {
                         eprintln!(
                             "[regview] GUI failed to start on this platform/thread. Running headless."
                         );
@@ -3436,11 +1451,11 @@ impl RegSnapshot {
             let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
             let auto_hex_on_edit = Arc::new(AtomicBool::new(true));
             let scroll_to_pc_req = Arc::new(AtomicBool::new(false));
-            let follow_pc_flag = Arc::new(AtomicBool::new(true));
+            let follow_pc_flag = Arc::new(AtomicBool::new(false));
             let span_policy = Arc::new(AtomicUsize::new(0));
             let window_len = Arc::new(AtomicUsize::new(256));
             let cmds: Arc<Mutex<Vec<Command>>> = Arc::new(Mutex::new(Vec::new()));
-            let mem_follow_pc = Arc::new(AtomicBool::new(true));
+            let mem_follow_pc = Arc::new(AtomicBool::new(false));
             let mem_window_len = Arc::new(AtomicUsize::new(256));
             let mem_window_start = Arc::new(AtomicUsize::new(initial_start as usize));
             let mem_buf: Arc<Mutex<(u16, Vec<u8>)>> = Arc::new(Mutex::new((0, Vec::new())));
@@ -3767,7 +1782,11 @@ impl RegSnapshot {
         }
 
         pub fn is_closed(&self) -> bool {
-            self.started.load(Ordering::SeqCst) && !self.alive.load(Ordering::SeqCst)
+            !self.alive.load(Ordering::SeqCst)
+        }
+
+        pub fn quit_requested(&self) -> bool {
+            self.quit_flag.load(Ordering::SeqCst)
         }
 
         pub fn update_hex_listing(&self, s: String) {
@@ -3811,6 +1830,9 @@ impl RegSnapshot {
                 self.window_len.load(Ordering::SeqCst),
             )
         }
+        pub fn set_span_policy_pc_window(&self) {
+            self.span_policy.store(1, Ordering::SeqCst);
+        }
         pub fn force_hex_view(&self) {
             self.use_hex.store(true, Ordering::SeqCst);
             // When switching to Hex programmatically (e.g., after edits), also request centering on PC if following.
@@ -3825,6 +1847,16 @@ impl RegSnapshot {
                 self.mem_window_len.load(Ordering::SeqCst),
                 self.mem_follow_pc.load(Ordering::SeqCst),
             )
+        }
+        pub fn set_memory_window(&self, start: u16, len: Option<usize>, follow: Option<bool>) {
+            self.mem_window_start
+                .store(start as usize, Ordering::SeqCst);
+            if let Some(l) = len {
+                self.mem_window_len.store(l, Ordering::SeqCst);
+            }
+            if let Some(f) = follow {
+                self.mem_follow_pc.store(f, Ordering::SeqCst);
+            }
         }
         pub fn set_memory_window_start(&self, start: usize) {
             self.mem_window_start.store(start, Ordering::SeqCst);
@@ -3974,176 +2006,11 @@ impl RegSnapshot {
                 HashMap::new(),
                 None,
             ))));
-        }
-    }
-
-    fn parse_num_u16_any_gui(s: &str) -> Option<u16> {
-        let sl = s.trim();
-        let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-            (16, rest)
-        } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
-            (8, rest)
-        } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
-            (2, rest)
-        } else {
-            (10, sl)
-        };
-        u32::from_str_radix(digits, base).ok().and_then(|v| {
-            if v <= 0xFFFF {
-                Some(v as u16)
-            } else {
-                None
-            }
-        })
-    }
-
-    fn parse_num_usize_any_gui(s: &str) -> Option<usize> {
-        let sl = s.trim();
-        let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-            (16, rest)
-        } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
-            (8, rest)
-        } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
-            (2, rest)
-        } else {
-            (10, sl)
-        };
-        usize::from_str_radix(digits, base).ok()
-    }
-
-fn format_color_hex(c: egui::Color32) -> String {
-    format!("0x{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
-}
-
-fn parse_color_hex(s: &str) -> Option<egui::Color32> {
-        let sl = s.trim();
-        let digits = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-            rest
-        } else if let Some(rest) = sl.strip_prefix('#') {
-            rest
-        } else {
-            sl
-        };
-        if digits.len() != 6 {
-            return None;
-        }
-        let r = u8::from_str_radix(&digits[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&digits[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&digits[4..6], 16).ok()?;
-        Some(egui::Color32::from_rgb(r, g, b))
-    }
-
-    fn settings_origin_badges_enabled() -> bool {
-        static SHOW: OnceCell<bool> = OnceCell::new();
-        if let Some(flag) = SHOW_ORIGINS_OVERRIDE.get() {
-            return flag.load(Ordering::SeqCst);
-        }
-        *SHOW.get_or_init(|| {
-            let env_enabled = std::env::var("EM6809_SHOW_SETTINGS_ORIGINS")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            let cli_enabled = std::env::args().any(|arg| arg == "--show-settings-origins");
-            env_enabled || cli_enabled
-        })
-    }
-
-    pub fn draw_origin_badge(
-        ui: &mut egui::Ui,
-        origins: &std::collections::HashMap<String, u8>,
-        key: &str,
-    ) {
-        if !settings_origin_badges_enabled() {
-            return;
-        }
-        use egui::{Color32, Rounding, Stroke, TextStyle, Vec2};
-        // Resolve origin → label + background color
-        let (label, bg) = match origins.get(key).copied().unwrap_or(0) {
-            2 => ("CLI", Color32::from_rgb(220, 80, 60)), // red-ish
-            1 => ("Saved", Color32::from_rgb(70, 130, 200)), // blue-ish
-            _ => ("Default", Color32::from_gray(110)),    // gray
-        };
-        // Prepare galley for the text
-        let text_color = Color32::WHITE;
-        let padding = Vec2::new(6.0, 2.0);
-        // Measure text using Small style for compact tags
-        let galley = ui.painter().layout_no_wrap(
-            label.to_string(),
-            TextStyle::Small.resolve(ui.style()),
-            text_color,
-        );
-        let size = galley.size() + padding * 2.0;
-        // Allocate space and paint a rounded rectangle with the text inside
-        let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-        ui.painter().rect_filled(rect, Rounding::same(6.0), bg);
-        // Optional subtle border for contrast
-        let border = Stroke {
-            width: 1.0,
-            color: bg.gamma_multiply(0.8),
-        };
-        ui.painter().rect_stroke(rect, Rounding::same(6.0), border);
-        ui.painter()
-            .galley(rect.left_top() + padding, galley, egui::Color32::WHITE);
-}
-
-fn parse_u16_any(s: &str) -> Option<u16> {
-    let sl = s.trim();
-    if sl.is_empty() {
-        return None;
-    }
-    let (base, digits) = if let Some(rest) = sl.strip_prefix("0x").or(sl.strip_prefix("0X")) {
-        (16, rest)
-    } else if let Some(rest) = sl.strip_prefix("0o").or(sl.strip_prefix("0O")) {
-        (8, rest)
-    } else if let Some(rest) = sl.strip_prefix("0b").or(sl.strip_prefix("0B")) {
-        (2, rest)
-    } else {
-        (10, sl)
-    };
-    u32::from_str_radix(digits, base)
-        .ok()
-        .and_then(|v| if v <= 0xFFFF { Some(v as u16) } else { None })
-}
-
-    fn format_memory_line(addr: u16, bytes: &[u8], _pc: u16) -> String {
-        use core::fmt::Write as _;
-        let mut s = String::with_capacity(80);
-        let _ = write!(&mut s, "{addr:04X}: ");
-        for i in 0..16 {
-            if i < bytes.len() {
-                let b = bytes[i];
-                let _ = write!(&mut s, "{b:02X} ");
-            } else {
-                let _ = write!(&mut s, "   ");
+            #[cfg(target_os = "macos")]
+            if crate::settings_native::settings_debug_enabled() {
+                eprintln!("[macos-debug] init_global_cmds set GLOBAL_CMDS");
             }
         }
-        let _ = write!(&mut s, " | ");
-        for i in 0..16 {
-            if i < bytes.len() {
-                let ch = bytes[i];
-                let c = if (0x20..=0x7E).contains(&ch) {
-                    ch as char
-                } else {
-                    '.'
-                };
-                let _ = write!(&mut s, "{c}");
-            } else {
-                let _ = write!(&mut s, " ");
-            }
-        }
-        s
-    }
-
-    fn format_memory_dump((start, bytes): (u16, &[u8])) -> String {
-        let mut out = String::new();
-        let mut off = 0usize;
-        while off < bytes.len() {
-            let chunk = &bytes[off..bytes.len().min(off + 16)];
-            let line = format_memory_line(start.wrapping_add(off as u16), chunk, 0xFFFF);
-            out.push_str(&line);
-            out.push('\n');
-            off += 16;
-        }
-        out
     }
 }
 
@@ -4154,9 +2021,17 @@ pub use gui::Viewer;
 pub fn push_global_command(cmd: Command) -> bool {
     if let Some(q) = gui::GLOBAL_CMDS.get() {
         if let Ok(mut v) = q.lock() {
+            #[cfg(target_os = "macos")]
+            if crate::settings_native::settings_debug_enabled() {
+                eprintln!("[macos-debug] push_global_command {:?}", cmd);
+            }
             v.push(cmd);
             return true;
         }
+    }
+    #[cfg(target_os = "macos")]
+    if crate::settings_native::settings_debug_enabled() {
+        eprintln!("[macos-debug] push_global_command failed (GLOBAL_CMDS not set)");
     }
     false
 }
@@ -4189,6 +2064,8 @@ pub fn get_latest_settings_baseline() -> Option<(
 fn push_settings_command(cmds: &Arc<Mutex<Vec<Command>>>, native: bool) {
     let _ = native; // unified: always use in-app dialog
     if let Ok(mut q) = cmds.lock() {
+        #[cfg(target_os = "macos")]
+        eprintln!("[macos-debug] enqueue UiOpenSettings (native={native})");
         q.push(Command::UiOpenSettings);
     }
 }
