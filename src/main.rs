@@ -14,6 +14,7 @@ use em6809::loader::{self, ImageFormat, LoadedImage};
 use em6809::mmu::Mc6829;
 use em6809::prefs;
 use em6809::timer::TimerDev;
+mod cli;
 mod settings_native;
 mod settings_worker;
 
@@ -70,77 +71,6 @@ fn log_program_info(loaded: &LoadedImage, pc: u16) {
         );
     }
 }
-
-fn print_usage() {
-    println!("em6809 - MC6809 software emulator\n");
-    println!("Usage:\n  em6809 [image] [options]\n");
-    println!("Notes:");
-    println!("  - When `--run` is specified, <image> must also be provided.");
-    println!("  - Without `--run`, omitting <image> opens the GUI with no program loaded.");
-    println!("Image Options:");
-    println!("  --format bin|srec         Input format override");
-    println!("  --base 0xADDR             Base address for raw binary");
-    println!("  --pc 0xADDR               Override reset PC");
-    println!("\nExecution / Debug:");
-    println!("  --cycles                  Print cycle count at end");
-    // Paused is default in GUI-only mode
-    println!("  (GUI-only) Disasm/Memory/Trace are available in the window UI");
-    // --run and --bp removed in GUI-only mode
-    println!("\nConsole I/O:");
-    println!("  --console 0xADDR          Attach console device at base (e.g., 0xFF00)");
-    println!("  --console-in STRING       Prefeed input (supports \\r, \\n, \\t, \\\\)");
-    println!("  --console-stdin           Read from stdin (Ctrl+C to stop)");
-    println!("  --console-out PATH        Mirror output to file");
-    println!("  --console-flush-every N   Flush every N chars (default 1, max 128)");
-    println!("  --console-flush-newline   Also flush on newline characters");
-    println!("  --console-echo            Local echo on RX read (default OFF)");
-    println!("  --console-rx-wm N         RX IRQ watermark (if used)");
-    println!("  --console-irq-hold N      IRQ hold cycles");
-    println!("\nBlock I/O:");
-    println!("  --block 0xADDR            Attach block device at base (e.g., 0xFF20)");
-    println!("  --block-file PATH         Backing image file (read/write)");
-    println!("  --block-irq               Enable block device IRQ on ready/complete/error");
-    println!("  --block-firq              Use FIRQ for block device");
-    println!("  --block-irq-hold N        IRQ hold cycles (default 0)");
-    println!("\nGPIO:");
-    println!("  --gpio 0xADDR             Attach virtual GPIO at base (e.g., 0xFF40)");
-    println!("  --gpio-bits N             Number of GPIO bits/LEDs (default 8)");
-    println!("  --gpio-on-color 0xRRGGBB  LED ON color (e.g., 0xFFD000)");
-    println!("\nTimer:");
-    println!("  --timer 0xADDR            Attach periodic timer at base (e.g., 0xFF10)");
-    println!("  --timer-reload 0xNNNN     Timer period in instruction ticks");
-    println!("  --timer-irq               Enable timer IRQ");
-    println!("  --timer-firq              Use FIRQ for timer");
-    println!("  --timer-start             Start timer immediately");
-    println!("  --fallback-settings       Use in-app Settings dialog instead of native window");
-    println!("\nMMU / Presets:");
-    println!("  --mmu                     Use MC6829 MMU backend");
-    println!("  --mmu-phys BYTES          Physical size (e.g., 1048576)");
-    println!("  --mmu-reg-base 0xA        MMU regs base address");
-    println!("  --mmu-task N              Task register");
-    println!("  --mmu-idmap               Identity map current task");
-    println!("  --mmu-map P=F             Map page P to frame F (hex or dec)");
-    println!("  --mmu-map-file PATH       Apply map/config from file");
-    println!("  --mmu-log-maps            Log MMU page->frame changes to stdout");
-    println!("  --preset NAME             Apply preset (also enables --mmu)");
-    println!("  --preset-list             List presets and exit");
-    println!("  --mmu-mode sys|user       Set initial MMU mode");
-    println!("  --protect-vectors         Write-protect vectors");
-    println!("  --prot 0xNN               Protection control byte");
-    println!("  --attr PG=0xNN            Attribute for page PG");
-    println!("\nBoot Scripts:");
-    println!("  --boot-script PATH        Apply boot script");
-    println!("  --emit-boot-template N    Write N.boot template and exit");
-    println!("\nGeneral:");
-    println!("  -h, --help                Show this help and exit");
-}
-
-fn parse_hex(s: &str) -> Option<u16> {
-    let t = s.trim_start_matches("0x");
-    u16::from_str_radix(t, 16).ok()
-}
-
-// Removed unused numeric parsers (GUI-only mode)
 
 fn parse_escapes(s: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(s.len());
@@ -303,448 +233,104 @@ mod signals {
 fn main() {
     // Initialize i18n (Fluent) from environment/OS locale
     i18n::init_from_env();
-    let mut args = env::args().skip(1).peekable();
-    let mut force_in_app_settings = match std::env::var("EM6809_FALLBACK_SETTINGS") {
-        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
-        Ok(_) => true,
-        Err(_) => true, // 全プラットフォームでデフォルトはアプリ内設定
+    let cli_opts = match cli::parse_args() {
+        Some(opts) => opts,
+        None => return,
     };
-    // Help early-exit
-    if let Some(first) = args.peek() {
-        if first == "--help" || first == "-h" {
-            print_usage();
-            return;
-        }
-    }
-    let mut image_path: Option<String> = None;
-    if let Some(first) = args.peek() {
-        if !first.starts_with('-') {
-            image_path = args.next();
-        }
-    }
 
-    let mut format: Option<ImageFormat> = None;
-    let mut base: Option<u16> = None;
-    let mut force_pc: Option<u16> = None;
-    // GUI-only: trace/step removed; pause is default
-    let mut paused_start: bool = true;
-    // GUI-only: legacy CUI dump flags removed
-    let mut print_cycles = false;
-    // GUI-only: legacy CUI disasm request removed
-    // GUI-only: --run and --bp removed
-    let mut use_mmu = false;
-    // CLI presence trackers for origin badges
-    let mut cli_protect_vectors = false;
-    let mut mmu_phys: usize = 1 << 20; // 1MiB default
-    let mut mmu_regs_base: u16 = 0xFFA0;
-    let mut mmu_task: u8 = 0;
-    let mut mmu_idmap = false;
-    let mut mmu_log_maps = false;
-    let mut console_base: Option<u16> = None;
-    let mut cli_console_enable = false;
-    let mut cli_console_base = false;
-    let mut block_base: Option<u16> = None;
-    let mut cli_block_enable = false;
-    let mut cli_block_base = false;
-    let mut console_in: Option<String> = None;
-    let mut console_stdin = false;
-    let mut cli_console_stdin = false;
-    let mut block_file_path: Option<String> = None;
-    let mut cli_block_file = false;
-    let mut block_irq_enable: bool = false;
-    let mut cli_block_irq = false;
-    let mut block_firq: bool = false;
-    let mut cli_block_firq = false;
-    let mut block_irq_hold: Option<u32> = None;
-    let mut cli_block_irq_hold = false;
-    let mut gpio_base: Option<u16> = None;
-    let mut cli_gpio_enable = false;
-    let mut cli_gpio_base = false;
-    let mut gpio_bits: u8 = 8;
-    let mut cli_gpio_bits = false;
-    let mut gpio_on_color: Option<u32> = None;
-    let mut cli_gpio_on_color = false;
-    let mut mmu_maps: Vec<(usize, u16)> = Vec::new();
-    let mut mmu_map_file: Option<String> = None;
-    let mut preset_name: Option<String> = None;
-    let mut protect_vectors = false;
-    // mmu origins
-    let mut cli_mmu_enable = false;
-    let cli_mmu_regs_base = false;
-    let cli_mmu_phys = false;
-    let cli_mmu_task = false;
-    let mut cli_mmu_mode = false;
-    let mut cli_mmu_prot = false;
-    let mut cli_mmu_log_maps = false;
-    let mut mmu_mode_sys: Option<bool> = None;
-    let mut mmu_prot: Option<u8> = None;
-    let mut mmu_attrs: Vec<(usize, u8)> = Vec::new();
-    let mut console_rx_wm: Option<usize> = None;
-    let mut cli_console_rx_wm = false;
-    let mut console_irq_hold: Option<u32> = None;
-    let mut cli_console_irq_hold = false;
-    let mut boot_script_path: Option<String> = None;
-    let mut console_out_path: Option<String> = None;
-    let mut cli_console_out = false;
-    let mut console_tee_stderr: bool = false;
-    let mut cli_console_tee_stderr = false;
-    let mut console_flush_every: Option<usize> = None;
-    let mut cli_console_flush_every = false;
-    let mut console_flush_newline: bool = false;
-    let mut cli_console_flush_newline = false;
-    let mut console_local_echo: bool = false; // default OFF
-    let mut cli_console_echo = false;
-    let mut emit_boot_template_name: Option<String> = None;
-    let mut irq_log: bool = false;
-    let mut gpio_log: bool = false;
-    // Timer CLI
-    let mut timer_base: Option<u16> = None;
-    let mut cli_timer_enable = false;
-    let mut cli_timer_base = false;
-    let mut timer_reload: Option<u16> = None;
-    let mut cli_timer_reload = false;
-    let mut timer_rate_hz: Option<u32> = None;
-    let mut timer_ips_est: u64 = 1_000_000; // default 1 MIPS equivalent (instructions/sec)
-    let mut cli_timer_ips = false;
-    let mut timer_irq: bool = false;
-    let mut cli_timer_irq = false;
-    let mut timer_firq: bool = false;
-    let mut cli_timer_firq = false;
-    let mut timer_start: bool = false;
-    let mut cli_timer_start = false;
-    let mut debug_console_log: bool = false;
-    let mut debug_block_log: bool = false;
-    let mut debug_gpio_log: bool = false;
-    let mut debug_mmu_log: bool = false;
-    let mut debug_settings_log: bool = false;
-    let mut debug_show_settings_origins: bool = false;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--format" => {
-                if let Some(f) = args.next() {
-                    format = match f.as_str() {
-                        "bin" => Some(ImageFormat::Binary),
-                        "srec" => Some(ImageFormat::Srec),
-                        other => {
-                            eprintln!("Unknown format: {other}");
-                            return;
-                        }
-                    };
-                }
-            }
-            "--base" => {
-                if let Some(v) = args.next() {
-                    base = parse_hex(&v);
-                }
-            }
-            "--pc" => {
-                if let Some(v) = args.next() {
-                    force_pc = parse_hex(&v);
-                }
-            }
-            "--cycles" => print_cycles = true,
-            "--run" => {
-                paused_start = false;
-            }
-            // --paused is default in GUI-only mode; ignore if present
-            "--paused" => {}
-            "--dump-regs" => { /* ignored in GUI-only mode */ }
-            "--dump-mem" => {
-                let _ = (args.next(), args.next()); /* ignored */
-            }
-            "--dump-mem-ascii" => {
-                let _ = (args.next(), args.next()); /* ignored */
-            }
-            "--disasm" => { /* removed in GUI-only mode */ }
-            // --bp removed in GUI-only mode
-            "--mmu" => use_mmu = true,
-            "--mmu-phys" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<usize>() {
-                        mmu_phys = n;
-                    }
-                }
-            }
-            "--mmu-reg-base" => {
-                if let Some(v) = args.next() {
-                    if let Some(a) = parse_hex(&v) {
-                        mmu_regs_base = a;
-                    }
-                }
-            }
-            "--mmu-task" => {
-                if let Some(v) = args.next() {
-                    if let Ok(t) = v.parse::<u8>() {
-                        mmu_task = t;
-                    }
-                }
-            }
-            "--mmu-idmap" => mmu_idmap = true,
-            "--mmu-map" => {
-                if let Some(v) = args.next() {
-                    // format: PAGE=FRAME (hex like 0x3=0x42, or decimal)
-                    if let Some(eq) = v.find('=') {
-                        let (p, f) = v.split_at(eq);
-                        let f = &f[1..];
-                        let page = p.strip_prefix("0x").unwrap_or(p);
-                        let frame = f.strip_prefix("0x").unwrap_or(f);
-                        if let (Ok(pp), Ok(ff)) = (
-                            usize::from_str_radix(page, if p.starts_with("0x") { 16 } else { 10 }),
-                            u16::from_str_radix(frame, if f.starts_with("0x") { 16 } else { 10 }),
-                        ) {
-                            mmu_maps.push((pp, ff));
-                        }
-                    }
-                }
-            }
-            "--console" => {
-                if let Some(v) = args.next() {
-                    console_base = parse_hex(&v);
-                    cli_console_enable = console_base.is_some();
-                    cli_console_base = cli_console_enable;
-                }
-            }
-            "--block" => {
-                if let Some(v) = args.next() {
-                    block_base = parse_hex(&v);
-                    cli_block_enable = block_base.is_some();
-                    cli_block_base = cli_block_enable;
-                }
-            }
-            "--console-in" => {
-                if let Some(v) = args.next() {
-                    console_in = Some(v);
-                }
-            }
-            "--console-stdin" => {
-                console_stdin = true;
-                cli_console_stdin = true;
-            }
-            "--block-file" => {
-                if let Some(v) = args.next() {
-                    block_file_path = Some(v);
-                    cli_block_file = true;
-                }
-            }
-            "--block-irq" => {
-                block_irq_enable = true;
-                cli_block_irq = true;
-            }
-            "--block-firq" => {
-                block_firq = true;
-                cli_block_firq = true;
-            }
-            "--block-irq-hold" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<u32>() {
-                        block_irq_hold = Some(n);
-                        cli_block_irq_hold = true;
-                    }
-                }
-            }
-            "--gpio" => {
-                if let Some(v) = args.next() {
-                    gpio_base = parse_hex(&v);
-                    cli_gpio_enable = gpio_base.is_some();
-                    cli_gpio_base = cli_gpio_enable;
-                }
-            }
-            "--gpio-bits" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<u8>() {
-                        gpio_bits = n;
-                        cli_gpio_bits = true;
-                    }
-                }
-            }
-            "--gpio-on-color" => {
-                if let Some(v) = args.next() {
-                    let s2 = v.trim();
-                    let hex = s2
-                        .strip_prefix("0x")
-                        .or_else(|| s2.strip_prefix("#"))
-                        .unwrap_or(s2);
-                    if hex.len() == 6 {
-                        if let Ok(n) = u32::from_str_radix(hex, 16) {
-                            gpio_on_color = Some(n & 0xFFFFFF);
-                            cli_gpio_on_color = true;
-                        }
-                    }
-                }
-            }
-            "--gpio-log" => {
-                gpio_log = true;
-            }
-            "--console-out" => {
-                if let Some(v) = args.next() {
-                    console_out_path = Some(v);
-                    cli_console_out = true;
-                }
-            }
-            "--console-tee-stderr" => {
-                console_tee_stderr = true;
-                cli_console_tee_stderr = true;
-            }
-            "--console-flush-every" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<usize>() {
-                        console_flush_every = Some(n.min(128));
-                        cli_console_flush_every = true;
-                    }
-                }
-            }
-            "--console-flush-newline" => {
-                console_flush_newline = true;
-                cli_console_flush_newline = true;
-            }
-            "--console-echo" => {
-                console_local_echo = true;
-                cli_console_echo = true;
-            }
-            "--console-rx-wm" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<usize>() {
-                        console_rx_wm = Some(n);
-                        cli_console_rx_wm = true;
-                    }
-                }
-            }
-            "--console-irq-hold" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<u32>() {
-                        console_irq_hold = Some(n);
-                        cli_console_irq_hold = true;
-                    }
-                }
-            }
-            "--timer" => {
-                if let Some(v) = args.next() {
-                    timer_base = parse_hex(&v);
-                    cli_timer_enable = timer_base.is_some();
-                    cli_timer_base = cli_timer_enable;
-                }
-            }
-            "--timer-reload" => {
-                if let Some(v) = args.next() {
-                    timer_reload = parse_hex(&v);
-                    cli_timer_reload = timer_reload.is_some();
-                }
-            }
-            "--timer-rate" => {
-                if let Some(v) = args.next() {
-                    if let Ok(hz) = v.parse::<u32>() {
-                        timer_rate_hz = Some(hz);
-                    }
-                }
-            }
-            "--timer-ips" => {
-                if let Some(v) = args.next() {
-                    if let Ok(n) = v.parse::<u64>() {
-                        timer_ips_est = n.max(1);
-                        cli_timer_ips = true;
-                    }
-                }
-            }
-            "--timer-irq" => {
-                timer_irq = true;
-                cli_timer_irq = true;
-            }
-            "--timer-firq" => {
-                timer_firq = true;
-                cli_timer_firq = true;
-            }
-            "--timer-start" => {
-                timer_start = true;
-                cli_timer_start = true;
-            }
-            "--fallback-settings" => {
-                force_in_app_settings = true;
-            }
-            "--irq-log" => {
-                irq_log = true;
-            }
-            "--mmu-map-file" => {
-                if let Some(v) = args.next() {
-                    mmu_map_file = Some(v);
-                }
-            }
-            "--mmu-log-maps" => {
-                mmu_log_maps = true;
-                cli_mmu_log_maps = true;
-            }
-            "--preset" | "--mmu-template" => {
-                if let Some(v) = args.next() {
-                    preset_name = Some(v);
-                    use_mmu = true;
-                    cli_mmu_enable = true;
-                }
-            }
-            "--protect-vectors" => {
-                protect_vectors = true;
-                cli_protect_vectors = true;
-            }
-            "--mmu-mode" => {
-                if let Some(v) = args.next() {
-                    let s = v.to_lowercase();
-                    if s == "sys" || s == "system" {
-                        mmu_mode_sys = Some(true);
-                        cli_mmu_mode = true;
-                    } else if s == "user" {
-                        mmu_mode_sys = Some(false);
-                        cli_mmu_mode = true;
-                    }
-                }
-            }
-            "--prot" => {
-                if let Some(v) = args.next() {
-                    if let Some(p) = parse_hex(&v) {
-                        mmu_prot = Some((p & 0xFF) as u8);
-                        cli_mmu_prot = true;
-                    }
-                }
-            }
-            "--attr" => {
-                if let Some(pv) = args.next() {
-                    if let Some(eq) = pv.find('=') {
-                        let (p, v) = pv.split_at(eq);
-                        let v = &v[1..];
-                        if let (Ok(pp), Ok(vv)) = (
-                            usize::from_str_radix(
-                                p.trim_start_matches("0x"),
-                                if p.starts_with("0x") { 16 } else { 10 },
-                            ),
-                            u8::from_str_radix(
-                                v.trim_start_matches("0x"),
-                                if v.starts_with("0x") { 16 } else { 10 },
-                            ),
-                        ) {
-                            mmu_attrs.push((pp, vv));
-                        }
-                    }
-                }
-            }
-            "--preset-list" => {
-                println!("Presets: {}", em6809::config::list_presets().join(", "));
-                return;
-            }
-            "--boot-script" => {
-                if let Some(v) = args.next() {
-                    boot_script_path = Some(v);
-                }
-            }
-            "--emit-boot-template" => {
-                if let Some(v) = args.next() {
-                    emit_boot_template_name = Some(v);
-                }
-            }
-            _ => {
-                eprintln!("Unknown arg: {arg}");
-                print_usage();
-                return;
-            }
-        }
-    }
+    #[allow(unused_mut)]
+    let cli::CliOptions {
+        mut force_in_app_settings,
+        mut image_path,
+        mut format,
+        mut base,
+        mut force_pc,
+        mut paused_start,
+        mut print_cycles,
+        mut use_mmu,
+        mut cli_protect_vectors,
+        mut mmu_phys,
+        mut mmu_regs_base,
+        mut mmu_task,
+        mut mmu_idmap,
+        mut mmu_log_maps,
+        mut console_base,
+        mut cli_console_enable,
+        mut cli_console_base,
+        mut block_base,
+        mut cli_block_enable,
+        mut cli_block_base,
+        mut console_in,
+        mut console_stdin,
+        mut cli_console_stdin,
+        mut block_file_path,
+        mut cli_block_file,
+        mut block_irq_enable,
+        mut cli_block_irq,
+        mut block_firq,
+        mut cli_block_firq,
+        mut block_irq_hold,
+        mut cli_block_irq_hold,
+        mut gpio_base,
+        mut cli_gpio_enable,
+        mut cli_gpio_base,
+        mut gpio_bits,
+        mut cli_gpio_bits,
+        mut gpio_on_color,
+        mut cli_gpio_on_color,
+        mut mmu_maps,
+        mut mmu_map_file,
+        mut preset_name,
+        mut protect_vectors,
+        mut cli_mmu_enable,
+        mut cli_mmu_regs_base,
+        mut cli_mmu_phys,
+        mut cli_mmu_task,
+        mut cli_mmu_mode,
+        mut cli_mmu_prot,
+        mut cli_mmu_log_maps,
+        mut mmu_mode_sys,
+        mut mmu_prot,
+        mut mmu_attrs,
+        mut console_rx_wm,
+        mut cli_console_rx_wm,
+        mut console_irq_hold,
+        mut cli_console_irq_hold,
+        mut boot_script_path,
+        mut console_out_path,
+        mut cli_console_out,
+        mut console_tee_stderr,
+        mut cli_console_tee_stderr,
+        mut console_flush_every,
+        mut cli_console_flush_every,
+        mut console_flush_newline,
+        mut cli_console_flush_newline,
+        mut console_local_echo,
+        mut cli_console_echo,
+        mut emit_boot_template_name,
+        mut irq_log,
+        mut gpio_log,
+        mut timer_base,
+        mut cli_timer_enable,
+        mut cli_timer_base,
+        mut timer_reload,
+        mut cli_timer_reload,
+        mut timer_rate_hz,
+        mut timer_ips_est,
+        mut cli_timer_ips,
+        mut timer_irq,
+        mut cli_timer_irq,
+        mut timer_firq,
+        mut cli_timer_firq,
+        mut timer_start,
+        mut cli_timer_start,
+        mut debug_console_log,
+        mut debug_block_log,
+        mut debug_gpio_log,
+        mut debug_mmu_log,
+        mut debug_settings_log,
+        mut debug_show_settings_origins,
+    } = cli_opts;
 
     // Debug toggles initial state from env/CLI
     if env::var("EM6809_SETTINGS_DEBUG")
@@ -766,7 +352,7 @@ fn main() {
 
     if !paused_start && image_path.is_none() {
         eprintln!("error: --run requires an image file.\n");
-        print_usage();
+        cli::print_usage();
         return;
     }
 
@@ -1982,7 +1568,11 @@ fn main() {
                                     regview::Command::UiAckSettings { .. } => {}
                                     regview::Command::SetPc(a) => {
                                         cpu_worker.set_pc(a);
-                                        viewer_cpu.set_memory_window(cpu_worker.r.pc, None, Some(true));
+                                        viewer_cpu.set_memory_window(
+                                            cpu_worker.r.pc,
+                                            None,
+                                            Some(true),
+                                        );
                                         let snap2 = regview::RegSnapshot {
                                             a: cpu_worker.r.a,
                                             b: cpu_worker.r.b,
@@ -2003,7 +1593,9 @@ fn main() {
                                         let (policy, _win_len) = viewer_cpu.get_span_policy();
                                         let span_for_pc = spans
                                             .iter()
-                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .find(|(s, e)| {
+                                                *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
+                                            })
                                             .copied();
                                         let (start, total_len) = if policy == 1 {
                                             let (ws, wl, _) = viewer_cpu.get_memory_window();
@@ -2018,7 +1610,10 @@ fn main() {
                                         let mut out = String::new();
                                         let mut processed: usize = 0;
                                         while processed < total_len {
-                                            let (consumed, text) = em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cur);
+                                            let (consumed, text) = em6809::disasm::disasm_one_hex(
+                                                bus_worker.as_mut(),
+                                                cur,
+                                            );
                                             use core::fmt::Write as _;
                                             let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                             let step = core::cmp::max(consumed as usize, 1);
@@ -2119,7 +1714,11 @@ fn main() {
                                                 if let Some(pc) = new_pc {
                                                     cpu_worker.r.pc = pc;
                                                     // Also align memory pane to program start for visibility
-                                                    viewer_cpu.set_memory_window(pc, None, Some(true));
+                                                    viewer_cpu.set_memory_window(
+                                                        pc,
+                                                        None,
+                                                        Some(true),
+                                                    );
                                                 }
                                                 log_program_info(&new_loaded, cpu_worker.r.pc);
                                                 let snap = regview::RegSnapshot {
@@ -3317,14 +2916,8 @@ fn main() {
                                 instance_id,
                             };
                             if apply_settings_runtime(Some(viewer), bus.as_mut(), &payload) {
-                                persist_settings_snapshot(
-                                    &payload.settings,
-                                    payload.gpio_on_color,
-                                );
-                                publish_settings_baseline(
-                                    &payload.settings,
-                                    payload.gpio_on_color,
-                                );
+                                persist_settings_snapshot(&payload.settings, payload.gpio_on_color);
+                                publish_settings_baseline(&payload.settings, payload.gpio_on_color);
                                 send_settings_ack(payload.instance_id);
                             }
                         }
@@ -3381,11 +2974,12 @@ fn main() {
                             }
                             viewer.update_memory_window(eff_start2, buf2);
                             let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-                            let span_for_pc =
-                                spans.iter().find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e).copied();
-                            let (start, end, total_len_override) = span_for_pc
-                                .map(|(s, e)| (s, e, None))
-                                .unwrap_or_else(|| {
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
+                            let (start, end, total_len_override) =
+                                span_for_pc.map(|(s, e)| (s, e, None)).unwrap_or_else(|| {
                                     let (ws, wl, _) = viewer.get_memory_window();
                                     (ws, ws.wrapping_add(wl as u16), Some(wl))
                                 });
@@ -3409,7 +3003,7 @@ fn main() {
                         }
                         regview::Command::SetPc(a) => {
                             cpu.set_pc(a);
-                            
+
                             let snap2 = regview::RegSnapshot {
                                 a: cpu.r.a,
                                 b: cpu.r.b,
@@ -3441,8 +3035,10 @@ fn main() {
                         regview::Command::RefreshHexListing => {
                             let spans = coalesce_ranges(loaded.loaded_ranges.clone());
                             let (policy, _win_len) = viewer.get_span_policy();
-                            let span_for_pc =
-                                spans.iter().find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e).copied();
+                            let span_for_pc = spans
+                                .iter()
+                                .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                .copied();
                             let (start, total_len) = if policy == 1 {
                                 let (ws, wl, _) = viewer.get_memory_window();
                                 (ws, std::cmp::max(wl, 256))
@@ -3456,7 +3052,8 @@ fn main() {
                             let mut out = String::new();
                             let mut processed: usize = 0;
                             while processed < total_len {
-                                let (consumed, text) = em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                let (consumed, text) =
+                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
                                 use core::fmt::Write as _;
                                 let _ = writeln!(&mut out, "{cur:04X}: {text}");
                                 let step = core::cmp::max(consumed as usize, 1);
@@ -3584,44 +3181,46 @@ fn main() {
                                 let clen2 = core::cmp::max(consumed as usize, 1);
                                 viewer.set_memory_highlight(cpu.r.pc, clen2);
                             }
-                        regview::Command::MemWrite(items) => {
-                            for (addr, val) in items {
-                                bus.as_mut().write8(addr, val);
+                            regview::Command::MemWrite(items) => {
+                                for (addr, val) in items {
+                                    bus.as_mut().write8(addr, val);
+                                }
+                                // Refresh memory window after edits
+                                let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
+                                let eff_start2: u16 =
+                                    if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
+                                let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
+                                let mut a2 = eff_start2;
+                                for _ in 0..mlen2 {
+                                    buf2.push(bus.as_mut().read8(a2));
+                                    a2 = a2.wrapping_add(1);
+                                }
+                                viewer.update_memory_window(eff_start2, buf2);
+                                // Refresh listing for current PC span
+                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                let span_for_pc = spans
+                                    .iter()
+                                    .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+                                    .copied();
+                                let (start, end) = span_for_pc.unwrap_or_else(|| {
+                                    let (ws, wl, _) = viewer.get_memory_window();
+                                    (ws, ws.wrapping_add(wl as u16))
+                                });
+                                let mut cur = start;
+                                let mut out = String::new();
+                                let mut processed: usize = 0;
+                                let total_len: usize = end.wrapping_sub(start) as usize;
+                                while processed < total_len {
+                                    let (consumed, text) =
+                                        em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
+                                    use core::fmt::Write as _;
+                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                    let step = core::cmp::max(consumed as usize, 1);
+                                    processed += step;
+                                    cur = cur.wrapping_add(step as u16);
+                                }
+                                viewer.update_hex_listing(out);
                             }
-                            // Refresh memory window after edits
-                            let (mstart2, mlen2, mfollow2) = viewer.get_memory_window();
-                            let eff_start2: u16 =
-                                if mfollow2 { cpu.r.pc & 0xFFF0 } else { mstart2 };
-                            let mut buf2: Vec<u8> = Vec::with_capacity(mlen2);
-                            let mut a2 = eff_start2;
-                            for _ in 0..mlen2 {
-                                buf2.push(bus.as_mut().read8(a2));
-                                a2 = a2.wrapping_add(1);
-                            }
-                            viewer.update_memory_window(eff_start2, buf2);
-                            // Refresh listing for current PC span
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-                            let span_for_pc =
-                                spans.iter().find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e).copied();
-                            let (start, end) = span_for_pc.unwrap_or_else(|| {
-                                let (ws, wl, _) = viewer.get_memory_window();
-                                (ws, ws.wrapping_add(wl as u16))
-                            });
-                            let mut cur = start;
-                            let mut out = String::new();
-                            let mut processed: usize = 0;
-                            let total_len: usize = end.wrapping_sub(start) as usize;
-                            while processed < total_len {
-                                let (consumed, text) =
-                                    em6809::disasm::disasm_one_hex(bus.as_mut(), cur);
-                                use core::fmt::Write as _;
-                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                let step = core::cmp::max(consumed as usize, 1);
-                                processed += step;
-                                cur = cur.wrapping_add(step as u16);
-                            }
-                            viewer.update_hex_listing(out);
-                        }
                             regview::Command::SetPc(a) => {
                                 cpu.set_pc(a);
                                 viewer.set_memory_window(cpu.r.pc, None, Some(true));
