@@ -1,0 +1,297 @@
+use em6809::bus::{self, Bus};
+use em6809::config::{apply_mmu_config_from_str, apply_preset};
+use em6809::io::{BlockDev, ConsoleDev, GpioDev, IoBus};
+use em6809::mmu::Mc6829;
+use em6809::timer::TimerDev;
+
+pub struct BusOptions {
+    pub use_mmu: bool,
+    pub mmu_phys: usize,
+    pub mmu_regs_base: u16,
+    pub mmu_task: u8,
+    pub mmu_idmap: bool,
+    pub mmu_log_maps: bool,
+    pub mmu_maps: Vec<(usize, u16)>,
+    pub mmu_map_file: Option<String>,
+    pub preset_name: Option<String>,
+    pub mmu_mode_sys: Option<bool>,
+    pub mmu_prot: Option<u8>,
+    pub mmu_attrs: Vec<(usize, u8)>,
+    pub protect_vectors: bool,
+    pub console_base: Option<u16>,
+    pub console_rx_wm: Option<usize>,
+    pub console_irq_hold: Option<u32>,
+    pub console_in: Option<String>,
+    pub console_out_path: Option<String>,
+    pub console_flush_every: Option<usize>,
+    pub console_flush_newline: bool,
+    pub console_tee_stderr: bool,
+    pub console_local_echo: bool,
+    pub block_base: Option<u16>,
+    pub block_file_path: Option<String>,
+    pub block_irq_enable: bool,
+    pub block_firq: bool,
+    pub block_irq_hold: Option<u32>,
+    pub gpio_base: Option<u16>,
+    pub gpio_bits: u8,
+    pub timer_base: Option<u16>,
+    pub timer_reload: Option<u16>,
+    pub timer_rate_hz: Option<u32>,
+    pub timer_ips_est: u64,
+    pub timer_irq: bool,
+    pub timer_firq: bool,
+    pub timer_start: bool,
+}
+
+fn parse_escapes(s: &str) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
+    let mut it = s.bytes().peekable();
+    while let Some(b) = it.next() {
+        if b == b'\\' {
+            match it.peek().copied() {
+                Some(b'r') => {
+                    out.push(0x0D);
+                    it.next();
+                }
+                Some(b'n') => {
+                    out.push(0x0A);
+                    it.next();
+                }
+                Some(b't') => {
+                    out.push(0x09);
+                    it.next();
+                }
+                Some(b'\\') => {
+                    out.push(b'\\');
+                    it.next();
+                }
+                _ => {
+                    out.push(b);
+                }
+            }
+        } else {
+            out.push(b);
+        }
+    }
+    out
+}
+
+pub fn build_bus(mut opts: BusOptions) -> Option<(Box<dyn Bus>, Option<u16>)> {
+    // Choose memory backend and build a Bus object
+    let bus: Box<dyn bus::Bus> = if opts.use_mmu {
+        let mut mmu = Mc6829::new(opts.mmu_phys, opts.mmu_regs_base);
+        if opts.mmu_log_maps {
+            mmu.set_log_maps(true);
+        }
+        mmu.set_task(opts.mmu_task);
+        if opts.mmu_idmap {
+            mmu.identity_map_current();
+        }
+        for (p, f) in &opts.mmu_maps {
+            mmu.set_map_entry(*p, *f);
+        }
+        if let Some(path) = &opts.mmu_map_file {
+            match std::fs::read_to_string(path) {
+                Ok(s) => {
+                    if let Err(e) = apply_mmu_config_from_str(&mut mmu, &s) {
+                        eprintln!("MMU map file error: {e}");
+                        return None;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to read {path}: {e}");
+                    return None;
+                }
+            }
+        }
+        if let Some(pname) = &opts.preset_name {
+            if let Err(e) = apply_preset(&mut mmu, pname) {
+                eprintln!("Preset error: {e}");
+                return None;
+            }
+            if pname.to_lowercase().starts_with("os9l2") && opts.console_base.is_none() {
+                opts.console_base = Some(0xFF00);
+            }
+        }
+        if let Some(sys) = opts.mmu_mode_sys {
+            if sys {
+                mmu.write8(mmu.regs_base + 0x11, 0x01);
+            } else {
+                mmu.write8(mmu.regs_base + 0x11, 0x00);
+            }
+        }
+        if let Some(p) = opts.mmu_prot {
+            mmu.write8(mmu.regs_base + 0x12, p);
+        }
+        for (pg, val) in &opts.mmu_attrs {
+            mmu.write8(mmu.regs_base + 0x18 + (*pg as u16), *val);
+        }
+        if opts.protect_vectors {
+            mmu.write8(mmu.regs_base + 0x12, 0x03);
+            mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01);
+        }
+        let need_iobus = opts.console_base.is_some()
+            || opts.block_base.is_some()
+            || opts.gpio_base.is_some()
+            || opts.timer_base.is_some();
+        if need_iobus {
+            let mut iobus = IoBus::new(mmu);
+            if let Some(base) = opts.console_base {
+                let mut con = ConsoleDev::new(base);
+                if let Some(wm) = opts.console_rx_wm {
+                    con.set_rx_watermark(wm);
+                }
+                if let Some(h) = opts.console_irq_hold {
+                    con.set_irq_hold_cycles(h);
+                }
+                if let Some(s) = &opts.console_in {
+                    let bytes = parse_escapes(s);
+                    con.feed_bytes(&bytes);
+                }
+                if let Some(p) = &opts.console_out_path {
+                    con.set_out_file(p);
+                }
+                if opts.console_tee_stderr {
+                    con.set_tee_stderr(true);
+                }
+                if let Some(n) = opts.console_flush_every {
+                    con.set_flush_every(n);
+                }
+                if opts.console_flush_newline {
+                    con.set_flush_on_newline(true);
+                }
+                if opts.console_local_echo {
+                    con.set_local_echo(true);
+                }
+                iobus.add_device(con);
+            }
+            if let Some(base) = opts.block_base {
+                let mut blk = BlockDev::new(base);
+                if let Some(p) = &opts.block_file_path {
+                    blk.set_backing_file(p);
+                }
+                if let Some(n) = opts.block_irq_hold {
+                    blk.set_irq_hold_cycles(n);
+                }
+                if opts.block_irq_enable {
+                    blk.set_irq_enable(true);
+                }
+                if opts.block_firq {
+                    blk.set_firq(true);
+                }
+                iobus.add_device(blk);
+            }
+            if let Some(base) = opts.gpio_base {
+                let gpio = GpioDev::new(base, opts.gpio_bits);
+                iobus.add_device(gpio);
+            }
+            if let Some(base) = opts.timer_base {
+                let mut t = TimerDev::new(base);
+                if let Some(r) = opts.timer_reload {
+                    t.set_reload(r);
+                } else if let Some(hz) = opts.timer_rate_hz {
+                    let ticks = (opts.timer_ips_est / (hz as u64).max(1)).max(1);
+                    let ticks16 = u16::try_from(ticks).unwrap_or(u16::MAX);
+                    t.set_reload(ticks16.max(1));
+                }
+                if opts.timer_irq {
+                    t.set_irq_enable(true);
+                }
+                if opts.timer_firq {
+                    t.set_firq(true);
+                }
+                if opts.timer_start {
+                    t.start();
+                }
+                iobus.add_device(t);
+            }
+            Box::new(iobus)
+        } else {
+            Box::new(mmu)
+        }
+    } else {
+        let mem = bus::Memory::new();
+        // For the no-MMU path, optionally wrap in IoBus if devices requested
+        let need_iobus = opts.console_base.is_some()
+            || opts.block_base.is_some()
+            || opts.gpio_base.is_some()
+            || opts.timer_base.is_some();
+        if need_iobus {
+            let mut iobus = IoBus::new(mem);
+            if let Some(base) = opts.console_base {
+                let mut con = ConsoleDev::new(base);
+                if let Some(wm) = opts.console_rx_wm {
+                    con.set_rx_watermark(wm);
+                }
+                if let Some(h) = opts.console_irq_hold {
+                    con.set_irq_hold_cycles(h);
+                }
+                if let Some(s) = &opts.console_in {
+                    let bytes = parse_escapes(s);
+                    con.feed_bytes(&bytes);
+                }
+                if let Some(p) = &opts.console_out_path {
+                    con.set_out_file(p);
+                }
+                if opts.console_tee_stderr {
+                    con.set_tee_stderr(true);
+                }
+                if let Some(n) = opts.console_flush_every {
+                    con.set_flush_every(n);
+                }
+                if opts.console_flush_newline {
+                    con.set_flush_on_newline(true);
+                }
+                if opts.console_local_echo {
+                    con.set_local_echo(true);
+                }
+                iobus.add_device(con);
+            }
+            if let Some(base) = opts.block_base {
+                let mut blk = BlockDev::new(base);
+                if let Some(p) = &opts.block_file_path {
+                    blk.set_backing_file(p);
+                }
+                if let Some(n) = opts.block_irq_hold {
+                    blk.set_irq_hold_cycles(n);
+                }
+                if opts.block_irq_enable {
+                    blk.set_irq_enable(true);
+                }
+                if opts.block_firq {
+                    blk.set_firq(true);
+                }
+                iobus.add_device(blk);
+            }
+            if let Some(base) = opts.gpio_base {
+                let gpio = GpioDev::new(base, opts.gpio_bits);
+                iobus.add_device(gpio);
+            }
+            if let Some(base) = opts.timer_base {
+                let mut t = TimerDev::new(base);
+                if let Some(r) = opts.timer_reload {
+                    t.set_reload(r);
+                } else if let Some(hz) = opts.timer_rate_hz {
+                    let ticks = (opts.timer_ips_est / (hz as u64).max(1)).max(1);
+                    let ticks16 = u16::try_from(ticks).unwrap_or(u16::MAX);
+                    t.set_reload(ticks16.max(1));
+                }
+                if opts.timer_irq {
+                    t.set_irq_enable(true);
+                }
+                if opts.timer_firq {
+                    t.set_firq(true);
+                }
+                if opts.timer_start {
+                    t.start();
+                }
+                iobus.add_device(t);
+            }
+            Box::new(iobus)
+        } else {
+            Box::new(mem)
+        }
+    };
+
+    Some((bus, opts.console_base))
+}
