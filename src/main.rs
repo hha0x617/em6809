@@ -20,57 +20,8 @@ mod settings_worker;
 
 // GUI register viewer (no-op unless built with `--features gui`)
 mod i18n;
+mod loader_util;
 mod regview;
-
-fn coalesce_ranges(mut ranges: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
-    ranges.sort_by_key(|(s, _)| *s);
-    let mut out: Vec<(u16, u16)> = Vec::new();
-    for (s, e) in ranges.into_iter() {
-        if out.is_empty() {
-            out.push((s, e));
-        } else {
-            let (_last_s, last_e) = out.last_mut().unwrap();
-            if s <= *last_e {
-                // overlap or touch
-                if e > *last_e {
-                    *last_e = e;
-                }
-            } else {
-                out.push((s, e));
-            }
-        }
-    }
-    out
-}
-
-fn log_program_info(loaded: &LoadedImage, pc: u16) {
-    if loaded.loaded_ranges.is_empty() {
-        println!("Program: no image loaded (PC ${:04X})", pc);
-        return;
-    }
-    let mut loaded_bytes_sum: usize = 0;
-    for (s, e) in &loaded.loaded_ranges {
-        loaded_bytes_sum = loaded_bytes_sum.saturating_add(e.wrapping_sub(*s) as usize);
-    }
-    let spans = coalesce_ranges(loaded.loaded_ranges.clone());
-    let mut span = spans.iter().find(|(s, e)| *s <= pc && pc < *e).copied();
-    if span.is_none() && !spans.is_empty() {
-        let min_start = spans.iter().map(|(s, _)| *s).min().unwrap();
-        let max_end = spans.iter().map(|(_, e)| *e).max().unwrap();
-        span = Some((min_start, max_end));
-    }
-    if let Some((s, e)) = span {
-        let span_bytes: usize = e.wrapping_sub(s) as usize;
-        println!(
-            "Program: start ${:04X}, loaded {} bytes, span ${:04X}..${:04X} ({} bytes)",
-            pc,
-            loaded_bytes_sum,
-            s,
-            e.wrapping_sub(1),
-            span_bytes
-        );
-    }
-}
 
 fn parse_escapes(s: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(s.len());
@@ -854,7 +805,7 @@ fn main() {
         for (s, e) in &loaded.loaded_ranges {
             loaded_bytes_sum = loaded_bytes_sum.saturating_add(e.wrapping_sub(*s) as usize);
         }
-        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+        let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
         let mut pc_span: Option<(u16, u16)> = None;
         for (s, e) in &spans {
             if *s <= cpu.r.pc && cpu.r.pc < *e {
@@ -909,7 +860,7 @@ fn main() {
             }
         });
         // Always generate a hex-style disassembly of the span for GUI toggle and fallback
-        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+        let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
         let span_for_pc = spans
             .iter()
             .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -1589,7 +1540,9 @@ fn main() {
                                         viewer_cpu.push(snap2);
                                     }
                                     regview::Command::RefreshHexListing => {
-                                        let spans = coalesce_ranges(loaded_ranges_worker.clone());
+                                        let spans = loader_util::coalesce_ranges(
+                                            loaded_ranges_worker.clone(),
+                                        );
                                         let (policy, _win_len) = viewer_cpu.get_span_policy();
                                         let span_for_pc = spans
                                             .iter()
@@ -1720,7 +1673,10 @@ fn main() {
                                                         Some(true),
                                                     );
                                                 }
-                                                log_program_info(&new_loaded, cpu_worker.r.pc);
+                                                loader_util::log_program_info(
+                                                    &new_loaded,
+                                                    cpu_worker.r.pc,
+                                                );
                                                 let snap = regview::RegSnapshot {
                                                     a: cpu_worker.r.a,
                                                     b: cpu_worker.r.b,
@@ -1769,8 +1725,9 @@ fn main() {
                                                 viewer_cpu
                                                     .set_memory_highlight(cpu_worker.r.pc, clen);
                                                 // Update Hex view: always rebuild from current memory so Hex shows disassembly
-                                                let spans =
-                                                    coalesce_ranges(loaded.loaded_ranges.clone());
+                                                let spans = loader_util::coalesce_ranges(
+                                                    loaded.loaded_ranges.clone(),
+                                                );
                                                 if let Some((start, end)) = spans
                                                     .iter()
                                                     .find(|(s, e)| {
@@ -1906,7 +1863,9 @@ fn main() {
                                         }
                                         viewer_cpu.update_memory_window(eff_start_w, nbuf);
                                         // Also refresh listing pane (full span) immediately
-                                        let spans = coalesce_ranges(loaded_ranges_worker.clone());
+                                        let spans = loader_util::coalesce_ranges(
+                                            loaded_ranges_worker.clone(),
+                                        );
                                         if let Some((start, end)) = spans
                                             .iter()
                                             .find(|(s, e)| {
@@ -2973,7 +2932,7 @@ fn main() {
                                 a2 = a2.wrapping_add(1);
                             }
                             viewer.update_memory_window(eff_start2, buf2);
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let span_for_pc = spans
                                 .iter()
                                 .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -3033,7 +2992,7 @@ fn main() {
                             viewer.set_memory_highlight(cpu.r.pc, clen2);
                         }
                         regview::Command::RefreshHexListing => {
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let (policy, _win_len) = viewer.get_span_policy();
                             let span_for_pc = spans
                                 .iter()
@@ -3197,7 +3156,8 @@ fn main() {
                                 }
                                 viewer.update_memory_window(eff_start2, buf2);
                                 // Refresh listing for current PC span
-                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                let spans =
+                                    loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                                 let span_for_pc = spans
                                     .iter()
                                     .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -3254,7 +3214,8 @@ fn main() {
                                 let clen2 = core::cmp::max(consumed as usize, 1);
                                 viewer.set_memory_highlight(cpu.r.pc, clen2);
                                 // refresh listing for current PC span
-                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                let spans =
+                                    loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                                 if let Some((start, end)) = spans
                                     .iter()
                                     .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -3278,7 +3239,8 @@ fn main() {
                             }
                             regview::Command::RefreshHexListing => {
                                 // Rebuild hex listing for current PC's loaded span
-                                let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                let spans =
+                                    loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                                 let (policy, _win_len) = viewer.get_span_policy();
                                 let span_for_pc = spans
                                     .iter()
@@ -3459,7 +3421,7 @@ fn main() {
                                         if let Some(pc) = new_pc {
                                             cpu.r.pc = pc;
                                         }
-                                        log_program_info(&new_loaded, cpu.r.pc);
+                                        loader_util::log_program_info(&new_loaded, cpu.r.pc);
                                         let snap = regview::RegSnapshot {
                                             a: cpu.r.a,
                                             b: cpu.r.b,
@@ -3499,7 +3461,9 @@ fn main() {
                                         let clen = core::cmp::max(consumed as usize, 1);
                                         viewer.set_memory_highlight(cpu.r.pc, clen);
                                         // Update Hex view: always rebuild from current memory so Hex shows disassembly
-                                        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                                        let spans = loader_util::coalesce_ranges(
+                                            loaded.loaded_ranges.clone(),
+                                        );
                                         if let Some((start, end)) = spans
                                             .iter()
                                             .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -3969,7 +3933,7 @@ fn main() {
                             };
                             viewer.push(snap2);
                             // Also refresh listing pane to reflect current PC span and highlight
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let span_for_pc = spans
                                 .iter()
                                 .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -3999,7 +3963,7 @@ fn main() {
                         }
                         regview::Command::RefreshHexListing => {
                             // Rebuild hex listing for current PC's loaded span
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let (policy, _win_len) = viewer.get_span_policy();
                             let span_for_pc = spans
                                 .iter()
@@ -4032,7 +3996,7 @@ fn main() {
                             run_until_target = Some(a);
                             viewer.set_paused(false);
                             // Proactively refresh listing so panes reflect latest selection
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let span_for_pc = spans
                                 .iter()
                                 .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -4388,7 +4352,7 @@ fn main() {
                             let clen = core::cmp::max(consumed as usize, 1);
                             viewer.set_memory_highlight(cpu.r.pc, clen);
                             // Also refresh listing pane to reflect current PC span and highlight
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let span_for_pc = spans
                                 .iter()
                                 .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -4475,7 +4439,7 @@ fn main() {
                             }
                             viewer.update_memory_window(eff_start, buf);
                             // Also refresh listing pane (full span) immediately
-                            let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                            let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let span_for_pc = spans
                                 .iter()
                                 .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
@@ -4608,7 +4572,7 @@ fn main() {
                     let (policy, win_len) = viewer.get_span_policy();
                     if policy == 0 {
                         // Full span tracking
-                        let spans = coalesce_ranges(loaded.loaded_ranges.clone());
+                        let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                         let span_for_pc = spans
                             .iter()
                             .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
