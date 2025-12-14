@@ -13,10 +13,10 @@ E00A 3B               (   timer_loop.asm):00012                         RTI
                       (   timer_loop.asm):00013         
                       (   timer_loop.asm):00014                         ORG     $FFFE
 FFFE E000             (   timer_loop.asm):00015                         FDB     start       ; RESET vector -> start
-                      (   timer_loop.asm):00016                         ORG     $FFF6
-FFF6 E007             (   timer_loop.asm):00017                         FDB     irq_handler ; FIRQ vector
-                      (   timer_loop.asm):00018                         ORG     $FFF8
-FFF8 E007             (   timer_loop.asm):00019                         FDB     irq_handler ; IRQ vector
+                      (   timer_loop.asm):00016                         ORG     $FFF4
+FFF4 E007             (   timer_loop.asm):00017                         FDB     irq_handler ; FIRQ vector
+                      (   timer_loop.asm):00018                         ORG     $FFF6
+FFF6 E007             (   timer_loop.asm):00019                         FDB     irq_handler ; IRQ vector
                       (   timer_loop.asm):00020         
                       (   timer_loop.asm):00021         ; Run with:
                       (   timer_loop.asm):00022         ;   cargo run -- --base 0xE000 --pc 0xE000 --timer 0xFF10 --timer-reload 0x0010 --timer-irq --timer-start -- samples/traces/timer_loop.bin

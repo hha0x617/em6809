@@ -5,387 +5,414 @@
                       (    trace_all.asm):00005                 ORG   $E000
                       (    trace_all.asm):00006         
                       (    trace_all.asm):00007         ; CC bits: E(80) F(40) H(20) I(10) N(08) Z(04) V(02) C(01)
-     0004             (    trace_all.asm):00008         EQU_Z   EQU   $04
-     0008             (    trace_all.asm):00009         EQU_N   EQU   $08
-     0002             (    trace_all.asm):00010         EQU_V   EQU   $02
-     0001             (    trace_all.asm):00011         EQU_C   EQU   $01
-                      (    trace_all.asm):00012         
-                      (    trace_all.asm):00013         ; Macro: CC := A via stack
-E000                  (    trace_all.asm):00014         SETCC   MACRO
-                      (    trace_all.asm):00015                 PSHS  A
-                      (    trace_all.asm):00016                 PULS  CC
-                      (    trace_all.asm):00017                 ENDM
-                      (    trace_all.asm):00018         
-                      (    trace_all.asm):00019         ; Console (optional)
-     FF00             (    trace_all.asm):00020         CONBASE EQU   $FF00
-     FF00             (    trace_all.asm):00021         CONDATA EQU   CONBASE
-     FF01             (    trace_all.asm):00022         CONSTAT EQU   CONBASE+1
-     0001             (    trace_all.asm):00023         TXRDY   EQU   $01         ; status bit0
-     00FF             (    trace_all.asm):00024         CONON   EQU   $00FF       ; scratch flag in zero page (unused here)
-                      (    trace_all.asm):00025         
-                      (    trace_all.asm):00026         ; Simple TX subroutine: waits for TX ready then sends B
-E000 3412             (    trace_all.asm):00027         TXB     PSHS  A,X
-E002 96FF             (    trace_all.asm):00028                 LDA   CONON       ; console present?
-E004 2711             (    trace_all.asm):00029                 BEQ   TXRET       ; skip if not
-E006 8E00FF           (    trace_all.asm):00030                 LDX   #$00FF      ; timeout to avoid hang
-E009 B6FF01           (    trace_all.asm):00031         TWAIT   LDA   CONSTAT
-E00C 8501             (    trace_all.asm):00032                 BITA  #TXRDY
-E00E 2604             (    trace_all.asm):00033                 BNE   TXGO
-E010 301F             (    trace_all.asm):00034                 LEAX  -1,X
-E012 26F5             (    trace_all.asm):00035                 BNE   TWAIT
-E014 F7FF00           (    trace_all.asm):00036         TXGO    STB   CONDATA
-E017 3592             (    trace_all.asm):00037         TXRET   PULS  A,X,PC
-                      (    trace_all.asm):00038         
-                      (    trace_all.asm):00039         ; Print zero-terminated string at X
-E019 3416             (    trace_all.asm):00040         PRNT    PSHS  A,B,X
-E01B 96FF             (    trace_all.asm):00041                 LDA   CONON       ; if no console, skip printing to keep behavior consistent
-E01D 2709             (    trace_all.asm):00042                 BEQ   PDONE
-E01F E680             (    trace_all.asm):00043         PLOOP   LDB   ,X+
-E021 2705             (    trace_all.asm):00044                 BEQ   PDONE
-E023 17FFDA           (    trace_all.asm):00045                 LBSR  TXB
-E026 20F7             (    trace_all.asm):00046                 BRA   PLOOP
-E028 3596             (    trace_all.asm):00047         PDONE   PULS  A,B,X,PC
-                      (    trace_all.asm):00048         
-E02A 10CEE800         (    trace_all.asm):00049         START   LDS   #$E800      ; init S
-E02E CEE900           (    trace_all.asm):00050                 LDU   #$E900      ; init U
-E031 8E0100           (    trace_all.asm):00051                 LDX   #$0100      ; scratch
-E034 108E0200         (    trace_all.asm):00052                 LDY   #$0200
-                      (    trace_all.asm):00053                 ; Probe console presence: if CONSTAT ever shows TXRDY, mark CONON=1
-E038 8E0010           (    trace_all.asm):00054                 LDX   #$0010
-E03B B6FF01           (    trace_all.asm):00055         PLOOP2  LDA   CONSTAT
-E03E 8501             (    trace_all.asm):00056                 BITA  #TXRDY
-E040 2706             (    trace_all.asm):00057                 BEQ   PSKIP
-E042 8601             (    trace_all.asm):00058                 LDA   #$01
-E044 97FF             (    trace_all.asm):00059                 STA   CONON
-E046 2004             (    trace_all.asm):00060                 BRA   PEND
-E048 301F             (    trace_all.asm):00061         PSKIP   LEAX  -1,X
-E04A 26EF             (    trace_all.asm):00062                 BNE   PLOOP2
-E04C 12               (    trace_all.asm):00063         PEND    NOP
-                      (    trace_all.asm):00064         
-                      (    trace_all.asm):00065         ; --- Short branches (Bcc) ---
-                      (    trace_all.asm):00066         ; BEQ taken: expect Z=1 -> taken
-E04D 8E000E           (    trace_all.asm):00067                 LDX   #S_BEQ
-E050 17FFC6           (    trace_all.asm):00068                 LBSR  PRNT
-E053 8604             (    trace_all.asm):00069                 LDA   #EQU_Z      ; set Z
-                      (    trace_all.asm):00070                 SETCC              ; CC := Z
-E055 3402             (            SETCC):00001                 PSHS  A
-E057 3501             (            SETCC):00002                 PULS  CC
-E059 2708             (    trace_all.asm):00071                 BEQ   BEQ_T        ; taken
-E05B 8E0007           (    trace_all.asm):00072                 LDX   #S_N
-E05E 17FFB8           (    trace_all.asm):00073                 LBSR  PRNT
-E061 2006             (    trace_all.asm):00074                 BRA   BEQ_NEXT
-E063 8E0000           (    trace_all.asm):00075         BEQ_T   LDX   #S_T
-E066 17FFB0           (    trace_all.asm):00076                 LBSR  PRNT
-E069 12               (    trace_all.asm):00077         BEQ_NEXT NOP
-                      (    trace_all.asm):00078         ; BEQ not taken: expect Z=0 -> not taken
-E06A 8E000E           (    trace_all.asm):00079                 LDX   #S_BEQ
-E06D 17FFA9           (    trace_all.asm):00080                 LBSR  PRNT
-E070 8600             (    trace_all.asm):00081                 LDA   #$00        ; clear Z
-                      (    trace_all.asm):00082                 SETCC
-E072 3402             (            SETCC):00001                 PSHS  A
-E074 3501             (            SETCC):00002                 PULS  CC
-E076 2708             (    trace_all.asm):00083                 BEQ   BEQ_N       ; not taken
-E078 8E0007           (    trace_all.asm):00084                 LDX   #S_N
-E07B 17FF9B           (    trace_all.asm):00085                 LBSR  PRNT
-E07E 2006             (    trace_all.asm):00086                 BRA   BEQ_NEND
-E080 8E0000           (    trace_all.asm):00087         BEQ_N   LDX   #S_T
-E083 17FF93           (    trace_all.asm):00088                 LBSR  PRNT
-E086 12               (    trace_all.asm):00089         BEQ_NEND NOP
-                      (    trace_all.asm):00090         
-                      (    trace_all.asm):00091         ; BNE tests
-                      (    trace_all.asm):00092         ; BNE with Z=0 -> taken
-E087 8E0013           (    trace_all.asm):00093                 LDX   #S_BNE
-E08A 17FF8C           (    trace_all.asm):00094                 LBSR  PRNT
-E08D 8600             (    trace_all.asm):00095                 LDA   #$00        ; Z=0
-                      (    trace_all.asm):00096                 SETCC
-E08F 3402             (            SETCC):00001                 PSHS  A
-E091 3501             (            SETCC):00002                 PULS  CC
-E093 2608             (    trace_all.asm):00097                 BNE   BNE_T
-E095 8E0007           (    trace_all.asm):00098                 LDX   #S_N
-E098 17FF7E           (    trace_all.asm):00099                 LBSR  PRNT
-E09B 2006             (    trace_all.asm):00100                 BRA   BNE_NEXT
-E09D 8E0000           (    trace_all.asm):00101         BNE_T   LDX   #S_T
-E0A0 17FF76           (    trace_all.asm):00102                 LBSR  PRNT
-E0A3 12               (    trace_all.asm):00103         BNE_NEXT NOP
-                      (    trace_all.asm):00104         ; BNE with Z=1 -> not taken
-E0A4 8E0013           (    trace_all.asm):00105                 LDX   #S_BNE
-E0A7 17FF6F           (    trace_all.asm):00106                 LBSR  PRNT
-E0AA 8604             (    trace_all.asm):00107                 LDA   #EQU_Z
-                      (    trace_all.asm):00108                 SETCC
-E0AC 3402             (            SETCC):00001                 PSHS  A
-E0AE 3501             (            SETCC):00002                 PULS  CC
-E0B0 2608             (    trace_all.asm):00109                 BNE   BNE_N
-E0B2 8E0007           (    trace_all.asm):00110                 LDX   #S_N
-E0B5 17FF61           (    trace_all.asm):00111                 LBSR  PRNT
-E0B8 2006             (    trace_all.asm):00112                 BRA   BNE_NEND
-E0BA 8E0000           (    trace_all.asm):00113         BNE_N   LDX   #S_T
-E0BD 17FF59           (    trace_all.asm):00114                 LBSR  PRNT
-E0C0 12               (    trace_all.asm):00115         BNE_NEND NOP
-                      (    trace_all.asm):00116         
-                      (    trace_all.asm):00117         ; BCC (C=0 -> taken) / BCS (C=1 -> taken)
-E0C1 8E0018           (    trace_all.asm):00118                 LDX   #S_BCC
-E0C4 17FF52           (    trace_all.asm):00119                 LBSR  PRNT
-E0C7 8600             (    trace_all.asm):00120                 LDA   #$00        ; C=0
-                      (    trace_all.asm):00121                 SETCC
-E0C9 3402             (            SETCC):00001                 PSHS  A
-E0CB 3501             (            SETCC):00002                 PULS  CC
-E0CD 2408             (    trace_all.asm):00122                 BCC   BCC_T
-E0CF 8E0007           (    trace_all.asm):00123                 LDX   #S_N
-E0D2 17FF44           (    trace_all.asm):00124                 LBSR  PRNT
-E0D5 2006             (    trace_all.asm):00125                 BRA   BCC_NEXT
-E0D7 8E0000           (    trace_all.asm):00126         BCC_T   LDX   #S_T
-E0DA 17FF3C           (    trace_all.asm):00127                 LBSR  PRNT
-E0DD 12               (    trace_all.asm):00128         BCC_NEXT NOP
-E0DE 8E001D           (    trace_all.asm):00129                 LDX   #S_BCS
-E0E1 17FF35           (    trace_all.asm):00130                 LBSR  PRNT
-E0E4 8601             (    trace_all.asm):00131                 LDA   #EQU_C      ; C=1
-                      (    trace_all.asm):00132                 SETCC
-E0E6 3402             (            SETCC):00001                 PSHS  A
-E0E8 3501             (            SETCC):00002                 PULS  CC
-E0EA 2508             (    trace_all.asm):00133                 BCS   BCS_T
-E0EC 8E0007           (    trace_all.asm):00134                 LDX   #S_N
-E0EF 17FF27           (    trace_all.asm):00135                 LBSR  PRNT
-E0F2 2006             (    trace_all.asm):00136                 BRA   BCS_NEXT
-E0F4 8E0000           (    trace_all.asm):00137         BCS_T   LDX   #S_T
-E0F7 17FF1F           (    trace_all.asm):00138                 LBSR  PRNT
-E0FA 12               (    trace_all.asm):00139         BCS_NEXT NOP
-                      (    trace_all.asm):00140         
-                      (    trace_all.asm):00141         ; BHI ( !(C||Z) ) and BLS (C||Z)
-E0FB 8E0022           (    trace_all.asm):00142                 LDX   #S_BHI
-E0FE 17FF18           (    trace_all.asm):00143                 LBSR  PRNT
-E101 8600             (    trace_all.asm):00144                 LDA   #$00        ; C=0,Z=0 -> taken
-                      (    trace_all.asm):00145                 SETCC
-E103 3402             (            SETCC):00001                 PSHS  A
-E105 3501             (            SETCC):00002                 PULS  CC
-E107 2208             (    trace_all.asm):00146                 BHI   BHI_T
-E109 8E0007           (    trace_all.asm):00147                 LDX   #S_N
-E10C 17FF0A           (    trace_all.asm):00148                 LBSR  PRNT
-E10F 2006             (    trace_all.asm):00149                 BRA   BHI_NEXT
-E111 8E0000           (    trace_all.asm):00150         BHI_T   LDX   #S_T
-E114 17FF02           (    trace_all.asm):00151                 LBSR  PRNT
-E117 12               (    trace_all.asm):00152         BHI_NEXT NOP
-E118 8E0027           (    trace_all.asm):00153                 LDX   #S_BLS
-E11B 17FEFB           (    trace_all.asm):00154                 LBSR  PRNT
-E11E 8601             (    trace_all.asm):00155                 LDA   #EQU_C      ; C=1 -> taken
-                      (    trace_all.asm):00156                 SETCC
-E120 3402             (            SETCC):00001                 PSHS  A
-E122 3501             (            SETCC):00002                 PULS  CC
-E124 2308             (    trace_all.asm):00157                 BLS   BLS_T
-E126 8E0007           (    trace_all.asm):00158                 LDX   #S_N
-E129 17FEED           (    trace_all.asm):00159                 LBSR  PRNT
-E12C 2006             (    trace_all.asm):00160                 BRA   BLS_NEXT
-E12E 8E0000           (    trace_all.asm):00161         BLS_T   LDX   #S_T
-E131 17FEE5           (    trace_all.asm):00162                 LBSR  PRNT
-E134 12               (    trace_all.asm):00163         BLS_NEXT NOP
-                      (    trace_all.asm):00164         
-                      (    trace_all.asm):00165         ; BVC/BVS
-E135 8E002C           (    trace_all.asm):00166                 LDX   #S_BVC
-E138 17FEDE           (    trace_all.asm):00167                 LBSR  PRNT
-E13B 8600             (    trace_all.asm):00168                 LDA   #$00        ; V=0 -> BVC taken
-                      (    trace_all.asm):00169                 SETCC
-E13D 3402             (            SETCC):00001                 PSHS  A
-E13F 3501             (            SETCC):00002                 PULS  CC
-E141 2808             (    trace_all.asm):00170                 BVC   BVC_T
-E143 8E0007           (    trace_all.asm):00171                 LDX   #S_N
-E146 17FED0           (    trace_all.asm):00172                 LBSR  PRNT
-E149 2006             (    trace_all.asm):00173                 BRA   BVC_NEXT
-E14B 8E0000           (    trace_all.asm):00174         BVC_T   LDX   #S_T
-E14E 17FEC8           (    trace_all.asm):00175                 LBSR  PRNT
-E151 12               (    trace_all.asm):00176         BVC_NEXT NOP
-E152 8E0031           (    trace_all.asm):00177                 LDX   #S_BVS
-E155 17FEC1           (    trace_all.asm):00178                 LBSR  PRNT
-E158 8602             (    trace_all.asm):00179                 LDA   #EQU_V      ; V=1 -> BVS taken
-                      (    trace_all.asm):00180                 SETCC
-E15A 3402             (            SETCC):00001                 PSHS  A
-E15C 3501             (            SETCC):00002                 PULS  CC
-E15E 2908             (    trace_all.asm):00181                 BVS   BVS_T
-E160 8E0007           (    trace_all.asm):00182                 LDX   #S_N
-E163 17FEB3           (    trace_all.asm):00183                 LBSR  PRNT
-E166 2006             (    trace_all.asm):00184                 BRA   BVS_NEXT
-E168 8E0000           (    trace_all.asm):00185         BVS_T   LDX   #S_T
-E16B 17FEAB           (    trace_all.asm):00186                 LBSR  PRNT
-E16E 12               (    trace_all.asm):00187         BVS_NEXT NOP
-                      (    trace_all.asm):00188         
-                      (    trace_all.asm):00189         ; BPL/BMI
-E16F 8E0036           (    trace_all.asm):00190                 LDX   #S_BPL
-E172 17FEA4           (    trace_all.asm):00191                 LBSR  PRNT
-E175 8600             (    trace_all.asm):00192                 LDA   #$00        ; N=0 -> BPL taken
-                      (    trace_all.asm):00193                 SETCC
-E177 3402             (            SETCC):00001                 PSHS  A
-E179 3501             (            SETCC):00002                 PULS  CC
-E17B 2A08             (    trace_all.asm):00194                 BPL   BPL_T
-E17D 8E0007           (    trace_all.asm):00195                 LDX   #S_N
-E180 17FE96           (    trace_all.asm):00196                 LBSR  PRNT
-E183 2006             (    trace_all.asm):00197                 BRA   BPL_NEXT
-E185 8E0000           (    trace_all.asm):00198         BPL_T   LDX   #S_T
-E188 17FE8E           (    trace_all.asm):00199                 LBSR  PRNT
-E18B 12               (    trace_all.asm):00200         BPL_NEXT NOP
-E18C 8E003B           (    trace_all.asm):00201                 LDX   #S_BMI
-E18F 17FE87           (    trace_all.asm):00202                 LBSR  PRNT
-E192 8608             (    trace_all.asm):00203                 LDA   #EQU_N      ; N=1 -> BMI taken
-                      (    trace_all.asm):00204                 SETCC
-E194 3402             (            SETCC):00001                 PSHS  A
-E196 3501             (            SETCC):00002                 PULS  CC
-E198 2B08             (    trace_all.asm):00205                 BMI   BMI_T
-E19A 8E0007           (    trace_all.asm):00206                 LDX   #S_N
-E19D 17FE79           (    trace_all.asm):00207                 LBSR  PRNT
-E1A0 2006             (    trace_all.asm):00208                 BRA   BMI_NEXT
-E1A2 8E0000           (    trace_all.asm):00209         BMI_T   LDX   #S_T
-E1A5 17FE71           (    trace_all.asm):00210                 LBSR  PRNT
-E1A8 12               (    trace_all.asm):00211         BMI_NEXT NOP
-                      (    trace_all.asm):00212         
-                      (    trace_all.asm):00213         ; BGE/BLT uses N^V
-E1A9 8E0040           (    trace_all.asm):00214                 LDX   #S_BGE
-E1AC 17FE6A           (    trace_all.asm):00215                 LBSR  PRNT
-E1AF 8600             (    trace_all.asm):00216                 LDA   #$00        ; N=0,V=0 => N^V=0 => BGE taken
+     0050             (    trace_all.asm):00008         EQU_DI  EQU   $50         ; disable FIRQ($40) and IRQ($10) masks
+     0004             (    trace_all.asm):00009         EQU_Z   EQU   $04
+     0008             (    trace_all.asm):00010         EQU_N   EQU   $08
+     0002             (    trace_all.asm):00011         EQU_V   EQU   $02
+     0001             (    trace_all.asm):00012         EQU_C   EQU   $01
+                      (    trace_all.asm):00013         
+                      (    trace_all.asm):00014         ; Macro: CC := A via stack
+E000                  (    trace_all.asm):00015         SETCC   MACRO
+                      (    trace_all.asm):00016                 PSHS  A
+                      (    trace_all.asm):00017                 PULS  CC
+                      (    trace_all.asm):00018                 ENDM
+                      (    trace_all.asm):00019         
+                      (    trace_all.asm):00020         ; Console (optional)
+     FF00             (    trace_all.asm):00021         CONBASE EQU   $FF00
+     FF00             (    trace_all.asm):00022         CONDATA EQU   CONBASE
+     FF01             (    trace_all.asm):00023         CONSTAT EQU   CONBASE+1
+     0001             (    trace_all.asm):00024         TXRDY   EQU   $01         ; status bit0
+     00FF             (    trace_all.asm):00025         CONON   EQU   $00FF       ; scratch flag in zero page (unused here)
+                      (    trace_all.asm):00026         
+                      (    trace_all.asm):00027         ; Simple TX subroutine: waits for TX ready then sends B
+E000 3412             (    trace_all.asm):00028         TXB     PSHS  A,X
+E002 96FF             (    trace_all.asm):00029                 LDA   CONON       ; console present?
+E004 2711             (    trace_all.asm):00030                 BEQ   TXRET       ; skip if not
+E006 8E00FF           (    trace_all.asm):00031                 LDX   #$00FF      ; timeout to avoid hang
+E009 B6FF01           (    trace_all.asm):00032         TWAIT   LDA   CONSTAT
+E00C 8501             (    trace_all.asm):00033                 BITA  #TXRDY
+E00E 2604             (    trace_all.asm):00034                 BNE   TXGO
+E010 301F             (    trace_all.asm):00035                 LEAX  -1,X
+E012 26F5             (    trace_all.asm):00036                 BNE   TWAIT
+E014 F7FF00           (    trace_all.asm):00037         TXGO    STB   CONDATA
+E017 3592             (    trace_all.asm):00038         TXRET   PULS  A,X,PC
+                      (    trace_all.asm):00039         
+                      (    trace_all.asm):00040         ; Print zero-terminated string at X
+E019 3416             (    trace_all.asm):00041         PRNT    PSHS  A,B,X
+E01B 96FF             (    trace_all.asm):00042                 LDA   CONON       ; if no console, skip printing to keep behavior consistent
+E01D 2709             (    trace_all.asm):00043                 BEQ   PDONE
+E01F E680             (    trace_all.asm):00044         PLOOP   LDB   ,X+
+E021 2705             (    trace_all.asm):00045                 BEQ   PDONE
+E023 17FFDA           (    trace_all.asm):00046                 LBSR  TXB
+E026 20F7             (    trace_all.asm):00047                 BRA   PLOOP
+E028 3596             (    trace_all.asm):00048         PDONE   PULS  A,B,X,PC
+                      (    trace_all.asm):00049         
+E02A 10CEE800         (    trace_all.asm):00050         START   LDS   #$E800      ; init S
+E02E CEE900           (    trace_all.asm):00051                 LDU   #$E900      ; init U
+E031 8E0100           (    trace_all.asm):00052                 LDX   #$0100      ; scratch
+E034 108E0200         (    trace_all.asm):00053                 LDY   #$0200
+                      (    trace_all.asm):00054                 ; Probe console presence: if CONSTAT ever shows TXRDY, mark CONON=1
+E038 8E0010           (    trace_all.asm):00055                 LDX   #$0010
+E03B B6FF01           (    trace_all.asm):00056         PLOOP2  LDA   CONSTAT
+E03E 8501             (    trace_all.asm):00057                 BITA  #TXRDY
+E040 2706             (    trace_all.asm):00058                 BEQ   PSKIP
+E042 8601             (    trace_all.asm):00059                 LDA   #$01
+E044 97FF             (    trace_all.asm):00060                 STA   CONON
+E046 2004             (    trace_all.asm):00061                 BRA   PEND
+E048 301F             (    trace_all.asm):00062         PSKIP   LEAX  -1,X
+E04A 26EF             (    trace_all.asm):00063                 BNE   PLOOP2
+E04C 12               (    trace_all.asm):00064         PEND    NOP
+                      (    trace_all.asm):00065         
+                      (    trace_all.asm):00066         ; --- Short branches (Bcc) ---
+                      (    trace_all.asm):00067         ; BEQ taken: expect Z=1 -> taken
+E04D 8EE2D5           (    trace_all.asm):00068                 LDX   #S_BEQ
+E050 17FFC6           (    trace_all.asm):00069                 LBSR  PRNT
+E053 8604             (    trace_all.asm):00070                 LDA   #EQU_Z      ; set Z
+E055 8A50             (    trace_all.asm):00071                 ORA   #EQU_DI
+                      (    trace_all.asm):00072                 SETCC              ; CC := Z
+E057 3402             (            SETCC):00001                 PSHS  A
+E059 3501             (            SETCC):00002                 PULS  CC
+E05B 2708             (    trace_all.asm):00073                 BEQ   BEQ_T        ; taken
+E05D 8EE2CE           (    trace_all.asm):00074                 LDX   #S_N
+E060 17FFB6           (    trace_all.asm):00075                 LBSR  PRNT
+E063 2006             (    trace_all.asm):00076                 BRA   BEQ_NEXT
+E065 8EE2C7           (    trace_all.asm):00077         BEQ_T   LDX   #S_T
+E068 17FFAE           (    trace_all.asm):00078                 LBSR  PRNT
+E06B 12               (    trace_all.asm):00079         BEQ_NEXT NOP
+                      (    trace_all.asm):00080         ; BEQ not taken: expect Z=0 -> not taken
+E06C 8EE2D5           (    trace_all.asm):00081                 LDX   #S_BEQ
+E06F 17FFA7           (    trace_all.asm):00082                 LBSR  PRNT
+E072 8600             (    trace_all.asm):00083                 LDA   #$00        ; clear Z
+E074 8A50             (    trace_all.asm):00084                 ORA   #EQU_DI
+                      (    trace_all.asm):00085                 SETCC
+E076 3402             (            SETCC):00001                 PSHS  A
+E078 3501             (            SETCC):00002                 PULS  CC
+E07A 2708             (    trace_all.asm):00086                 BEQ   BEQ_N       ; not taken
+E07C 8EE2CE           (    trace_all.asm):00087                 LDX   #S_N
+E07F 17FF97           (    trace_all.asm):00088                 LBSR  PRNT
+E082 2006             (    trace_all.asm):00089                 BRA   BEQ_NEND
+E084 8EE2C7           (    trace_all.asm):00090         BEQ_N   LDX   #S_T
+E087 17FF8F           (    trace_all.asm):00091                 LBSR  PRNT
+E08A 12               (    trace_all.asm):00092         BEQ_NEND NOP
+                      (    trace_all.asm):00093         
+                      (    trace_all.asm):00094         ; BNE tests
+                      (    trace_all.asm):00095         ; BNE with Z=0 -> taken
+E08B 8EE2DA           (    trace_all.asm):00096                 LDX   #S_BNE
+E08E 17FF88           (    trace_all.asm):00097                 LBSR  PRNT
+E091 8600             (    trace_all.asm):00098                 LDA   #$00        ; Z=0
+E093 8A50             (    trace_all.asm):00099                 ORA   #EQU_DI
+                      (    trace_all.asm):00100                 SETCC
+E095 3402             (            SETCC):00001                 PSHS  A
+E097 3501             (            SETCC):00002                 PULS  CC
+E099 2608             (    trace_all.asm):00101                 BNE   BNE_T
+E09B 8EE2CE           (    trace_all.asm):00102                 LDX   #S_N
+E09E 17FF78           (    trace_all.asm):00103                 LBSR  PRNT
+E0A1 2006             (    trace_all.asm):00104                 BRA   BNE_NEXT
+E0A3 8EE2C7           (    trace_all.asm):00105         BNE_T   LDX   #S_T
+E0A6 17FF70           (    trace_all.asm):00106                 LBSR  PRNT
+E0A9 12               (    trace_all.asm):00107         BNE_NEXT NOP
+                      (    trace_all.asm):00108         ; BNE with Z=1 -> not taken
+E0AA 8EE2DA           (    trace_all.asm):00109                 LDX   #S_BNE
+E0AD 17FF69           (    trace_all.asm):00110                 LBSR  PRNT
+E0B0 8604             (    trace_all.asm):00111                 LDA   #EQU_Z
+E0B2 8A50             (    trace_all.asm):00112                 ORA   #EQU_DI
+                      (    trace_all.asm):00113                 SETCC
+E0B4 3402             (            SETCC):00001                 PSHS  A
+E0B6 3501             (            SETCC):00002                 PULS  CC
+E0B8 2608             (    trace_all.asm):00114                 BNE   BNE_N
+E0BA 8EE2CE           (    trace_all.asm):00115                 LDX   #S_N
+E0BD 17FF59           (    trace_all.asm):00116                 LBSR  PRNT
+E0C0 2006             (    trace_all.asm):00117                 BRA   BNE_NEND
+E0C2 8EE2C7           (    trace_all.asm):00118         BNE_N   LDX   #S_T
+E0C5 17FF51           (    trace_all.asm):00119                 LBSR  PRNT
+E0C8 12               (    trace_all.asm):00120         BNE_NEND NOP
+                      (    trace_all.asm):00121         
+                      (    trace_all.asm):00122         ; BCC (C=0 -> taken) / BCS (C=1 -> taken)
+E0C9 8EE2DF           (    trace_all.asm):00123                 LDX   #S_BCC
+E0CC 17FF4A           (    trace_all.asm):00124                 LBSR  PRNT
+E0CF 8600             (    trace_all.asm):00125                 LDA   #$00        ; C=0
+E0D1 8A50             (    trace_all.asm):00126                 ORA   #EQU_DI
+                      (    trace_all.asm):00127                 SETCC
+E0D3 3402             (            SETCC):00001                 PSHS  A
+E0D5 3501             (            SETCC):00002                 PULS  CC
+E0D7 2408             (    trace_all.asm):00128                 BCC   BCC_T
+E0D9 8EE2CE           (    trace_all.asm):00129                 LDX   #S_N
+E0DC 17FF3A           (    trace_all.asm):00130                 LBSR  PRNT
+E0DF 2006             (    trace_all.asm):00131                 BRA   BCC_NEXT
+E0E1 8EE2C7           (    trace_all.asm):00132         BCC_T   LDX   #S_T
+E0E4 17FF32           (    trace_all.asm):00133                 LBSR  PRNT
+E0E7 12               (    trace_all.asm):00134         BCC_NEXT NOP
+E0E8 8EE2E4           (    trace_all.asm):00135                 LDX   #S_BCS
+E0EB 17FF2B           (    trace_all.asm):00136                 LBSR  PRNT
+E0EE 8601             (    trace_all.asm):00137                 LDA   #EQU_C      ; C=1
+E0F0 8A50             (    trace_all.asm):00138                 ORA   #EQU_DI
+                      (    trace_all.asm):00139                 SETCC
+E0F2 3402             (            SETCC):00001                 PSHS  A
+E0F4 3501             (            SETCC):00002                 PULS  CC
+E0F6 2508             (    trace_all.asm):00140                 BCS   BCS_T
+E0F8 8EE2CE           (    trace_all.asm):00141                 LDX   #S_N
+E0FB 17FF1B           (    trace_all.asm):00142                 LBSR  PRNT
+E0FE 2006             (    trace_all.asm):00143                 BRA   BCS_NEXT
+E100 8EE2C7           (    trace_all.asm):00144         BCS_T   LDX   #S_T
+E103 17FF13           (    trace_all.asm):00145                 LBSR  PRNT
+E106 12               (    trace_all.asm):00146         BCS_NEXT NOP
+                      (    trace_all.asm):00147         
+                      (    trace_all.asm):00148         ; BHI ( !(C||Z) ) and BLS (C||Z)
+E107 8EE2E9           (    trace_all.asm):00149                 LDX   #S_BHI
+E10A 17FF0C           (    trace_all.asm):00150                 LBSR  PRNT
+E10D 8600             (    trace_all.asm):00151                 LDA   #$00        ; C=0,Z=0 -> taken
+E10F 8A50             (    trace_all.asm):00152                 ORA   #EQU_DI
+                      (    trace_all.asm):00153                 SETCC
+E111 3402             (            SETCC):00001                 PSHS  A
+E113 3501             (            SETCC):00002                 PULS  CC
+E115 2208             (    trace_all.asm):00154                 BHI   BHI_T
+E117 8EE2CE           (    trace_all.asm):00155                 LDX   #S_N
+E11A 17FEFC           (    trace_all.asm):00156                 LBSR  PRNT
+E11D 2006             (    trace_all.asm):00157                 BRA   BHI_NEXT
+E11F 8EE2C7           (    trace_all.asm):00158         BHI_T   LDX   #S_T
+E122 17FEF4           (    trace_all.asm):00159                 LBSR  PRNT
+E125 12               (    trace_all.asm):00160         BHI_NEXT NOP
+E126 8EE2EE           (    trace_all.asm):00161                 LDX   #S_BLS
+E129 17FEED           (    trace_all.asm):00162                 LBSR  PRNT
+E12C 8601             (    trace_all.asm):00163                 LDA   #EQU_C      ; C=1 -> taken
+E12E 8A50             (    trace_all.asm):00164                 ORA   #EQU_DI
+                      (    trace_all.asm):00165                 SETCC
+E130 3402             (            SETCC):00001                 PSHS  A
+E132 3501             (            SETCC):00002                 PULS  CC
+E134 2308             (    trace_all.asm):00166                 BLS   BLS_T
+E136 8EE2CE           (    trace_all.asm):00167                 LDX   #S_N
+E139 17FEDD           (    trace_all.asm):00168                 LBSR  PRNT
+E13C 2006             (    trace_all.asm):00169                 BRA   BLS_NEXT
+E13E 8EE2C7           (    trace_all.asm):00170         BLS_T   LDX   #S_T
+E141 17FED5           (    trace_all.asm):00171                 LBSR  PRNT
+E144 12               (    trace_all.asm):00172         BLS_NEXT NOP
+                      (    trace_all.asm):00173         
+                      (    trace_all.asm):00174         ; BVC/BVS
+E145 8EE2F3           (    trace_all.asm):00175                 LDX   #S_BVC
+E148 17FECE           (    trace_all.asm):00176                 LBSR  PRNT
+E14B 8600             (    trace_all.asm):00177                 LDA   #$00        ; V=0 -> BVC taken
+E14D 8A50             (    trace_all.asm):00178                 ORA   #EQU_DI
+                      (    trace_all.asm):00179                 SETCC
+E14F 3402             (            SETCC):00001                 PSHS  A
+E151 3501             (            SETCC):00002                 PULS  CC
+E153 2808             (    trace_all.asm):00180                 BVC   BVC_T
+E155 8EE2CE           (    trace_all.asm):00181                 LDX   #S_N
+E158 17FEBE           (    trace_all.asm):00182                 LBSR  PRNT
+E15B 2006             (    trace_all.asm):00183                 BRA   BVC_NEXT
+E15D 8EE2C7           (    trace_all.asm):00184         BVC_T   LDX   #S_T
+E160 17FEB6           (    trace_all.asm):00185                 LBSR  PRNT
+E163 12               (    trace_all.asm):00186         BVC_NEXT NOP
+E164 8EE2F8           (    trace_all.asm):00187                 LDX   #S_BVS
+E167 17FEAF           (    trace_all.asm):00188                 LBSR  PRNT
+E16A 8602             (    trace_all.asm):00189                 LDA   #EQU_V      ; V=1 -> BVS taken
+E16C 8A50             (    trace_all.asm):00190                 ORA   #EQU_DI
+                      (    trace_all.asm):00191                 SETCC
+E16E 3402             (            SETCC):00001                 PSHS  A
+E170 3501             (            SETCC):00002                 PULS  CC
+E172 2908             (    trace_all.asm):00192                 BVS   BVS_T
+E174 8EE2CE           (    trace_all.asm):00193                 LDX   #S_N
+E177 17FE9F           (    trace_all.asm):00194                 LBSR  PRNT
+E17A 2006             (    trace_all.asm):00195                 BRA   BVS_NEXT
+E17C 8EE2C7           (    trace_all.asm):00196         BVS_T   LDX   #S_T
+E17F 17FE97           (    trace_all.asm):00197                 LBSR  PRNT
+E182 12               (    trace_all.asm):00198         BVS_NEXT NOP
+                      (    trace_all.asm):00199         
+                      (    trace_all.asm):00200         ; BPL/BMI
+E183 8EE2FD           (    trace_all.asm):00201                 LDX   #S_BPL
+E186 17FE90           (    trace_all.asm):00202                 LBSR  PRNT
+E189 8600             (    trace_all.asm):00203                 LDA   #$00        ; N=0 -> BPL taken
+E18B 8A50             (    trace_all.asm):00204                 ORA   #EQU_DI
+                      (    trace_all.asm):00205                 SETCC
+E18D 3402             (            SETCC):00001                 PSHS  A
+E18F 3501             (            SETCC):00002                 PULS  CC
+E191 2A08             (    trace_all.asm):00206                 BPL   BPL_T
+E193 8EE2CE           (    trace_all.asm):00207                 LDX   #S_N
+E196 17FE80           (    trace_all.asm):00208                 LBSR  PRNT
+E199 2006             (    trace_all.asm):00209                 BRA   BPL_NEXT
+E19B 8EE2C7           (    trace_all.asm):00210         BPL_T   LDX   #S_T
+E19E 17FE78           (    trace_all.asm):00211                 LBSR  PRNT
+E1A1 12               (    trace_all.asm):00212         BPL_NEXT NOP
+E1A2 8EE302           (    trace_all.asm):00213                 LDX   #S_BMI
+E1A5 17FE71           (    trace_all.asm):00214                 LBSR  PRNT
+E1A8 8608             (    trace_all.asm):00215                 LDA   #EQU_N      ; N=1 -> BMI taken
+E1AA 8A50             (    trace_all.asm):00216                 ORA   #EQU_DI
                       (    trace_all.asm):00217                 SETCC
-E1B1 3402             (            SETCC):00001                 PSHS  A
-E1B3 3501             (            SETCC):00002                 PULS  CC
-E1B5 2C08             (    trace_all.asm):00218                 BGE   BGE_T
-E1B7 8E0007           (    trace_all.asm):00219                 LDX   #S_N
-E1BA 17FE5C           (    trace_all.asm):00220                 LBSR  PRNT
-E1BD 2006             (    trace_all.asm):00221                 BRA   BGE_NEXT
-E1BF 8E0000           (    trace_all.asm):00222         BGE_T   LDX   #S_T
-E1C2 17FE54           (    trace_all.asm):00223                 LBSR  PRNT
-E1C5 12               (    trace_all.asm):00224         BGE_NEXT NOP
-E1C6 8E0045           (    trace_all.asm):00225                 LDX   #S_BLT
-E1C9 17FE4D           (    trace_all.asm):00226                 LBSR  PRNT
-E1CC 860A             (    trace_all.asm):00227                 LDA   #EQU_N|EQU_V ; N=1,V=1 => N^V=0 => BLT not taken
-                      (    trace_all.asm):00228                 SETCC
-E1CE 3402             (            SETCC):00001                 PSHS  A
-E1D0 3501             (            SETCC):00002                 PULS  CC
-E1D2 2D08             (    trace_all.asm):00229                 BLT   BLT_N
-E1D4 8E0007           (    trace_all.asm):00230                 LDX   #S_N
-E1D7 17FE3F           (    trace_all.asm):00231                 LBSR  PRNT
-E1DA 2006             (    trace_all.asm):00232                 BRA   BLT_NEXT
-E1DC 8E0000           (    trace_all.asm):00233         BLT_N   LDX   #S_T
-E1DF 17FE37           (    trace_all.asm):00234                 LBSR  PRNT
-E1E2 12               (    trace_all.asm):00235         BLT_NEXT NOP
-                      (    trace_all.asm):00236         
-                      (    trace_all.asm):00237         ; BGT/ BLE
-E1E3 8E004A           (    trace_all.asm):00238                 LDX   #S_BGT
-E1E6 17FE30           (    trace_all.asm):00239                 LBSR  PRNT
-E1E9 8600             (    trace_all.asm):00240                 LDA   #$00        ; Z=0, N^V=0 => BGT taken
-                      (    trace_all.asm):00241                 SETCC
-E1EB 3402             (            SETCC):00001                 PSHS  A
-E1ED 3501             (            SETCC):00002                 PULS  CC
-E1EF 2E08             (    trace_all.asm):00242                 BGT   BGT_T
-E1F1 8E0007           (    trace_all.asm):00243                 LDX   #S_N
-E1F4 17FE22           (    trace_all.asm):00244                 LBSR  PRNT
-E1F7 2006             (    trace_all.asm):00245                 BRA   BGT_NEXT
-E1F9 8E0000           (    trace_all.asm):00246         BGT_T   LDX   #S_T
-E1FC 17FE1A           (    trace_all.asm):00247                 LBSR  PRNT
-E1FF 12               (    trace_all.asm):00248         BGT_NEXT NOP
-E200 8E004F           (    trace_all.asm):00249                 LDX   #S_BLE
-E203 17FE13           (    trace_all.asm):00250                 LBSR  PRNT
-E206 8604             (    trace_all.asm):00251                 LDA   #EQU_Z      ; Z=1 => BLE taken
-                      (    trace_all.asm):00252                 SETCC
-E208 3402             (            SETCC):00001                 PSHS  A
-E20A 3501             (            SETCC):00002                 PULS  CC
-E20C 2F08             (    trace_all.asm):00253                 BLE   BLE_T
-E20E 8E0007           (    trace_all.asm):00254                 LDX   #S_N
-E211 17FE05           (    trace_all.asm):00255                 LBSR  PRNT
-E214 2006             (    trace_all.asm):00256                 BRA   BLE_NEXT
-E216 8E0000           (    trace_all.asm):00257         BLE_T   LDX   #S_T
-E219 17FDFD           (    trace_all.asm):00258                 LBSR  PRNT
-E21C 12               (    trace_all.asm):00259         BLE_NEXT NOP
-                      (    trace_all.asm):00260         
-                      (    trace_all.asm):00261         ; --- Long branches (LBcc) ---
-E21D 8E0054           (    trace_all.asm):00262                 LDX   #S_LBEQ
-E220 17FDF6           (    trace_all.asm):00263                 LBSR  PRNT
-E223 8604             (    trace_all.asm):00264                 LDA   #EQU_Z
-                      (    trace_all.asm):00265                 SETCC
-E225 3402             (            SETCC):00001                 PSHS  A
-E227 3501             (            SETCC):00002                 PULS  CC
-E229 10270008         (    trace_all.asm):00266                 LBEQ  LBEQ_T
-E22D 8E0007           (    trace_all.asm):00267                 LDX   #S_N
-E230 17FDE6           (    trace_all.asm):00268                 LBSR  PRNT
-E233 2006             (    trace_all.asm):00269                 BRA   LBEQ_NEXT
-E235 8E0000           (    trace_all.asm):00270         LBEQ_T  LDX   #S_T
-E238 17FDDE           (    trace_all.asm):00271                 LBSR  PRNT
-E23B 12               (    trace_all.asm):00272         LBEQ_NEXT NOP
-                      (    trace_all.asm):00273         
-E23C 8E005A           (    trace_all.asm):00274                 LDX   #S_LBNE
-E23F 17FDD7           (    trace_all.asm):00275                 LBSR  PRNT
-E242 8600             (    trace_all.asm):00276                 LDA   #$00
-                      (    trace_all.asm):00277                 SETCC
-E244 3402             (            SETCC):00001                 PSHS  A
-E246 3501             (            SETCC):00002                 PULS  CC
-E248 10260008         (    trace_all.asm):00278                 LBNE  LBNE_T
-E24C 8E0007           (    trace_all.asm):00279                 LDX   #S_N
-E24F 17FDC7           (    trace_all.asm):00280                 LBSR  PRNT
-E252 2006             (    trace_all.asm):00281                 BRA   LBNE_NEXT
-E254 8E0000           (    trace_all.asm):00282         LBNE_T  LDX   #S_T
-E257 17FDBF           (    trace_all.asm):00283                 LBSR  PRNT
-E25A 12               (    trace_all.asm):00284         LBNE_NEXT NOP
-                      (    trace_all.asm):00285         
-                      (    trace_all.asm):00286         ; --- Page-2 Y/CPY/LDY/STY variants ---
-E25B 108E1234         (    trace_all.asm):00287                 LDY   #$1234      ; LDY sets N/Z, clears V
-E25F 109F20           (    trace_all.asm):00288                 STY   <$20        ; STY sets N/Z, clears V (based on Y)
-E262 109E20           (    trace_all.asm):00289                 LDY   <$20        ; reload
-E265 8E4321           (    trace_all.asm):00290                 LDX   #$4321
-                      (    trace_all.asm):00291                 ; CMPY immediate/direct/indexed/extended
-E268 108E1111         (    trace_all.asm):00292                 LDY   #$1111      ; A(1111)-B(2222): Z=0,N=1,V=0,C=0  (borrow)
-E26C 108C2222         (    trace_all.asm):00293                 CMPY  #$2222      ; expect NZVC as above
-E270 109C20           (    trace_all.asm):00294                 CMPY  <$20        ; 1111 - 1234: Z=0,N=1,V=0,C=0
-E273 308820           (    trace_all.asm):00295                 LEAX  $20,X       ; ensure indexed path exists (8-bit offset indexed)
-E276 10AC84           (    trace_all.asm):00296                 CMPY  ,X          ; 1111 - 5555: Z=0,N=1,V=0,C=0
-E279 109C20           (    trace_all.asm):00297                 CMPY  $0020       ; 1111 - 0020: Z=0,N=1,V=0,C=0
-                      (    trace_all.asm):00298         
-                      (    trace_all.asm):00299         ; --- Page-2 S-register LDS/STS ---
-E27C 10CEAAAA         (    trace_all.asm):00300                 LDS   #$AAAA      ; LDS sets N/Z, clears V
-E280 10DF30           (    trace_all.asm):00301                 STS   <$30        ; STS sets N/Z, clears V (based on S)
-E283 10DE30           (    trace_all.asm):00302                 LDS   <$30        ; reload
-E286 31A830           (    trace_all.asm):00303                 LEAY  $0030,Y
-E289 10EFA4           (    trace_all.asm):00304                 STS   ,Y
-E28C 10DF30           (    trace_all.asm):00305                 STS   $0030
-                      (    trace_all.asm):00306         
-                      (    trace_all.asm):00307         ; --- Page-3 CMPS ---
-E28F 10CEBEEF         (    trace_all.asm):00308                 LDS   #$BEEF
-E293 118CBEEF         (    trace_all.asm):00309                 CMPS  #$BEEF      ; equal: Z=1,N=0,V=0,C=1
-E297 119C30           (    trace_all.asm):00310                 CMPS  <$30        ; compare against previously stored value
-E29A 11ACA4           (    trace_all.asm):00311                 CMPS  ,Y
-E29D 119C30           (    trace_all.asm):00312                 CMPS  $0030
-                      (    trace_all.asm):00313         
-E2A0 20FE             (    trace_all.asm):00314         DONE    BRA   DONE        ; spin; use --trace --step to inspect
-                      (    trace_all.asm):00315         
-                      (    trace_all.asm):00316                 ORG   $FFFE
-FFFE E02A             (    trace_all.asm):00317                 FDB   START
-                      (    trace_all.asm):00318         
-                      (    trace_all.asm):00319         ; Strings for markers
-0000 20545C725C6E     (    trace_all.asm):00320         S_T     FCC   " T\r\n"  
-0006 00               (    trace_all.asm):00321                 FCB   0
-0007 204E5C725C6E     (    trace_all.asm):00322         S_N     FCC   " N\r\n"
-000D 00               (    trace_all.asm):00323                 FCB   0
-000E 4245513A         (    trace_all.asm):00324         S_BEQ   FCC   "BEQ:"
-0012 00               (    trace_all.asm):00325                 FCB   0
-0013 424E453A         (    trace_all.asm):00326         S_BNE   FCC   "BNE:"
-0017 00               (    trace_all.asm):00327                 FCB   0
-0018 4243433A         (    trace_all.asm):00328         S_BCC   FCC   "BCC:"
-001C 00               (    trace_all.asm):00329                 FCB   0
-001D 4243533A         (    trace_all.asm):00330         S_BCS   FCC   "BCS:"
-0021 00               (    trace_all.asm):00331                 FCB   0
-0022 4248493A         (    trace_all.asm):00332         S_BHI   FCC   "BHI:"
-0026 00               (    trace_all.asm):00333                 FCB   0
-0027 424C533A         (    trace_all.asm):00334         S_BLS   FCC   "BLS:"
-002B 00               (    trace_all.asm):00335                 FCB   0
-002C 4256433A         (    trace_all.asm):00336         S_BVC   FCC   "BVC:"
-0030 00               (    trace_all.asm):00337                 FCB   0
-0031 4256533A         (    trace_all.asm):00338         S_BVS   FCC   "BVS:"
-0035 00               (    trace_all.asm):00339                 FCB   0
-0036 42504C3A         (    trace_all.asm):00340         S_BPL   FCC   "BPL:"
-003A 00               (    trace_all.asm):00341                 FCB   0
-003B 424D493A         (    trace_all.asm):00342         S_BMI   FCC   "BMI:"
-003F 00               (    trace_all.asm):00343                 FCB   0
-0040 4247453A         (    trace_all.asm):00344         S_BGE   FCC   "BGE:"
-0044 00               (    trace_all.asm):00345                 FCB   0
-0045 424C543A         (    trace_all.asm):00346         S_BLT   FCC   "BLT:"
-0049 00               (    trace_all.asm):00347                 FCB   0
-004A 4247543A         (    trace_all.asm):00348         S_BGT   FCC   "BGT:"
-004E 00               (    trace_all.asm):00349                 FCB   0
-004F 424C453A         (    trace_all.asm):00350         S_BLE   FCC   "BLE:"
-0053 00               (    trace_all.asm):00351                 FCB   0
-0054 4C4245513A       (    trace_all.asm):00352         S_LBEQ  FCC   "LBEQ:"
-0059 00               (    trace_all.asm):00353                 FCB   0
-005A 4C424E453A       (    trace_all.asm):00354         S_LBNE  FCC   "LBNE:"
-005F 00               (    trace_all.asm):00355                 FCB   0
+E1AC 3402             (            SETCC):00001                 PSHS  A
+E1AE 3501             (            SETCC):00002                 PULS  CC
+E1B0 2B08             (    trace_all.asm):00218                 BMI   BMI_T
+E1B2 8EE2CE           (    trace_all.asm):00219                 LDX   #S_N
+E1B5 17FE61           (    trace_all.asm):00220                 LBSR  PRNT
+E1B8 2006             (    trace_all.asm):00221                 BRA   BMI_NEXT
+E1BA 8EE2C7           (    trace_all.asm):00222         BMI_T   LDX   #S_T
+E1BD 17FE59           (    trace_all.asm):00223                 LBSR  PRNT
+E1C0 12               (    trace_all.asm):00224         BMI_NEXT NOP
+                      (    trace_all.asm):00225         
+                      (    trace_all.asm):00226         ; BGE/BLT uses N^V
+E1C1 8EE307           (    trace_all.asm):00227                 LDX   #S_BGE
+E1C4 17FE52           (    trace_all.asm):00228                 LBSR  PRNT
+E1C7 8600             (    trace_all.asm):00229                 LDA   #$00        ; N=0,V=0 => N^V=0 => BGE taken
+E1C9 8A50             (    trace_all.asm):00230                 ORA   #EQU_DI
+                      (    trace_all.asm):00231                 SETCC
+E1CB 3402             (            SETCC):00001                 PSHS  A
+E1CD 3501             (            SETCC):00002                 PULS  CC
+E1CF 2C08             (    trace_all.asm):00232                 BGE   BGE_T
+E1D1 8EE2CE           (    trace_all.asm):00233                 LDX   #S_N
+E1D4 17FE42           (    trace_all.asm):00234                 LBSR  PRNT
+E1D7 2006             (    trace_all.asm):00235                 BRA   BGE_NEXT
+E1D9 8EE2C7           (    trace_all.asm):00236         BGE_T   LDX   #S_T
+E1DC 17FE3A           (    trace_all.asm):00237                 LBSR  PRNT
+E1DF 12               (    trace_all.asm):00238         BGE_NEXT NOP
+E1E0 8EE30C           (    trace_all.asm):00239                 LDX   #S_BLT
+E1E3 17FE33           (    trace_all.asm):00240                 LBSR  PRNT
+E1E6 860A             (    trace_all.asm):00241                 LDA   #EQU_N|EQU_V ; N=1,V=1 => N^V=0 => BLT not taken
+E1E8 8A50             (    trace_all.asm):00242                 ORA   #EQU_DI
+                      (    trace_all.asm):00243                 SETCC
+E1EA 3402             (            SETCC):00001                 PSHS  A
+E1EC 3501             (            SETCC):00002                 PULS  CC
+E1EE 2D08             (    trace_all.asm):00244                 BLT   BLT_N
+E1F0 8EE2CE           (    trace_all.asm):00245                 LDX   #S_N
+E1F3 17FE23           (    trace_all.asm):00246                 LBSR  PRNT
+E1F6 2006             (    trace_all.asm):00247                 BRA   BLT_NEXT
+E1F8 8EE2C7           (    trace_all.asm):00248         BLT_N   LDX   #S_T
+E1FB 17FE1B           (    trace_all.asm):00249                 LBSR  PRNT
+E1FE 12               (    trace_all.asm):00250         BLT_NEXT NOP
+                      (    trace_all.asm):00251         
+                      (    trace_all.asm):00252         ; BGT/ BLE
+E1FF 8EE311           (    trace_all.asm):00253                 LDX   #S_BGT
+E202 17FE14           (    trace_all.asm):00254                 LBSR  PRNT
+E205 8600             (    trace_all.asm):00255                 LDA   #$00        ; Z=0, N^V=0 => BGT taken
+E207 8A50             (    trace_all.asm):00256                 ORA   #EQU_DI
+                      (    trace_all.asm):00257                 SETCC
+E209 3402             (            SETCC):00001                 PSHS  A
+E20B 3501             (            SETCC):00002                 PULS  CC
+E20D 2E08             (    trace_all.asm):00258                 BGT   BGT_T
+E20F 8EE2CE           (    trace_all.asm):00259                 LDX   #S_N
+E212 17FE04           (    trace_all.asm):00260                 LBSR  PRNT
+E215 2006             (    trace_all.asm):00261                 BRA   BGT_NEXT
+E217 8EE2C7           (    trace_all.asm):00262         BGT_T   LDX   #S_T
+E21A 17FDFC           (    trace_all.asm):00263                 LBSR  PRNT
+E21D 12               (    trace_all.asm):00264         BGT_NEXT NOP
+E21E 8EE316           (    trace_all.asm):00265                 LDX   #S_BLE
+E221 17FDF5           (    trace_all.asm):00266                 LBSR  PRNT
+E224 8604             (    trace_all.asm):00267                 LDA   #EQU_Z      ; Z=1 => BLE taken
+E226 8A50             (    trace_all.asm):00268                 ORA   #EQU_DI
+                      (    trace_all.asm):00269                 SETCC
+E228 3402             (            SETCC):00001                 PSHS  A
+E22A 3501             (            SETCC):00002                 PULS  CC
+E22C 2F08             (    trace_all.asm):00270                 BLE   BLE_T
+E22E 8EE2CE           (    trace_all.asm):00271                 LDX   #S_N
+E231 17FDE5           (    trace_all.asm):00272                 LBSR  PRNT
+E234 2006             (    trace_all.asm):00273                 BRA   BLE_NEXT
+E236 8EE2C7           (    trace_all.asm):00274         BLE_T   LDX   #S_T
+E239 17FDDD           (    trace_all.asm):00275                 LBSR  PRNT
+E23C 12               (    trace_all.asm):00276         BLE_NEXT NOP
+                      (    trace_all.asm):00277         
+                      (    trace_all.asm):00278         ; --- Long branches (LBcc) ---
+E23D 8EE31B           (    trace_all.asm):00279                 LDX   #S_LBEQ
+E240 17FDD6           (    trace_all.asm):00280                 LBSR  PRNT
+E243 8604             (    trace_all.asm):00281                 LDA   #EQU_Z
+E245 8A50             (    trace_all.asm):00282                 ORA   #EQU_DI
+                      (    trace_all.asm):00283                 SETCC
+E247 3402             (            SETCC):00001                 PSHS  A
+E249 3501             (            SETCC):00002                 PULS  CC
+E24B 10270008         (    trace_all.asm):00284                 LBEQ  LBEQ_T
+E24F 8EE2CE           (    trace_all.asm):00285                 LDX   #S_N
+E252 17FDC4           (    trace_all.asm):00286                 LBSR  PRNT
+E255 2006             (    trace_all.asm):00287                 BRA   LBEQ_NEXT
+E257 8EE2C7           (    trace_all.asm):00288         LBEQ_T  LDX   #S_T
+E25A 17FDBC           (    trace_all.asm):00289                 LBSR  PRNT
+E25D 12               (    trace_all.asm):00290         LBEQ_NEXT NOP
+                      (    trace_all.asm):00291         
+E25E 8EE321           (    trace_all.asm):00292                 LDX   #S_LBNE
+E261 17FDB5           (    trace_all.asm):00293                 LBSR  PRNT
+E264 8600             (    trace_all.asm):00294                 LDA   #$00
+E266 8A50             (    trace_all.asm):00295                 ORA   #EQU_DI
+                      (    trace_all.asm):00296                 SETCC
+E268 3402             (            SETCC):00001                 PSHS  A
+E26A 3501             (            SETCC):00002                 PULS  CC
+E26C 10260008         (    trace_all.asm):00297                 LBNE  LBNE_T
+E270 8EE2CE           (    trace_all.asm):00298                 LDX   #S_N
+E273 17FDA3           (    trace_all.asm):00299                 LBSR  PRNT
+E276 2006             (    trace_all.asm):00300                 BRA   LBNE_NEXT
+E278 8EE2C7           (    trace_all.asm):00301         LBNE_T  LDX   #S_T
+E27B 17FD9B           (    trace_all.asm):00302                 LBSR  PRNT
+E27E 12               (    trace_all.asm):00303         LBNE_NEXT NOP
+                      (    trace_all.asm):00304         
+                      (    trace_all.asm):00305         ; --- Page-2 Y/CPY/LDY/STY variants ---
+E27F 108E1234         (    trace_all.asm):00306                 LDY   #$1234      ; LDY sets N/Z, clears V
+E283 109F20           (    trace_all.asm):00307                 STY   <$20        ; STY sets N/Z, clears V (based on Y)
+E286 109E20           (    trace_all.asm):00308                 LDY   <$20        ; reload
+E289 8E4321           (    trace_all.asm):00309                 LDX   #$4321
+                      (    trace_all.asm):00310                 ; CMPY immediate/direct/indexed/extended
+E28C 108E1111         (    trace_all.asm):00311                 LDY   #$1111      ; A(1111)-B(2222): Z=0,N=1,V=0,C=0  (borrow)
+E290 108C2222         (    trace_all.asm):00312                 CMPY  #$2222      ; expect NZVC as above
+E294 109C20           (    trace_all.asm):00313                 CMPY  <$20        ; 1111 - 1234: Z=0,N=1,V=0,C=0
+E297 308820           (    trace_all.asm):00314                 LEAX  $20,X       ; ensure indexed path exists (8-bit offset indexed)
+E29A 10AC84           (    trace_all.asm):00315                 CMPY  ,X          ; 1111 - 5555: Z=0,N=1,V=0,C=0
+E29D 109C20           (    trace_all.asm):00316                 CMPY  $0020       ; 1111 - 0020: Z=0,N=1,V=0,C=0
+                      (    trace_all.asm):00317         
+                      (    trace_all.asm):00318         ; --- Page-2 S-register LDS/STS ---
+E2A0 10CEAAAA         (    trace_all.asm):00319                 LDS   #$AAAA      ; LDS sets N/Z, clears V
+E2A4 10DF30           (    trace_all.asm):00320                 STS   <$30        ; STS sets N/Z, clears V (based on S)
+E2A7 10DE30           (    trace_all.asm):00321                 LDS   <$30        ; reload
+E2AA 31A830           (    trace_all.asm):00322                 LEAY  $0030,Y
+E2AD 10EFA4           (    trace_all.asm):00323                 STS   ,Y
+E2B0 10DF30           (    trace_all.asm):00324                 STS   $0030
+                      (    trace_all.asm):00325         
+                      (    trace_all.asm):00326         ; --- Page-3 CMPS ---
+E2B3 10CEBEEF         (    trace_all.asm):00327                 LDS   #$BEEF
+E2B7 118CBEEF         (    trace_all.asm):00328                 CMPS  #$BEEF      ; equal: Z=1,N=0,V=0,C=1
+E2BB 119C30           (    trace_all.asm):00329                 CMPS  <$30        ; compare against previously stored value
+E2BE 11ACA4           (    trace_all.asm):00330                 CMPS  ,Y
+E2C1 119C30           (    trace_all.asm):00331                 CMPS  $0030
+                      (    trace_all.asm):00332         
+E2C4 20FE             (    trace_all.asm):00333         DONE    BRA   DONE        ; spin; use --trace --step to inspect
+                      (    trace_all.asm):00334         
+                      (    trace_all.asm):00335         ; ISR: runs on each timer tick. After 60 ticks, 
+                      (    trace_all.asm):00336         ; No action at this time.
+E2C6 3B               (    trace_all.asm):00337         IRQ_ENT RTI
+                      (    trace_all.asm):00338         
+                      (    trace_all.asm):00339         ; Strings for markers
+E2C7 20545C725C6E     (    trace_all.asm):00340         S_T     FCC   " T\r\n"  
+E2CD 00               (    trace_all.asm):00341                 FCB   0
+E2CE 204E5C725C6E     (    trace_all.asm):00342         S_N     FCC   " N\r\n"
+E2D4 00               (    trace_all.asm):00343                 FCB   0
+E2D5 4245513A         (    trace_all.asm):00344         S_BEQ   FCC   "BEQ:"
+E2D9 00               (    trace_all.asm):00345                 FCB   0
+E2DA 424E453A         (    trace_all.asm):00346         S_BNE   FCC   "BNE:"
+E2DE 00               (    trace_all.asm):00347                 FCB   0
+E2DF 4243433A         (    trace_all.asm):00348         S_BCC   FCC   "BCC:"
+E2E3 00               (    trace_all.asm):00349                 FCB   0
+E2E4 4243533A         (    trace_all.asm):00350         S_BCS   FCC   "BCS:"
+E2E8 00               (    trace_all.asm):00351                 FCB   0
+E2E9 4248493A         (    trace_all.asm):00352         S_BHI   FCC   "BHI:"
+E2ED 00               (    trace_all.asm):00353                 FCB   0
+E2EE 424C533A         (    trace_all.asm):00354         S_BLS   FCC   "BLS:"
+E2F2 00               (    trace_all.asm):00355                 FCB   0
+E2F3 4256433A         (    trace_all.asm):00356         S_BVC   FCC   "BVC:"
+E2F7 00               (    trace_all.asm):00357                 FCB   0
+E2F8 4256533A         (    trace_all.asm):00358         S_BVS   FCC   "BVS:"
+E2FC 00               (    trace_all.asm):00359                 FCB   0
+E2FD 42504C3A         (    trace_all.asm):00360         S_BPL   FCC   "BPL:"
+E301 00               (    trace_all.asm):00361                 FCB   0
+E302 424D493A         (    trace_all.asm):00362         S_BMI   FCC   "BMI:"
+E306 00               (    trace_all.asm):00363                 FCB   0
+E307 4247453A         (    trace_all.asm):00364         S_BGE   FCC   "BGE:"
+E30B 00               (    trace_all.asm):00365                 FCB   0
+E30C 424C543A         (    trace_all.asm):00366         S_BLT   FCC   "BLT:"
+E310 00               (    trace_all.asm):00367                 FCB   0
+E311 4247543A         (    trace_all.asm):00368         S_BGT   FCC   "BGT:"
+E315 00               (    trace_all.asm):00369                 FCB   0
+E316 424C453A         (    trace_all.asm):00370         S_BLE   FCC   "BLE:"
+E31A 00               (    trace_all.asm):00371                 FCB   0
+E31B 4C4245513A       (    trace_all.asm):00372         S_LBEQ  FCC   "LBEQ:"
+E320 00               (    trace_all.asm):00373                 FCB   0
+E321 4C424E453A       (    trace_all.asm):00374         S_LBNE  FCC   "LBNE:"
+E326 00               (    trace_all.asm):00375                 FCB   0
+                      (    trace_all.asm):00376         
+                      (    trace_all.asm):00377                 ORG   $FFF4
+FFF4 E2C6             (    trace_all.asm):00378                 FDB   IRQ_ENT     ; FIRQ vector
+                      (    trace_all.asm):00379                 ORG   $FFF6
+FFF6 E2C6             (    trace_all.asm):00380                 FDB   IRQ_ENT     ; IRQ vector        
+                      (    trace_all.asm):00381                 ORG   $FFFE
+FFFE E02A             (    trace_all.asm):00382                 FDB   START

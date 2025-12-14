@@ -634,8 +634,8 @@ impl Cpu {
     }
     fn sub8_flags(&mut self, a: u8, b: u8) -> u8 {
         let (diff, borrow) = a.overflowing_sub(b);
-        // C=1 means no borrow
-        let cflag = !borrow;
+        // 6809: C=1 indicates borrow occurred on subtract
+        let cflag = borrow;
         let ovf = (((a ^ b) & (a ^ diff)) & 0x80) != 0;
         let half = ((a & 0x0F) as i16 - (b & 0x0F) as i16) < 0;
         self.set_nz8(diff);
@@ -650,7 +650,8 @@ impl Cpu {
         let (t, b1) = a.overflowing_sub(b);
         let (diff, b2) = t.overflowing_sub(cin);
         let borrow = b1 || b2;
-        let cflag = !borrow;
+        // 6809: C=1 indicates borrow occurred on subtract
+        let cflag = borrow;
         let ovf = (((a ^ b) & (a ^ diff)) & 0x80) != 0;
         let half = ((a & 0x0F) as i16 - (b & 0x0F) as i16 - cin as i16) < 0;
         self.set_nz8(diff);
@@ -675,7 +676,8 @@ impl Cpu {
     }
     fn sub16_flags(&mut self, a: u16, b: u16) -> u16 {
         let (diff, borrow) = a.overflowing_sub(b);
-        let cflag = !borrow; // 6809: C=1 means no borrow
+        // 6809: C=1 indicates borrow occurred on subtract
+        let cflag = borrow;
         let ovf = (((a ^ b) & (a ^ diff)) & 0x8000) != 0;
         self.set_nz16(diff);
         self.r.cc =
@@ -2084,7 +2086,6 @@ impl Cpu {
                 let res = prev.wrapping_sub(1);
                 self.r.a = res;
                 self.set_nz8(res);
-                self.r.cc &= !C;
                 self.r.cc = (self.r.cc & !V) | (if prev == 0x80 { V } else { 0 });
                 consumed = 2;
                 if trace {
@@ -2097,7 +2098,6 @@ impl Cpu {
                 let res = prev.wrapping_add(1);
                 self.r.a = res;
                 self.set_nz8(res);
-                self.r.cc &= !C;
                 self.r.cc = (self.r.cc & !V) | (if prev == 0x7F { V } else { 0 });
                 consumed = 2;
                 if trace {
@@ -2195,7 +2195,6 @@ impl Cpu {
                 let res = prev.wrapping_sub(1);
                 self.r.b = res;
                 self.set_nz8(res);
-                self.r.cc &= !C;
                 self.r.cc = (self.r.cc & !V) | (if prev == 0x80 { V } else { 0 });
                 consumed = 2;
                 if trace {
@@ -2207,7 +2206,6 @@ impl Cpu {
                 let res = prev.wrapping_add(1);
                 self.r.b = res;
                 self.set_nz8(res);
-                self.r.cc &= !C;
                 self.r.cc = (self.r.cc & !V) | (if prev == 0x7F { V } else { 0 });
                 consumed = 2;
                 if trace {

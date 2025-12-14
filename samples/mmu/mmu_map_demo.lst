@@ -1,0 +1,218 @@
+                      ( mmu_map_demo.asm):00001         ; MMU map/protection demonstration for em6809
+                      ( mmu_map_demo.asm):00002         ; - Splits the logical page $0C differently between system/user maps
+                      ( mmu_map_demo.asm):00003         ; - Shows write-protect fault reporting on the vectors page
+                      ( mmu_map_demo.asm):00004         ;
+                      ( mmu_map_demo.asm):00005         ; Assemble (requires lwasm):
+                      ( mmu_map_demo.asm):00006         ;   lwasm -9 --format=srec -o samples/mmu/mmu_map_demo.s19 samples/mmu/mmu_map_demo.asm
+                      ( mmu_map_demo.asm):00007         ; Run:
+                      ( mmu_map_demo.asm):00008         ;   cargo run -- samples/mmu/mmu_map_demo.s19 \
+                      ( mmu_map_demo.asm):00009         ;     --mmu --console 0xFF00 --console-echo --mmu-log-maps --run
+                      ( mmu_map_demo.asm):00010         
+     FF00             ( mmu_map_demo.asm):00011         CONBASE     EQU   $FF00
+     FF00             ( mmu_map_demo.asm):00012         CONDATA     EQU   CONBASE
+     FF01             ( mmu_map_demo.asm):00013         CONSTAT     EQU   CONBASE+1
+     0001             ( mmu_map_demo.asm):00014         TXRDY       EQU   $01
+                      ( mmu_map_demo.asm):00015         
+     FFA0             ( mmu_map_demo.asm):00016         MMU_BASE    EQU   $FFA0
+     FFA0             ( mmu_map_demo.asm):00017         MMU_MAP     EQU   MMU_BASE          ; +page (0..0F) -> frame#
+     FFB0             ( mmu_map_demo.asm):00018         MMU_TASK    EQU   MMU_BASE+$10
+     FFB1             ( mmu_map_demo.asm):00019         MMU_MODE    EQU   MMU_BASE+$11      ; 0=user, 1=system
+     FFB2             ( mmu_map_demo.asm):00020         MMU_PROT    EQU   MMU_BASE+$12      ; bit0=WPROT_EN, bit3=NX_EN, bit1=IRQ on fault
+     FFB3             ( mmu_map_demo.asm):00021         MMU_FAULT   EQU   MMU_BASE+$13      ; latched fault bits, clears on read
+     FFB8             ( mmu_map_demo.asm):00022         MMU_ATTR    EQU   MMU_BASE+$18      ; +page -> attr (bit0=WPROT, bit2=NX)
+                      ( mmu_map_demo.asm):00023         
+     000C             ( mmu_map_demo.asm):00024         PAGE_BANK   EQU   $0C               ; logical page to flip
+     000C             ( mmu_map_demo.asm):00025         FRAME_SYS   EQU   $0C               ; system map frame for $0C
+     000D             ( mmu_map_demo.asm):00026         FRAME_USER  EQU   $0D               ; user map frame for $0C
+     C100             ( mmu_map_demo.asm):00027         LOG_BANK    EQU   $C100             ; logical address used to read banked text
+     000F             ( mmu_map_demo.asm):00028         PAGE_VECT   EQU   $0F
+     000B             ( mmu_map_demo.asm):00029         PROT_FLAGS  EQU   $0B               ; WPROT_EN + IRQ on fault + NX_EN
+                      ( mmu_map_demo.asm):00030         
+                      ( mmu_map_demo.asm):00031                 ORG   $E000
+                      ( mmu_map_demo.asm):00032         
+E000 BDE01C           ( mmu_map_demo.asm):00033         START   JSR   INIT_MMU
+E003 8EE200           ( mmu_map_demo.asm):00034                 LDX   #MSG_HELLO
+E006 BDE091           ( mmu_map_demo.asm):00035                 JSR   PRINT_STR
+                      ( mmu_map_demo.asm):00036         
+                      ( mmu_map_demo.asm):00037                 ; User map view (page $0C -> frame $0D)
+E009 7FFFB1           ( mmu_map_demo.asm):00038                 CLR   MMU_MODE
+E00C BDE041           ( mmu_map_demo.asm):00039                 JSR   SHOW_VIEW
+                      ( mmu_map_demo.asm):00040         
+                      ( mmu_map_demo.asm):00041                 ; System map view (page $0C -> frame $0C)
+E00F 8601             ( mmu_map_demo.asm):00042                 LDA   #$01
+E011 B7FFB1           ( mmu_map_demo.asm):00043                 STA   MMU_MODE
+E014 BDE041           ( mmu_map_demo.asm):00044                 JSR   SHOW_VIEW
+                      ( mmu_map_demo.asm):00045         
+                      ( mmu_map_demo.asm):00046                 ; Write-protect demo on vectors page
+E017 BDE073           ( mmu_map_demo.asm):00047                 JSR   TEST_WPROT
+                      ( mmu_map_demo.asm):00048         
+E01A 20FE             ( mmu_map_demo.asm):00049         HALT    BRA   HALT
+                      ( mmu_map_demo.asm):00050         
+                      ( mmu_map_demo.asm):00051         ; Configure MMU maps and protection.
+E01C                  ( mmu_map_demo.asm):00052         INIT_MMU
+E01C 3402             ( mmu_map_demo.asm):00053                 PSHS  A
+                      ( mmu_map_demo.asm):00054                 ; Program system map entry for page $0C -> frame $0C
+E01E 8601             ( mmu_map_demo.asm):00055                 LDA   #$01
+E020 B7FFB1           ( mmu_map_demo.asm):00056                 STA   MMU_MODE
+E023 860C             ( mmu_map_demo.asm):00057                 LDA   #FRAME_SYS
+E025 B7FFAC           ( mmu_map_demo.asm):00058                 STA   MMU_MAP+PAGE_BANK
+                      ( mmu_map_demo.asm):00059                 ; Program user map entry for page $0C -> frame $0D
+E028 7FFFB1           ( mmu_map_demo.asm):00060                 CLR   MMU_MODE
+E02B 860D             ( mmu_map_demo.asm):00061                 LDA   #FRAME_USER
+E02D B7FFAC           ( mmu_map_demo.asm):00062                 STA   MMU_MAP+PAGE_BANK
+                      ( mmu_map_demo.asm):00063                 ; Enable NX/WPROT controls and mark pages
+E030 860B             ( mmu_map_demo.asm):00064                 LDA   #PROT_FLAGS
+E032 B7FFB2           ( mmu_map_demo.asm):00065                 STA   MMU_PROT
+E035 8604             ( mmu_map_demo.asm):00066                 LDA   #$04                 ; NX on page 0 to catch null jumps
+E037 B7FFB8           ( mmu_map_demo.asm):00067                 STA   MMU_ATTR+0
+E03A 8601             ( mmu_map_demo.asm):00068                 LDA   #$01                 ; WPROT vectors page
+E03C B7FFC7           ( mmu_map_demo.asm):00069                 STA   MMU_ATTR+PAGE_VECT
+E03F 3582             ( mmu_map_demo.asm):00070                 PULS  A,PC
+                      ( mmu_map_demo.asm):00071         
+                      ( mmu_map_demo.asm):00072         ; Print current map entry and banked text.
+E041                  ( mmu_map_demo.asm):00073         SHOW_VIEW
+E041 3416             ( mmu_map_demo.asm):00074                 PSHS  A,B,X
+E043 B6FFB1           ( mmu_map_demo.asm):00075                 LDA   MMU_MODE
+E046 2705             ( mmu_map_demo.asm):00076                 BEQ   SV_USER
+E048 8EE23B           ( mmu_map_demo.asm):00077                 LDX   #MSG_SYS
+E04B 2003             ( mmu_map_demo.asm):00078                 BRA   SV_LABEL
+E04D 8EE217           ( mmu_map_demo.asm):00079         SV_USER LDX   #MSG_USER
+E050 BDE091           ( mmu_map_demo.asm):00080         SV_LABEL JSR  PRINT_STR
+E053 8EE261           ( mmu_map_demo.asm):00081                 LDX   #MSG_MAP
+E056 BDE091           ( mmu_map_demo.asm):00082                 JSR   PRINT_STR
+E059 B6FFAC           ( mmu_map_demo.asm):00083                 LDA   MMU_MAP+PAGE_BANK
+E05C BDE0AB           ( mmu_map_demo.asm):00084                 JSR   PRINT_HEX
+E05F BDE0CD           ( mmu_map_demo.asm):00085                 JSR   PRINT_NL
+E062 8EE273           ( mmu_map_demo.asm):00086                 LDX   #MSG_TEXT
+E065 BDE091           ( mmu_map_demo.asm):00087                 JSR   PRINT_STR
+E068 8EC100           ( mmu_map_demo.asm):00088                 LDX   #LOG_BANK
+E06B BDE091           ( mmu_map_demo.asm):00089                 JSR   PRINT_STR
+E06E BDE0CD           ( mmu_map_demo.asm):00090                 JSR   PRINT_NL
+E071 3596             ( mmu_map_demo.asm):00091                 PULS  A,B,X,PC
+                      ( mmu_map_demo.asm):00092         
+                      ( mmu_map_demo.asm):00093         ; Attempt a write to the protected vectors page and show fault_status.
+E073                  ( mmu_map_demo.asm):00094         TEST_WPROT
+E073 3416             ( mmu_map_demo.asm):00095                 PSHS  A,B,X
+E075 8EE282           ( mmu_map_demo.asm):00096                 LDX   #MSG_WPROT
+E078 BDE091           ( mmu_map_demo.asm):00097                 JSR   PRINT_STR
+E07B 8655             ( mmu_map_demo.asm):00098                 LDA   #$55
+E07D B7FFF0           ( mmu_map_demo.asm):00099                 STA   $FFF0               ; falls in vectors page ($0F), WPROT triggers
+E080 B6FFB3           ( mmu_map_demo.asm):00100                 LDA   MMU_FAULT           ; read & clear fault bits
+E083 8EE2A6           ( mmu_map_demo.asm):00101                 LDX   #MSG_FAULT
+E086 BDE091           ( mmu_map_demo.asm):00102                 JSR   PRINT_STR
+E089 BDE0AB           ( mmu_map_demo.asm):00103                 JSR   PRINT_HEX
+E08C BDE0CD           ( mmu_map_demo.asm):00104                 JSR   PRINT_NL
+E08F 3596             ( mmu_map_demo.asm):00105                 PULS  A,B,X,PC
+                      ( mmu_map_demo.asm):00106         
+                      ( mmu_map_demo.asm):00107         ; Print null-terminated string pointed by X.
+E091                  ( mmu_map_demo.asm):00108         PRINT_STR
+E091 3416             ( mmu_map_demo.asm):00109                 PSHS  A,B,X
+E093 A680             ( mmu_map_demo.asm):00110         PS_LOOP LDA   ,X+
+E095 2704             ( mmu_map_demo.asm):00111                 BEQ   PS_DONE
+E097 8D04             ( mmu_map_demo.asm):00112                 BSR   TXA
+E099 20F8             ( mmu_map_demo.asm):00113                 BRA   PS_LOOP
+E09B 3596             ( mmu_map_demo.asm):00114         PS_DONE PULS  A,B,X,PC
+                      ( mmu_map_demo.asm):00115         
+                      ( mmu_map_demo.asm):00116         ; Transmit A via console (polling TXRDY).
+E09D 3404             ( mmu_map_demo.asm):00117         TXA     PSHS  B
+E09F F6FF01           ( mmu_map_demo.asm):00118         TX_WAIT LDB   CONSTAT
+E0A2 C501             ( mmu_map_demo.asm):00119                 BITB  #TXRDY
+E0A4 27F9             ( mmu_map_demo.asm):00120                 BEQ   TX_WAIT
+E0A6 B7FF00           ( mmu_map_demo.asm):00121                 STA   CONDATA
+E0A9 3584             ( mmu_map_demo.asm):00122                 PULS  B,PC
+                      ( mmu_map_demo.asm):00123         
+                      ( mmu_map_demo.asm):00124         ; Print "$xx" from A.
+E0AB                  ( mmu_map_demo.asm):00125         PRINT_HEX
+E0AB 3406             ( mmu_map_demo.asm):00126                 PSHS  A,B
+E0AD 1F89             ( mmu_map_demo.asm):00127                 TFR   A,B
+E0AF 8624             ( mmu_map_demo.asm):00128                 LDA   #'$'
+E0B1 8DEA             ( mmu_map_demo.asm):00129                 BSR   TXA
+E0B3 1F98             ( mmu_map_demo.asm):00130                 TFR   B,A
+E0B5 44               ( mmu_map_demo.asm):00131                 LSRA
+E0B6 44               ( mmu_map_demo.asm):00132                 LSRA
+E0B7 44               ( mmu_map_demo.asm):00133                 LSRA
+E0B8 44               ( mmu_map_demo.asm):00134                 LSRA
+E0B9 8D08             ( mmu_map_demo.asm):00135                 BSR   HEX_DIGIT
+E0BB 1F98             ( mmu_map_demo.asm):00136                 TFR   B,A
+E0BD 840F             ( mmu_map_demo.asm):00137                 ANDA  #$0F
+E0BF 8D02             ( mmu_map_demo.asm):00138                 BSR   HEX_DIGIT
+E0C1 3586             ( mmu_map_demo.asm):00139                 PULS  A,B,PC
+                      ( mmu_map_demo.asm):00140         
+E0C3                  ( mmu_map_demo.asm):00141         HEX_DIGIT
+E0C3 8B30             ( mmu_map_demo.asm):00142                 ADDA  #'0'
+E0C5 8139             ( mmu_map_demo.asm):00143                 CMPA  #'9'
+E0C7 23D4             ( mmu_map_demo.asm):00144                 BLS   TXA
+E0C9 8B07             ( mmu_map_demo.asm):00145                 ADDA  #7
+E0CB 20D0             ( mmu_map_demo.asm):00146                 BRA   TXA
+                      ( mmu_map_demo.asm):00147         
+E0CD                  ( mmu_map_demo.asm):00148         PRINT_NL
+E0CD 3402             ( mmu_map_demo.asm):00149                 PSHS  A
+E0CF 860D             ( mmu_map_demo.asm):00150                 LDA   #$0D
+E0D1 8DCA             ( mmu_map_demo.asm):00151                 BSR   TXA
+E0D3 860A             ( mmu_map_demo.asm):00152                 LDA   #$0A
+E0D5 8DC6             ( mmu_map_demo.asm):00153                 BSR   TXA
+E0D7 3582             ( mmu_map_demo.asm):00154                 PULS  A,PC
+                      ( mmu_map_demo.asm):00155         
+                      ( mmu_map_demo.asm):00156         ; Dummy IRQ/FIRQ handlers.
+E0D9 3B               ( mmu_map_demo.asm):00157         IRQ_ENT RTI
+                      ( mmu_map_demo.asm):00158         
+                      ( mmu_map_demo.asm):00159                 ORG   $C100
+C100                  ( mmu_map_demo.asm):00160         BANK_SYS
+C100 5B73797374656D20 ( mmu_map_demo.asm):00161                 FCC   "[system map view]"
+     6D61702076696577
+     5D
+C111 00               ( mmu_map_demo.asm):00162                 FCB   0
+                      ( mmu_map_demo.asm):00163         
+                      ( mmu_map_demo.asm):00164                 ORG   $D100
+D100                  ( mmu_map_demo.asm):00165         BANK_USER
+D100 5B75736572206D61 ( mmu_map_demo.asm):00166                 FCC   "[user map view]"
+     7020766965775D
+D10F 00               ( mmu_map_demo.asm):00167                 FCB   0
+                      ( mmu_map_demo.asm):00168         
+                      ( mmu_map_demo.asm):00169                 ORG   $E200
+E200                  ( mmu_map_demo.asm):00170         MSG_HELLO
+E200 4D4D55206D61702F ( mmu_map_demo.asm):00171                 FCC   "MMU map/protect demo"
+     70726F7465637420
+     64656D6F
+E214 0D0A00           ( mmu_map_demo.asm):00172                 FCB   $0D,$0A,0
+E217                  ( mmu_map_demo.asm):00173         MSG_USER
+E217 55736572206D6F64 ( mmu_map_demo.asm):00174                 FCC   "User mode (page $0C -> frame $0D)"
+     6520287061676520
+     243043202D3E2066
+     72616D6520243044
+     29
+E238 0D0A00           ( mmu_map_demo.asm):00175                 FCB   $0D,$0A,0
+E23B                  ( mmu_map_demo.asm):00176         MSG_SYS
+E23B 53797374656D206D ( mmu_map_demo.asm):00177                 FCC   "System mode (page $0C -> frame $0C)"
+     6F64652028706167
+     6520243043202D3E
+     206672616D652024
+     304329
+E25E 0D0A00           ( mmu_map_demo.asm):00178                 FCB   $0D,$0A,0
+E261                  ( mmu_map_demo.asm):00179         MSG_MAP
+E261 4D617020656E7472 ( mmu_map_demo.asm):00180                 FCC   "Map entry $0C -> "
+     7920243043202D3E
+     20
+E272 00               ( mmu_map_demo.asm):00181                 FCB   0
+E273                  ( mmu_map_demo.asm):00182         MSG_TEXT
+E273 5465787420402024 ( mmu_map_demo.asm):00183                 FCC   "Text @ $C100: "
+     433130303A20
+E281 00               ( mmu_map_demo.asm):00184                 FCB   0
+E282                  ( mmu_map_demo.asm):00185         MSG_WPROT
+E282 577269746520746F ( mmu_map_demo.asm):00186                 FCC   "Write to protected vectors page... "
+     2070726F74656374
+     656420766563746F
+     727320706167652E
+     2E2E20
+E2A5 00               ( mmu_map_demo.asm):00187                 FCB   0
+E2A6                  ( mmu_map_demo.asm):00188         MSG_FAULT
+E2A6 6661756C745F7374 ( mmu_map_demo.asm):00189                 FCC   "fault_status="
+     617475733D
+E2B3 00               ( mmu_map_demo.asm):00190                 FCB   0
+                      ( mmu_map_demo.asm):00191         
+                      ( mmu_map_demo.asm):00192                 ORG   $FFF4
+FFF4 E0D9             ( mmu_map_demo.asm):00193                 FDB   IRQ_ENT      ; FIRQ vector
+                      ( mmu_map_demo.asm):00194                 ORG   $FFF6
+FFF6 E0D9             ( mmu_map_demo.asm):00195                 FDB   IRQ_ENT      ; IRQ vector
+                      ( mmu_map_demo.asm):00196                 ORG   $FFFE
+FFFE E000             ( mmu_map_demo.asm):00197                 FDB   START

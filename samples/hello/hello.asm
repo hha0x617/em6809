@@ -17,5 +17,13 @@ HALT    BRA   HALT
 MSG     FCC   "HELLO, WORLD"
         FCB   $0D,$0A,0
 
+; ISR: runs on each timer tick. After 60 ticks, 
+; No action at this time.
+IRQ_ENT RTI
+
+        ORG   $FFF4
+        FDB   IRQ_ENT     ; FIRQ vector
+        ORG   $FFF6
+        FDB   IRQ_ENT     ; IRQ vector
         ORG   $FFFE
         FDB   START

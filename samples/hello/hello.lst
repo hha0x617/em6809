@@ -18,5 +18,13 @@ E017 48454C4C4F2C2057 (        hello.asm):00017         MSG     FCC   "HELLO, WO
      4F524C44
 E023 0D0A00           (        hello.asm):00018                 FCB   $0D,$0A,0
                       (        hello.asm):00019         
-                      (        hello.asm):00020                 ORG   $FFFE
-FFFE E000             (        hello.asm):00021                 FDB   START
+                      (        hello.asm):00020         ; ISR: runs on each timer tick. After 60 ticks, 
+                      (        hello.asm):00021         ; No action at this time.
+E026 3B               (        hello.asm):00022         IRQ_ENT RTI
+                      (        hello.asm):00023         
+                      (        hello.asm):00024                 ORG   $FFF4
+FFF4 E026             (        hello.asm):00025                 FDB   IRQ_ENT     ; FIRQ vector
+                      (        hello.asm):00026                 ORG   $FFF6
+FFF6 E026             (        hello.asm):00027                 FDB   IRQ_ENT     ; IRQ vector
+                      (        hello.asm):00028                 ORG   $FFFE
+FFFE E000             (        hello.asm):00029                 FDB   START

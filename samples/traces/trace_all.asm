@@ -5,6 +5,7 @@
         ORG   $E000
 
 ; CC bits: E(80) F(40) H(20) I(10) N(08) Z(04) V(02) C(01)
+EQU_DI  EQU   $50         ; disable FIRQ($40) and IRQ($10) masks
 EQU_Z   EQU   $04
 EQU_N   EQU   $08
 EQU_V   EQU   $02
@@ -67,6 +68,7 @@ PEND    NOP
         LDX   #S_BEQ
         LBSR  PRNT
         LDA   #EQU_Z      ; set Z
+        ORA   #EQU_DI
         SETCC              ; CC := Z
         BEQ   BEQ_T        ; taken
         LDX   #S_N
@@ -79,6 +81,7 @@ BEQ_NEXT NOP
         LDX   #S_BEQ
         LBSR  PRNT
         LDA   #$00        ; clear Z
+        ORA   #EQU_DI
         SETCC
         BEQ   BEQ_N       ; not taken
         LDX   #S_N
@@ -93,6 +96,7 @@ BEQ_NEND NOP
         LDX   #S_BNE
         LBSR  PRNT
         LDA   #$00        ; Z=0
+        ORA   #EQU_DI
         SETCC
         BNE   BNE_T
         LDX   #S_N
@@ -105,6 +109,7 @@ BNE_NEXT NOP
         LDX   #S_BNE
         LBSR  PRNT
         LDA   #EQU_Z
+        ORA   #EQU_DI
         SETCC
         BNE   BNE_N
         LDX   #S_N
@@ -118,6 +123,7 @@ BNE_NEND NOP
         LDX   #S_BCC
         LBSR  PRNT
         LDA   #$00        ; C=0
+        ORA   #EQU_DI
         SETCC
         BCC   BCC_T
         LDX   #S_N
@@ -129,6 +135,7 @@ BCC_NEXT NOP
         LDX   #S_BCS
         LBSR  PRNT
         LDA   #EQU_C      ; C=1
+        ORA   #EQU_DI
         SETCC
         BCS   BCS_T
         LDX   #S_N
@@ -142,6 +149,7 @@ BCS_NEXT NOP
         LDX   #S_BHI
         LBSR  PRNT
         LDA   #$00        ; C=0,Z=0 -> taken
+        ORA   #EQU_DI
         SETCC
         BHI   BHI_T
         LDX   #S_N
@@ -153,6 +161,7 @@ BHI_NEXT NOP
         LDX   #S_BLS
         LBSR  PRNT
         LDA   #EQU_C      ; C=1 -> taken
+        ORA   #EQU_DI
         SETCC
         BLS   BLS_T
         LDX   #S_N
@@ -166,6 +175,7 @@ BLS_NEXT NOP
         LDX   #S_BVC
         LBSR  PRNT
         LDA   #$00        ; V=0 -> BVC taken
+        ORA   #EQU_DI
         SETCC
         BVC   BVC_T
         LDX   #S_N
@@ -177,6 +187,7 @@ BVC_NEXT NOP
         LDX   #S_BVS
         LBSR  PRNT
         LDA   #EQU_V      ; V=1 -> BVS taken
+        ORA   #EQU_DI
         SETCC
         BVS   BVS_T
         LDX   #S_N
@@ -190,6 +201,7 @@ BVS_NEXT NOP
         LDX   #S_BPL
         LBSR  PRNT
         LDA   #$00        ; N=0 -> BPL taken
+        ORA   #EQU_DI
         SETCC
         BPL   BPL_T
         LDX   #S_N
@@ -201,6 +213,7 @@ BPL_NEXT NOP
         LDX   #S_BMI
         LBSR  PRNT
         LDA   #EQU_N      ; N=1 -> BMI taken
+        ORA   #EQU_DI
         SETCC
         BMI   BMI_T
         LDX   #S_N
@@ -214,6 +227,7 @@ BMI_NEXT NOP
         LDX   #S_BGE
         LBSR  PRNT
         LDA   #$00        ; N=0,V=0 => N^V=0 => BGE taken
+        ORA   #EQU_DI
         SETCC
         BGE   BGE_T
         LDX   #S_N
@@ -225,6 +239,7 @@ BGE_NEXT NOP
         LDX   #S_BLT
         LBSR  PRNT
         LDA   #EQU_N|EQU_V ; N=1,V=1 => N^V=0 => BLT not taken
+        ORA   #EQU_DI
         SETCC
         BLT   BLT_N
         LDX   #S_N
@@ -238,6 +253,7 @@ BLT_NEXT NOP
         LDX   #S_BGT
         LBSR  PRNT
         LDA   #$00        ; Z=0, N^V=0 => BGT taken
+        ORA   #EQU_DI
         SETCC
         BGT   BGT_T
         LDX   #S_N
@@ -249,6 +265,7 @@ BGT_NEXT NOP
         LDX   #S_BLE
         LBSR  PRNT
         LDA   #EQU_Z      ; Z=1 => BLE taken
+        ORA   #EQU_DI
         SETCC
         BLE   BLE_T
         LDX   #S_N
@@ -262,6 +279,7 @@ BLE_NEXT NOP
         LDX   #S_LBEQ
         LBSR  PRNT
         LDA   #EQU_Z
+        ORA   #EQU_DI
         SETCC
         LBEQ  LBEQ_T
         LDX   #S_N
@@ -274,6 +292,7 @@ LBEQ_NEXT NOP
         LDX   #S_LBNE
         LBSR  PRNT
         LDA   #$00
+        ORA   #EQU_DI
         SETCC
         LBNE  LBNE_T
         LDX   #S_N
@@ -313,8 +332,9 @@ LBNE_NEXT NOP
 
 DONE    BRA   DONE        ; spin; use --trace --step to inspect
 
-        ORG   $FFFE
-        FDB   START
+; ISR: runs on each timer tick. After 60 ticks, 
+; No action at this time.
+IRQ_ENT RTI
 
 ; Strings for markers
 S_T     FCC   " T\r\n"  
@@ -353,3 +373,10 @@ S_LBEQ  FCC   "LBEQ:"
         FCB   0
 S_LBNE  FCC   "LBNE:"
         FCB   0
+
+        ORG   $FFF4
+        FDB   IRQ_ENT     ; FIRQ vector
+        ORG   $FFF6
+        FDB   IRQ_ENT     ; IRQ vector        
+        ORG   $FFFE
+        FDB   START

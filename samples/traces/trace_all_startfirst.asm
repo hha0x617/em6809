@@ -3,6 +3,7 @@
         ORG   $E000
 
 ; CC bits
+EQU_DI  EQU   $50         ; disable FIRQ($40) and IRQ($10) masks
 EQU_Z   EQU   $04
 EQU_N   EQU   $08
 EQU_V   EQU   $02
@@ -39,6 +40,7 @@ PPRB3   NOP
         LDX   #S_BEQ
         LBSR  PRNT
         LDA   #EQU_Z
+        ORA   #EQU_DI
         SETCC
         BEQ   BEQ_T
         LDX   #S_N
@@ -82,6 +84,14 @@ S_N     FCC   " N\r\n"
 S_BEQ   FCC   "BEQ:"
         FCB   0
 
+; ISR: runs on each timer tick. After 60 ticks, 
+; No action at this time.
+IRQ_ENT RTI
+
+        ORG   $FFF4
+        FDB   IRQ_ENT     ; FIRQ vector
+        ORG   $FFF6
+        FDB   IRQ_ENT     ; IRQ vector
         ORG   $FFFE
         FDB   START
 

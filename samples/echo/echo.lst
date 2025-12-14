@@ -49,5 +49,13 @@ E039 5479706520736F6D (         echo.asm):00046         PROMPT  FCC   "Type some
      6E65293A20
 E056 0D0A00           (         echo.asm):00047                 FCB   $0D,$0A,0
                       (         echo.asm):00048         
-                      (         echo.asm):00049                 ORG   $FFFE
-FFFE E000             (         echo.asm):00050                 FDB   START
+                      (         echo.asm):00049         ; ISR: runs on each timer tick. After 60 ticks, 
+                      (         echo.asm):00050         ; No action at this time.
+E059 3B               (         echo.asm):00051         IRQ_ENT RTI
+                      (         echo.asm):00052         
+                      (         echo.asm):00053                 ORG   $FFF4
+FFF4 E059             (         echo.asm):00054                 FDB   IRQ_ENT     ; FIRQ vector
+                      (         echo.asm):00055                 ORG   $FFF6
+FFF6 E059             (         echo.asm):00056                 FDB   IRQ_ENT     ; IRQ vector
+                      (         echo.asm):00057                 ORG   $FFFE
+FFFE E000             (         echo.asm):00058                 FDB   START

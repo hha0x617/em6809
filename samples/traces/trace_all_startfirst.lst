@@ -3,87 +3,97 @@
                       (ll_startfirst.asm):00003                 ORG   $E000
                       (ll_startfirst.asm):00004         
                       (ll_startfirst.asm):00005         ; CC bits
-     0004             (ll_startfirst.asm):00006         EQU_Z   EQU   $04
-     0008             (ll_startfirst.asm):00007         EQU_N   EQU   $08
-     0002             (ll_startfirst.asm):00008         EQU_V   EQU   $02
-     0001             (ll_startfirst.asm):00009         EQU_C   EQU   $01
-                      (ll_startfirst.asm):00010         
-E000                  (ll_startfirst.asm):00011         SETCC   MACRO
-                      (ll_startfirst.asm):00012                 PSHS  A
-                      (ll_startfirst.asm):00013                 PULS  CC
-                      (ll_startfirst.asm):00014                 ENDM
-                      (ll_startfirst.asm):00015         
-     FF00             (ll_startfirst.asm):00016         CONBASE EQU   $FF00
-     FF00             (ll_startfirst.asm):00017         CONDATA EQU   CONBASE
-     FF01             (ll_startfirst.asm):00018         CONSTAT EQU   CONBASE+1
-     0001             (ll_startfirst.asm):00019         TXRDY   EQU   $01
-     00FF             (ll_startfirst.asm):00020         CONON   EQU   $00FF
-                      (ll_startfirst.asm):00021         
-E000 10CEE800         (ll_startfirst.asm):00022         START   LDS   #$E800
-E004 CEE900           (ll_startfirst.asm):00023                 LDU   #$E900
-E007 8E0100           (ll_startfirst.asm):00024                 LDX   #$0100
-E00A 108E0200         (ll_startfirst.asm):00025                 LDY   #$0200
-                      (ll_startfirst.asm):00026                 ; probe console
-E00E 8E0010           (ll_startfirst.asm):00027                 LDX   #$0010
-E011 B6FF01           (ll_startfirst.asm):00028         PPRB    LDA   CONSTAT
-E014 8501             (ll_startfirst.asm):00029                 BITA  #TXRDY
-E016 2706             (ll_startfirst.asm):00030                 BEQ   PPRB2
-E018 8601             (ll_startfirst.asm):00031                 LDA   #$01
-E01A 97FF             (ll_startfirst.asm):00032                 STA   <$FF
-E01C 2004             (ll_startfirst.asm):00033                 BRA   PPRB3
-E01E 301F             (ll_startfirst.asm):00034         PPRB2   LEAX  -1,X
-E020 26EF             (ll_startfirst.asm):00035                 BNE   PPRB
-E022 12               (ll_startfirst.asm):00036         PPRB3   NOP
-                      (ll_startfirst.asm):00037         
-                      (ll_startfirst.asm):00038         ; Tests identical to trace_all.asm (abbreviated for brevity):
-E023 8EE07A           (ll_startfirst.asm):00039                 LDX   #S_BEQ
-E026 170032           (ll_startfirst.asm):00040                 LBSR  PRNT
-E029 8604             (ll_startfirst.asm):00041                 LDA   #EQU_Z
-                      (ll_startfirst.asm):00042                 SETCC
-E02B 3402             (            SETCC):00001                 PSHS  A
-E02D 3501             (            SETCC):00002                 PULS  CC
-E02F 2708             (ll_startfirst.asm):00043                 BEQ   BEQ_T
-E031 8EE073           (ll_startfirst.asm):00044                 LDX   #S_N
-E034 170024           (ll_startfirst.asm):00045                 LBSR  PRNT
-E037 2006             (ll_startfirst.asm):00046                 BRA   BEQ_NEXT
-E039 8EE06C           (ll_startfirst.asm):00047         BEQ_T   LDX   #S_T
-E03C 17001C           (ll_startfirst.asm):00048                 LBSR  PRNT
-E03F 12               (ll_startfirst.asm):00049         BEQ_NEXT NOP
-                      (ll_startfirst.asm):00050         
-                      (ll_startfirst.asm):00051                 ; ... replicate the rest from trace_all.asm as needed ...
+     0050             (ll_startfirst.asm):00006         EQU_DI  EQU   $50         ; disable FIRQ($40) and IRQ($10) masks
+     0004             (ll_startfirst.asm):00007         EQU_Z   EQU   $04
+     0008             (ll_startfirst.asm):00008         EQU_N   EQU   $08
+     0002             (ll_startfirst.asm):00009         EQU_V   EQU   $02
+     0001             (ll_startfirst.asm):00010         EQU_C   EQU   $01
+                      (ll_startfirst.asm):00011         
+E000                  (ll_startfirst.asm):00012         SETCC   MACRO
+                      (ll_startfirst.asm):00013                 PSHS  A
+                      (ll_startfirst.asm):00014                 PULS  CC
+                      (ll_startfirst.asm):00015                 ENDM
+                      (ll_startfirst.asm):00016         
+     FF00             (ll_startfirst.asm):00017         CONBASE EQU   $FF00
+     FF00             (ll_startfirst.asm):00018         CONDATA EQU   CONBASE
+     FF01             (ll_startfirst.asm):00019         CONSTAT EQU   CONBASE+1
+     0001             (ll_startfirst.asm):00020         TXRDY   EQU   $01
+     00FF             (ll_startfirst.asm):00021         CONON   EQU   $00FF
+                      (ll_startfirst.asm):00022         
+E000 10CEE800         (ll_startfirst.asm):00023         START   LDS   #$E800
+E004 CEE900           (ll_startfirst.asm):00024                 LDU   #$E900
+E007 8E0100           (ll_startfirst.asm):00025                 LDX   #$0100
+E00A 108E0200         (ll_startfirst.asm):00026                 LDY   #$0200
+                      (ll_startfirst.asm):00027                 ; probe console
+E00E 8E0010           (ll_startfirst.asm):00028                 LDX   #$0010
+E011 B6FF01           (ll_startfirst.asm):00029         PPRB    LDA   CONSTAT
+E014 8501             (ll_startfirst.asm):00030                 BITA  #TXRDY
+E016 2706             (ll_startfirst.asm):00031                 BEQ   PPRB2
+E018 8601             (ll_startfirst.asm):00032                 LDA   #$01
+E01A 97FF             (ll_startfirst.asm):00033                 STA   <$FF
+E01C 2004             (ll_startfirst.asm):00034                 BRA   PPRB3
+E01E 301F             (ll_startfirst.asm):00035         PPRB2   LEAX  -1,X
+E020 26EF             (ll_startfirst.asm):00036                 BNE   PPRB
+E022 12               (ll_startfirst.asm):00037         PPRB3   NOP
+                      (ll_startfirst.asm):00038         
+                      (ll_startfirst.asm):00039         ; Tests identical to trace_all.asm (abbreviated for brevity):
+E023 8EE07C           (ll_startfirst.asm):00040                 LDX   #S_BEQ
+E026 170034           (ll_startfirst.asm):00041                 LBSR  PRNT
+E029 8604             (ll_startfirst.asm):00042                 LDA   #EQU_Z
+E02B 8A50             (ll_startfirst.asm):00043                 ORA   #EQU_DI
+                      (ll_startfirst.asm):00044                 SETCC
+E02D 3402             (            SETCC):00001                 PSHS  A
+E02F 3501             (            SETCC):00002                 PULS  CC
+E031 2708             (ll_startfirst.asm):00045                 BEQ   BEQ_T
+E033 8EE075           (ll_startfirst.asm):00046                 LDX   #S_N
+E036 170024           (ll_startfirst.asm):00047                 LBSR  PRNT
+E039 2006             (ll_startfirst.asm):00048                 BRA   BEQ_NEXT
+E03B 8EE06E           (ll_startfirst.asm):00049         BEQ_T   LDX   #S_T
+E03E 17001C           (ll_startfirst.asm):00050                 LBSR  PRNT
+E041 12               (ll_startfirst.asm):00051         BEQ_NEXT NOP
                       (ll_startfirst.asm):00052         
-E040 20FE             (ll_startfirst.asm):00053         DONE    BRA   DONE
+                      (ll_startfirst.asm):00053                 ; ... replicate the rest from trace_all.asm as needed ...
                       (ll_startfirst.asm):00054         
-                      (ll_startfirst.asm):00055         ; --- Subroutines after START ---
-E042 3412             (ll_startfirst.asm):00056         TXB     PSHS  A,X
-E044 96FF             (ll_startfirst.asm):00057                 LDA   CONON
-E046 2711             (ll_startfirst.asm):00058                 BEQ   TXRET
-E048 8E00FF           (ll_startfirst.asm):00059                 LDX   #$00FF
-E04B B6FF01           (ll_startfirst.asm):00060         TXW     LDA   CONSTAT
-E04E 8501             (ll_startfirst.asm):00061                 BITA  #TXRDY
-E050 2604             (ll_startfirst.asm):00062                 BNE   TXGO
-E052 301F             (ll_startfirst.asm):00063                 LEAX  -1,X
-E054 26F5             (ll_startfirst.asm):00064                 BNE   TXW
-E056 F7FF00           (ll_startfirst.asm):00065         TXGO    STB   CONDATA
-E059 3592             (ll_startfirst.asm):00066         TXRET   PULS  A,X,PC
-                      (ll_startfirst.asm):00067         
-E05B 3416             (ll_startfirst.asm):00068         PRNT    PSHS  A,B,X
-E05D 96FF             (ll_startfirst.asm):00069                 LDA   CONON
-E05F 2709             (ll_startfirst.asm):00070                 BEQ   PDONE
-E061 E680             (ll_startfirst.asm):00071         PLOOP   LDB   ,X+
-E063 2705             (ll_startfirst.asm):00072                 BEQ   PDONE
-E065 17FFDA           (ll_startfirst.asm):00073                 LBSR  TXB
-E068 20F7             (ll_startfirst.asm):00074                 BRA   PLOOP
-E06A 3596             (ll_startfirst.asm):00075         PDONE   PULS  A,B,X,PC
-                      (ll_startfirst.asm):00076         
-                      (ll_startfirst.asm):00077         ; Strings
-E06C 20545C725C6E     (ll_startfirst.asm):00078         S_T     FCC   " T\r\n"
-E072 00               (ll_startfirst.asm):00079                 FCB   0
-E073 204E5C725C6E     (ll_startfirst.asm):00080         S_N     FCC   " N\r\n"
-E079 00               (ll_startfirst.asm):00081                 FCB   0
-E07A 4245513A         (ll_startfirst.asm):00082         S_BEQ   FCC   "BEQ:"
-E07E 00               (ll_startfirst.asm):00083                 FCB   0
-                      (ll_startfirst.asm):00084         
-                      (ll_startfirst.asm):00085                 ORG   $FFFE
-FFFE E000             (ll_startfirst.asm):00086                 FDB   START
-                      (ll_startfirst.asm):00087         
+E042 20FE             (ll_startfirst.asm):00055         DONE    BRA   DONE
+                      (ll_startfirst.asm):00056         
+                      (ll_startfirst.asm):00057         ; --- Subroutines after START ---
+E044 3412             (ll_startfirst.asm):00058         TXB     PSHS  A,X
+E046 96FF             (ll_startfirst.asm):00059                 LDA   CONON
+E048 2711             (ll_startfirst.asm):00060                 BEQ   TXRET
+E04A 8E00FF           (ll_startfirst.asm):00061                 LDX   #$00FF
+E04D B6FF01           (ll_startfirst.asm):00062         TXW     LDA   CONSTAT
+E050 8501             (ll_startfirst.asm):00063                 BITA  #TXRDY
+E052 2604             (ll_startfirst.asm):00064                 BNE   TXGO
+E054 301F             (ll_startfirst.asm):00065                 LEAX  -1,X
+E056 26F5             (ll_startfirst.asm):00066                 BNE   TXW
+E058 F7FF00           (ll_startfirst.asm):00067         TXGO    STB   CONDATA
+E05B 3592             (ll_startfirst.asm):00068         TXRET   PULS  A,X,PC
+                      (ll_startfirst.asm):00069         
+E05D 3416             (ll_startfirst.asm):00070         PRNT    PSHS  A,B,X
+E05F 96FF             (ll_startfirst.asm):00071                 LDA   CONON
+E061 2709             (ll_startfirst.asm):00072                 BEQ   PDONE
+E063 E680             (ll_startfirst.asm):00073         PLOOP   LDB   ,X+
+E065 2705             (ll_startfirst.asm):00074                 BEQ   PDONE
+E067 17FFDA           (ll_startfirst.asm):00075                 LBSR  TXB
+E06A 20F7             (ll_startfirst.asm):00076                 BRA   PLOOP
+E06C 3596             (ll_startfirst.asm):00077         PDONE   PULS  A,B,X,PC
+                      (ll_startfirst.asm):00078         
+                      (ll_startfirst.asm):00079         ; Strings
+E06E 20545C725C6E     (ll_startfirst.asm):00080         S_T     FCC   " T\r\n"
+E074 00               (ll_startfirst.asm):00081                 FCB   0
+E075 204E5C725C6E     (ll_startfirst.asm):00082         S_N     FCC   " N\r\n"
+E07B 00               (ll_startfirst.asm):00083                 FCB   0
+E07C 4245513A         (ll_startfirst.asm):00084         S_BEQ   FCC   "BEQ:"
+E080 00               (ll_startfirst.asm):00085                 FCB   0
+                      (ll_startfirst.asm):00086         
+                      (ll_startfirst.asm):00087         ; ISR: runs on each timer tick. After 60 ticks, 
+                      (ll_startfirst.asm):00088         ; No action at this time.
+E081 3B               (ll_startfirst.asm):00089         IRQ_ENT RTI
+                      (ll_startfirst.asm):00090         
+                      (ll_startfirst.asm):00091                 ORG   $FFF4
+FFF4 E081             (ll_startfirst.asm):00092                 FDB   IRQ_ENT     ; FIRQ vector
+                      (ll_startfirst.asm):00093                 ORG   $FFF6
+FFF6 E081             (ll_startfirst.asm):00094                 FDB   IRQ_ENT     ; IRQ vector
+                      (ll_startfirst.asm):00095                 ORG   $FFFE
+FFFE E000             (ll_startfirst.asm):00096                 FDB   START
+                      (ll_startfirst.asm):00097         
