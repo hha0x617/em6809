@@ -460,7 +460,7 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                             } else {
                                 current.clone()
                             };
-                            egui::ComboBox::from_id_source("mmu_preset_combo")
+                            egui::ComboBox::from_id_salt("mmu_preset_combo")
                                 .width(180.0)
                                 .selected_text(display_text)
                                 .show_ui(ui, |ui| {

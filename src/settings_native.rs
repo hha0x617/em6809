@@ -510,7 +510,7 @@ impl SettingsNativeApp {
                                 } else {
                                     self.settings.mmu_preset_name.clone()
                                 };
-                                egui::ComboBox::from_id_source("mmu_preset_combo_native")
+                                egui::ComboBox::from_id_salt("mmu_preset_combo_native")
                                     .width(180.0)
                                     .selected_text(current.clone())
                                     .show_ui(ui, |ui| {

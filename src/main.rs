@@ -1155,7 +1155,8 @@ fn main() {
             let mmu_regs_base_copy = mmu_regs_base;
             let boot_script_path_opt = boot_script_path.clone();
             let print_cycles_flag = print_cycles;
-            let cpu_handle = thread::spawn(move || {
+            let spawn_cpu = move || {
+                thread::spawn(move || {
                 // Everything below mirrors the normal run loop path
                 // no remaining step counter in GUI-only mode
                 let mut run_until_target: Option<u16> = None;
@@ -2557,7 +2558,8 @@ fn main() {
                 if print_cycles_flag {
                     println!("cycles: {}", cpu_worker.cycles);
                 }
-            });
+                })
+            };
 
             // Watch for Ctrl+C (SIGINT) and proactively request GUI close
             let viewer_close = viewer_main.clone();
@@ -2567,11 +2569,40 @@ fn main() {
                 }
                 viewer_close.request_close();
             });
-            // Run GUI on main thread (blocks until closed)
-            viewer_main.run_blocking("em6809 - MC6809 Software Emulator");
-            STOP_REQUESTED.store(true, Ordering::SeqCst);
-            let _ = cpu_handle.join();
-            return;
+            #[cfg(target_os = "macos")]
+            {
+                let cpu_handle_cell = std::sync::Arc::new(std::sync::Mutex::new(
+                    None::<std::thread::JoinHandle<()>>,
+                ));
+                let cpu_handle_cell_init = cpu_handle_cell.clone();
+                let init = Box::new(move || {
+                    let handle = spawn_cpu();
+                    if let Ok(mut guard) = cpu_handle_cell_init.lock() {
+                        *guard = Some(handle);
+                    }
+                });
+                // Run GUI on main thread (blocks until closed)
+                viewer_main.run_blocking_with_init(
+                    "em6809 - MC6809 Software Emulator",
+                    Some(init),
+                );
+                STOP_REQUESTED.store(true, Ordering::SeqCst);
+                if let Ok(mut guard) = cpu_handle_cell.lock() {
+                    if let Some(handle) = guard.take() {
+                        let _ = handle.join();
+                    }
+                }
+                return;
+            }
+            #[cfg(all(not(windows), not(target_os = "macos")))]
+            {
+                let cpu_handle = spawn_cpu();
+                // Run GUI on main thread (blocks until closed)
+                viewer_main.run_blocking("em6809 - MC6809 Software Emulator");
+                STOP_REQUESTED.store(true, Ordering::SeqCst);
+                let _ = cpu_handle.join();
+                return;
+            }
         }
     }
 

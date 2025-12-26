@@ -1383,7 +1383,7 @@ pub mod gui {
                                     {
                                         let _ = cc;
                                     }
-                                    Box::new(app)
+                                    Ok(Box::new(app))
                                 }),
                             );
                     }))
@@ -1572,6 +1572,14 @@ pub mod gui {
         }
 
         pub fn run_blocking(&self, title: &str) {
+            self.run_blocking_with_init(title, None);
+        }
+
+        pub fn run_blocking_with_init(
+            &self,
+            title: &str,
+            init: Option<Box<dyn FnOnce() + Send>>,
+        ) {
             let snap_clone = Arc::clone(&self.snapshot);
             let paused_clone = Arc::clone(&self.paused);
             let step_requests_clone = Arc::clone(&self.step_requests);
@@ -1735,25 +1743,47 @@ pub mod gui {
                 console_base: None,
                 dev_tab: DeviceTab::Console,
             };
+            let mut init = init;
             #[cfg(windows)]
             {
                 self.started.store(true, Ordering::SeqCst);
                 self.alive.store(true, Ordering::SeqCst);
-                let _ = eframe::run_native(title, native_options, Box::new(|_| Box::new(app)));
+                let _ = eframe::run_native(
+                    title,
+                    native_options,
+                    Box::new(move |_| {
+                        if let Some(init) = init.take() {
+                            init();
+                        }
+                        Ok(Box::new(app))
+                    }),
+                );
                 self.alive.store(false, Ordering::SeqCst);
                 self.started.store(false, Ordering::SeqCst);
             }
             #[cfg(not(windows))]
             {
                 use std::panic::{catch_unwind, AssertUnwindSafe};
+                #[cfg(not(target_os = "macos"))]
                 let prev = std::panic::take_hook();
+                #[cfg(not(target_os = "macos"))]
                 std::panic::set_hook(Box::new(|_| {}));
                 self.started.store(true, Ordering::SeqCst);
                 self.alive.store(true, Ordering::SeqCst);
                 let res: Result<eframe::Result<(), eframe::Error>, _> =
                     catch_unwind(AssertUnwindSafe(|| {
-                        eframe::run_native(title, native_options, Box::new(|_| Box::new(app)))
+                        eframe::run_native(
+                            title,
+                            native_options,
+                            Box::new(move |_| {
+                                if let Some(init) = init.take() {
+                                    init();
+                                }
+                                Ok(Box::new(app))
+                            }),
+                        )
                     }));
+                #[cfg(not(target_os = "macos"))]
                 std::panic::set_hook(prev);
                 self.alive.store(false, Ordering::SeqCst);
                 self.started.store(false, Ordering::SeqCst);

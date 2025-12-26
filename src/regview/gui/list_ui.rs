@@ -19,7 +19,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.set_min_width(400.0);
-                    ui.style_mut().wrap = Some(false);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 
                     let have_lst = app.lst_mmap.is_some();
                     let have_hex = app.lst_text.is_some();
@@ -73,11 +73,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             policy = 1;
                             app.span_policy.store(1, Ordering::SeqCst);
                         }
-                        ui.add(
-                            egui::DragValue::new(&mut win_len)
-                                .clamp_range(16..=4096)
-                                .speed(1),
-                        );
+                        ui.add(egui::DragValue::new(&mut win_len).range(16..=4096).speed(1));
                         ui.label(fl!(LOADER, "bytes"));
                         if app.window_len.load(Ordering::SeqCst) != win_len {
                             app.window_len.store(win_len, Ordering::SeqCst);
@@ -86,7 +82,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                     egui::ScrollArea::both()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.style_mut().wrap = Some(false);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                             let cur_pc = app.snap.lock().map(|g| g.pc).unwrap_or(0);
                             let pc_hex = format!("{cur_pc:04X}");
                             let mut highlight_rect: Option<egui::Rect> = None;

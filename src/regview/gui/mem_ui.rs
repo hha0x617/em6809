@@ -113,7 +113,7 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                     let resp = ui.add_enabled(
                         !follow_pc,
                         egui::DragValue::new(&mut sv)
-                            .clamp_range(0u16..=0xFFFF)
+                            .range(0u16..=0xFFFF)
                             .speed(16.0),
                     );
                     ui.monospace(format!(" (0x{sv:04X})"));
@@ -156,9 +156,7 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                         app.mem_window_len.load(std::sync::atomic::Ordering::SeqCst);
                     let old = lv;
                     let resp = ui.add(
-                        egui::DragValue::new(&mut lv)
-                            .clamp_range(16..=4096)
-                            .speed(1.0),
+                        egui::DragValue::new(&mut lv).range(16..=4096).speed(1.0),
                     );
                     ui.label(fl!(LOADER, "bytes"));
                     if resp.changed() && lv != old {

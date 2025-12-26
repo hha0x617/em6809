@@ -12,7 +12,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.style_mut().wrap = Some(false);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 let s = *app.snap.lock().unwrap();
                 ui.heading(fl!(LOADER, "registers-heading"));
                 ui.horizontal(|ui| {
