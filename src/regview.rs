@@ -149,7 +149,7 @@ pub mod gui {
         RefreshHexListing,
         GpioSetOut(u32),
         UiSetGpio(bool, u8, u32, u32),
-        UiSetMmu(bool, u8, [u16; 16]),
+        UiSetMmu(bool, u8, [u16; 16], [u16; 16]),
         UiSetTimer(bool, bool, bool),
         UiSetBlockStatus {
             present: bool,
@@ -209,8 +209,10 @@ pub mod gui {
             task: Option<u8>,
             prot: Option<u8>,
             log_maps: Option<bool>,
-            maps: Vec<(usize, u16)>, // (page, frame)
-            attrs: Vec<(usize, u8)>, // (page, attr)
+            maps_sys: Vec<(usize, u16)>, // (page, frame)
+            maps_user: Vec<(usize, u16)>, // (page, frame)
+            attrs_sys: Vec<(usize, u8)>, // (page, attr)
+            attrs_user: Vec<(usize, u8)>, // (page, attr)
         },
         MmuIdentityMap,
         // MMU controls (Phase 2)
@@ -354,8 +356,11 @@ pub mod gui {
         pub mmu_present: bool,
         pub mmu_sys_mode: bool,
         pub mmu_task: u8,
-        pub mmu_map_prev: [u16; 16],
-        pub mmu_map_cur: [u16; 16],
+        pub mmu_map_prev_sys: [u16; 16],
+        pub mmu_map_cur_sys: [u16; 16],
+        pub mmu_map_prev_user: [u16; 16],
+        pub mmu_map_cur_user: [u16; 16],
+        pub mmu_view_sys: bool,
         pub timer_present: bool,
         pub timer_pending: bool,
         pub timer_running: bool,
@@ -556,12 +561,18 @@ pub mod gui {
                             (rgb & 0xFF) as u8,
                         );
                     }
-                    Command::UiSetMmu(sys, task, map) => {
+                    Command::UiSetMmu(sys, task, map_sys, map_user) => {
+                        let first = !self.mmu_present;
                         self.mmu_present = true;
                         self.mmu_sys_mode = sys;
                         self.mmu_task = task;
-                        self.mmu_map_prev = self.mmu_map_cur;
-                        self.mmu_map_cur = map;
+                        self.mmu_map_prev_sys = self.mmu_map_cur_sys;
+                        self.mmu_map_cur_sys = map_sys;
+                        self.mmu_map_prev_user = self.mmu_map_cur_user;
+                        self.mmu_map_cur_user = map_user;
+                        if first {
+                            self.mmu_view_sys = sys;
+                        }
                     }
                     Command::UiSetTimer(present, pending, running) => {
                         self.timer_running = running;
@@ -1342,8 +1353,11 @@ pub mod gui {
                     mmu_present: false,
                     mmu_sys_mode: false,
                     mmu_task: 0,
-                    mmu_map_prev: [0u16; 16],
-                    mmu_map_cur: [0u16; 16],
+                    mmu_map_prev_sys: [0u16; 16],
+                    mmu_map_cur_sys: [0u16; 16],
+                    mmu_map_prev_user: [0u16; 16],
+                    mmu_map_cur_user: [0u16; 16],
+                    mmu_view_sys: false,
                     timer_present: false,
                     timer_pending: false,
                     timer_running: false,
@@ -1726,8 +1740,11 @@ pub mod gui {
                 mmu_present: false,
                 mmu_sys_mode: false,
                 mmu_task: 0,
-                mmu_map_prev: [0u16; 16],
-                mmu_map_cur: [0u16; 16],
+                mmu_map_prev_sys: [0u16; 16],
+                mmu_map_cur_sys: [0u16; 16],
+                mmu_map_prev_user: [0u16; 16],
+                mmu_map_cur_user: [0u16; 16],
+                mmu_view_sys: false,
                 timer_present: false,
                 timer_pending: false,
                 timer_running: false,
@@ -1987,9 +2004,15 @@ pub mod gui {
                 q.push(Command::UiSetGpioOnColor(rgb));
             }
         }
-        pub fn sync_mmu(&self, sys_mode: bool, task: u8, map: [u16; 16]) {
+        pub fn sync_mmu(
+            &self,
+            sys_mode: bool,
+            task: u8,
+            map_sys: [u16; 16],
+            map_user: [u16; 16],
+        ) {
             if let Ok(mut q) = self.cmds.lock() {
-                q.push(Command::UiSetMmu(sys_mode, task, map));
+                q.push(Command::UiSetMmu(sys_mode, task, map_sys, map_user));
             }
         }
         pub fn sync_timer(&self, present: bool, pending: bool, running: bool) {

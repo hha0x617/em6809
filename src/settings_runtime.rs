@@ -179,16 +179,28 @@ pub fn apply_settings_runtime(
         }
     }
 
-    let mut maps: Vec<(usize, u16)> = Vec::new();
-    for (idx, entry) in settings.mmu_map_frames.iter().enumerate() {
+    let mut maps_sys: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in settings.mmu_map_frames_sys.iter().enumerate() {
         if let Some(v) = parse_settings_u16(entry) {
-            maps.push((idx, v));
+            maps_sys.push((idx, v));
         }
     }
-    let mut attrs: Vec<(usize, u8)> = Vec::new();
-    for (idx, entry) in settings.mmu_attr_bytes.iter().enumerate() {
+    let mut maps_user: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in settings.mmu_map_frames_user.iter().enumerate() {
         if let Some(v) = parse_settings_u16(entry) {
-            attrs.push((idx, (v & 0xFF) as u8));
+            maps_user.push((idx, v));
+        }
+    }
+    let mut attrs_sys: Vec<(usize, u8)> = Vec::new();
+    for (idx, entry) in settings.mmu_attr_bytes_sys.iter().enumerate() {
+        if let Some(v) = parse_settings_u16(entry) {
+            attrs_sys.push((idx, (v & 0xFF) as u8));
+        }
+    }
+    let mut attrs_user: Vec<(usize, u8)> = Vec::new();
+    for (idx, entry) in settings.mmu_attr_bytes_user.iter().enumerate() {
+        if let Some(v) = parse_settings_u16(entry) {
+            attrs_user.push((idx, (v & 0xFF) as u8));
         }
     }
     let task_opt = parse_settings_usize(&settings.mmu_task).map(|v| (v as u8) & 0x07);
@@ -200,20 +212,28 @@ pub fn apply_settings_runtime(
         task_opt,
         prot_opt,
         settings.mmu_log_maps,
-        &maps,
-        &attrs,
+        &maps_sys,
+        &maps_user,
+        &attrs_sys,
+        &attrs_user,
     );
 
     if let Some(view) = viewer {
         let push_map = |mmu: &mut Mc6829| {
-            let (mut map, sys, task) = mmu.snapshot_current_map();
-            for (idx, entry) in settings.mmu_attr_bytes.iter().enumerate() {
+            let (mut map_sys, mut map_user, sys, task) = mmu.snapshot_maps();
+            for (idx, entry) in settings.mmu_attr_bytes_sys.iter().enumerate() {
                 if let Some(v) = parse_settings_u16(entry) {
                     let attr = (v & 0xFF) as u16;
-                    map[idx] = (map[idx] & 0x00FF) | (attr << 8);
+                    map_sys[idx] = (map_sys[idx] & 0x00FF) | (attr << 8);
                 }
             }
-            view.sync_mmu(sys, task, map);
+            for (idx, entry) in settings.mmu_attr_bytes_user.iter().enumerate() {
+                if let Some(v) = parse_settings_u16(entry) {
+                    let attr = (v & 0xFF) as u16;
+                    map_user[idx] = (map_user[idx] & 0x00FF) | (attr << 8);
+                }
+            }
+            view.sync_mmu(sys, task, map_sys, map_user);
         };
         if let Some(io_mmu) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
             let inner = io_mmu.inner_any_mut();
@@ -285,16 +305,28 @@ pub fn persist_settings_snapshot(state: &regview::SettingsState, gpio_on_color: 
         rate_hz: parse_settings_u32(&state.timer_rate_hz),
         ips_est: parse_settings_usize(&state.timer_ips).map(|v| v as u64),
     });
-    let mut frames: Vec<(usize, u16)> = Vec::new();
-    for (idx, entry) in state.mmu_map_frames.iter().enumerate() {
+    let mut frames_sys: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in state.mmu_map_frames_sys.iter().enumerate() {
         if let Some(v) = parse_settings_u16(entry) {
-            frames.push((idx, v & 0x00FF));
+            frames_sys.push((idx, v & 0x00FF));
         }
     }
-    let mut attrs: Vec<(usize, u8)> = Vec::new();
-    for (idx, entry) in state.mmu_attr_bytes.iter().enumerate() {
+    let mut frames_user: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in state.mmu_map_frames_user.iter().enumerate() {
         if let Some(v) = parse_settings_u16(entry) {
-            attrs.push((idx, (v & 0xFF) as u8));
+            frames_user.push((idx, v & 0x00FF));
+        }
+    }
+    let mut attrs_sys: Vec<(usize, u8)> = Vec::new();
+    for (idx, entry) in state.mmu_attr_bytes_sys.iter().enumerate() {
+        if let Some(v) = parse_settings_u16(entry) {
+            attrs_sys.push((idx, (v & 0xFF) as u8));
+        }
+    }
+    let mut attrs_user: Vec<(usize, u8)> = Vec::new();
+    for (idx, entry) in state.mmu_attr_bytes_user.iter().enumerate() {
+        if let Some(v) = parse_settings_u16(entry) {
+            attrs_user.push((idx, (v & 0xFF) as u8));
         }
     }
     p.mmu = Some(prefs::Mmu {
@@ -306,8 +338,12 @@ pub fn persist_settings_snapshot(state: &regview::SettingsState, gpio_on_color: 
         prot: parse_settings_u16(&state.mmu_prot_hex).map(|v| (v & 0xFF) as u8),
         protect_vectors: Some(state.protect_vectors),
         log_maps: Some(state.mmu_log_maps),
-        map_frames: Some(frames),
-        attr_bytes: Some(attrs),
+        map_frames: None,
+        attr_bytes: None,
+        map_frames_sys: Some(frames_sys),
+        map_frames_user: Some(frames_user),
+        attr_bytes_sys: Some(attrs_sys),
+        attr_bytes_user: Some(attrs_user),
         preset_name: if state.mmu_preset_name.is_empty() {
             None
         } else {
@@ -584,25 +620,36 @@ fn apply_mmu_config(
     task: Option<u8>,
     prot: Option<u8>,
     log_maps: bool,
-    maps: &[(usize, u16)],
-    attrs: &[(usize, u8)],
+    maps_sys: &[(usize, u16)],
+    maps_user: &[(usize, u16)],
+    attrs_sys: &[(usize, u8)],
+    attrs_user: &[(usize, u8)],
 ) {
     let apply = |mmu: &mut Mc6829| {
         mmu.set_log_maps(log_maps);
         if let Some(t) = task {
             mmu.write8(mmu.regs_base + 0x10, t & 0x07);
         }
-        mmu.write8(mmu.regs_base + 0x11, if sys_mode { 1 } else { 0 });
         if let Some(p) = prot {
             mmu.write8(mmu.regs_base + 0x12, p);
         }
-        for (pg, fr) in maps {
+        mmu.write8(mmu.regs_base + 0x11, 0x01);
+        for (pg, fr) in maps_sys {
             mmu.set_map_entry(*pg, *fr);
         }
-        for (pg, at) in attrs {
+        for (pg, at) in attrs_sys {
             let off = 0x18u16 + (*pg as u16);
             mmu.write8(mmu.regs_base + off, *at);
         }
+        mmu.write8(mmu.regs_base + 0x11, 0x00);
+        for (pg, fr) in maps_user {
+            mmu.set_map_entry(*pg, *fr);
+        }
+        for (pg, at) in attrs_user {
+            let off = 0x18u16 + (*pg as u16);
+            mmu.write8(mmu.regs_base + off, *at);
+        }
+        mmu.write8(mmu.regs_base + 0x11, if sys_mode { 1 } else { 0 });
     };
     if let Some(io_mmu) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
         let inner = io_mmu.inner_any_mut();

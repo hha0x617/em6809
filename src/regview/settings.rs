@@ -40,11 +40,14 @@ pub struct SettingsState {
     pub mmu_regs_base_hex: String,
     pub mmu_phys_bytes: String,
     pub mmu_mode_sys: bool,
+    pub mmu_edit_sys: bool,
     pub mmu_task: String,
     pub mmu_prot_hex: String,
     pub mmu_log_maps: bool,
-    pub mmu_map_frames: [String; 16],
-    pub mmu_attr_bytes: [String; 16],
+    pub mmu_map_frames_sys: [String; 16],
+    pub mmu_map_frames_user: [String; 16],
+    pub mmu_attr_bytes_sys: [String; 16],
+    pub mmu_attr_bytes_user: [String; 16],
     pub mmu_preset_name: String,
 }
 

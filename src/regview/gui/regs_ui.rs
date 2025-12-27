@@ -567,23 +567,36 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     }
                                     ui.monospace(format!(" TASK {}", app.mmu_task));
                                 });
+                                ui.horizontal(|ui| {
+                                    ui.label("View:");
+                                    ui.radio_value(&mut app.mmu_view_sys, true, "SYS");
+                                    ui.radio_value(&mut app.mmu_view_sys, false, "USR");
+                                });
                                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                                let (map_cur, map_prev) = if app.mmu_view_sys {
+                                    (app.mmu_map_cur_sys, app.mmu_map_prev_sys)
+                                } else {
+                                    (app.mmu_map_cur_user, app.mmu_map_prev_user)
+                                };
                                 egui::Grid::new("mmu_map_grid")
                                     .min_col_width(20.0)
                                     .spacing(egui::vec2(10.0, 8.0))
                                     .show(ui, |ui| {
                                         for i in 0..16 {
                                             // map_cur packs frame in low byte, attr in high byte
-                                            let frame = (app.mmu_map_cur[i] & 0x00FF) as u8;
-                                            let mut attr = (app.mmu_map_cur[i] >> 8) as u8;
+                                            let frame = (map_cur[i] & 0x00FF) as u8;
+                                            let mut attr = (map_cur[i] >> 8) as u8;
                                             if attr == 0 {
-                                                if let Some(v) =
-                                                    parse_u16_any(&app.settings.mmu_attr_bytes[i])
-                                                {
+                                                let attr_source = if app.mmu_view_sys {
+                                                    &app.settings.mmu_attr_bytes_sys
+                                                } else {
+                                                    &app.settings.mmu_attr_bytes_user
+                                                };
+                                                if let Some(v) = parse_u16_any(&attr_source[i]) {
                                                     attr = (v & 0xFF) as u8;
                                                 }
                                             }
-                                            let changed = app.mmu_map_prev[i] != app.mmu_map_cur[i];
+                                            let changed = map_prev[i] != map_cur[i];
                                             let wp = if (attr & 0x01) != 0 { 'W' } else { '_' };
                                             let rp = if (attr & 0x02) != 0 { 'R' } else { '_' };
                                             let nx = if (attr & 0x04) != 0 { 'X' } else { '_' };

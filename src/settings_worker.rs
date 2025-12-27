@@ -207,16 +207,28 @@ pub fn persist_settings_snapshot(state: &SettingsState, gpio_on_color: u32) {
         rate_hz: parse_u32_any(&state.timer_rate_hz),
         ips_est: parse_usize_any(&state.timer_ips).map(|v| v as u64),
     });
-    let mut frames: Vec<(usize, u16)> = Vec::new();
-    for (idx, entry) in state.mmu_map_frames.iter().enumerate() {
+    let mut frames_sys: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in state.mmu_map_frames_sys.iter().enumerate() {
         if let Some(v) = parse_u16_any(entry) {
-            frames.push((idx, v));
+            frames_sys.push((idx, v));
         }
     }
-    let mut attrs: Vec<(usize, u8)> = Vec::new();
-    for (idx, entry) in state.mmu_attr_bytes.iter().enumerate() {
+    let mut frames_user: Vec<(usize, u16)> = Vec::new();
+    for (idx, entry) in state.mmu_map_frames_user.iter().enumerate() {
         if let Some(v) = parse_u16_any(entry) {
-            attrs.push((idx, (v & 0xFF) as u8));
+            frames_user.push((idx, v));
+        }
+    }
+    let mut attrs_sys: Vec<(usize, u8)> = Vec::new();
+    for (idx, entry) in state.mmu_attr_bytes_sys.iter().enumerate() {
+        if let Some(v) = parse_u16_any(entry) {
+            attrs_sys.push((idx, (v & 0xFF) as u8));
+        }
+    }
+    let mut attrs_user: Vec<(usize, u8)> = Vec::new();
+    for (idx, entry) in state.mmu_attr_bytes_user.iter().enumerate() {
+        if let Some(v) = parse_u16_any(entry) {
+            attrs_user.push((idx, (v & 0xFF) as u8));
         }
     }
     p.mmu = Some(prefs::Mmu {
@@ -228,8 +240,12 @@ pub fn persist_settings_snapshot(state: &SettingsState, gpio_on_color: u32) {
         prot: parse_u16_any(&state.mmu_prot_hex).map(|v| (v & 0xFF) as u8),
         protect_vectors: None,
         log_maps: Some(state.mmu_log_maps),
-        map_frames: Some(frames),
-        attr_bytes: Some(attrs),
+        map_frames: None,
+        attr_bytes: None,
+        map_frames_sys: Some(frames_sys),
+        map_frames_user: Some(frames_user),
+        attr_bytes_sys: Some(attrs_sys),
+        attr_bytes_user: Some(attrs_user),
         preset_name: if state.mmu_preset_name.trim().is_empty() {
             None
         } else {

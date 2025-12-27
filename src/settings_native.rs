@@ -443,6 +443,19 @@ impl SettingsNativeApp {
                                 );
                             });
                             ui.horizontal(|ui| {
+                                ui.label(fl!(LOADER, "mmu-edit-target"));
+                                ui.radio_value(
+                                    &mut self.settings.mmu_edit_sys,
+                                    true,
+                                    fl!(LOADER, "system-mode"),
+                                );
+                                ui.radio_value(
+                                    &mut self.settings.mmu_edit_sys,
+                                    false,
+                                    fl!(LOADER, "user-mode"),
+                                );
+                            });
+                            ui.horizontal(|ui| {
                                 ui.checkbox(
                                     &mut self.settings.protect_vectors,
                                     fl!(LOADER, "protect-vectors"),
@@ -463,6 +476,11 @@ impl SettingsNativeApp {
                                 draw_origin_badge(ui, &self.settings_origins, "mmu.prot");
                             });
                             ui.add_space(4.0);
+                            let map_frames = if self.settings.mmu_edit_sys {
+                                &mut self.settings.mmu_map_frames_sys
+                            } else {
+                                &mut self.settings.mmu_map_frames_user
+                            };
                             egui::Grid::new("mmu_map_grid_native")
                                 .num_columns(4)
                                 .show(ui, |ui| {
@@ -471,9 +489,7 @@ impl SettingsNativeApp {
                                             let p = row * 4 + col;
                                             ui.monospace(format!("P{:X}", p));
                                             ui.add(
-                                                egui::TextEdit::singleline(
-                                                    &mut self.settings.mmu_map_frames[p],
-                                                )
+                                                egui::TextEdit::singleline(&mut map_frames[p])
                                                 .desired_width(60.0)
                                                 .hint_text("0x00"),
                                             );
@@ -483,6 +499,11 @@ impl SettingsNativeApp {
                                 });
                             ui.add_space(6.0);
                             ui.label(fl!(LOADER, "attributes-note"));
+                            let attr_bytes = if self.settings.mmu_edit_sys {
+                                &mut self.settings.mmu_attr_bytes_sys
+                            } else {
+                                &mut self.settings.mmu_attr_bytes_user
+                            };
                             egui::Grid::new("mmu_attr_grid_native")
                                 .num_columns(4)
                                 .show(ui, |ui| {
@@ -491,9 +512,7 @@ impl SettingsNativeApp {
                                             let p = row * 4 + col;
                                             ui.monospace(format!("P{:X}", p));
                                             ui.add(
-                                                egui::TextEdit::singleline(
-                                                    &mut self.settings.mmu_attr_bytes[p],
-                                                )
+                                                egui::TextEdit::singleline(&mut attr_bytes[p])
                                                 .desired_width(60.0)
                                                 .hint_text("0x00"),
                                             );

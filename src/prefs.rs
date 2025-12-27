@@ -74,6 +74,10 @@ pub struct Mmu {
     pub log_maps: Option<bool>,
     pub map_frames: Option<Vec<(usize, u16)>>,
     pub attr_bytes: Option<Vec<(usize, u8)>>,
+    pub map_frames_sys: Option<Vec<(usize, u16)>>,
+    pub map_frames_user: Option<Vec<(usize, u16)>>,
+    pub attr_bytes_sys: Option<Vec<(usize, u8)>>,
+    pub attr_bytes_user: Option<Vec<(usize, u8)>>,
     pub preset_name: Option<String>,
 }
 
@@ -200,8 +204,12 @@ mod tests {
             prot: Some(0x03),
             protect_vectors: Some(true),
             log_maps: Some(true),
-            map_frames: Some(frames),
-            attr_bytes: Some(attrs),
+            map_frames: None,
+            attr_bytes: None,
+            map_frames_sys: Some(frames.clone()),
+            map_frames_user: Some(frames),
+            attr_bytes_sys: Some(attrs.clone()),
+            attr_bytes_user: Some(attrs),
             preset_name: Some("os9l2".into()),
         });
 
@@ -222,7 +230,7 @@ mod tests {
             .mmu
             .as_ref()
             .unwrap()
-            .map_frames
+            .map_frames_sys
             .as_ref()
             .unwrap()
             .contains(&(0, 0x003F)));
@@ -230,7 +238,7 @@ mod tests {
             .mmu
             .as_ref()
             .unwrap()
-            .attr_bytes
+            .attr_bytes_sys
             .as_ref()
             .unwrap()
             .contains(&(0, 0x01)));

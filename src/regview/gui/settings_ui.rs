@@ -353,6 +353,19 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                             ui.checkbox(&mut app.settings.mmu_log_maps, fl!(LOADER, "log-maps"));
                         });
                         ui.horizontal(|ui| {
+                            ui.label(fl!(LOADER, "mmu-edit-target"));
+                            ui.radio_value(
+                                &mut app.settings.mmu_edit_sys,
+                                true,
+                                fl!(LOADER, "system-mode"),
+                            );
+                            ui.radio_value(
+                                &mut app.settings.mmu_edit_sys,
+                                false,
+                                fl!(LOADER, "user-mode"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
                             ui.checkbox(
                                 &mut app.settings.protect_vectors,
                                 fl!(LOADER, "protect-vectors"),
@@ -377,6 +390,11 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                         ui.label(fl!(LOADER, "mmu-map-heading"));
                         let map_width = 42.0;
                         let map_grid_width = 200.0;
+                        let map_frames = if app.settings.mmu_edit_sys {
+                            &mut app.settings.mmu_map_frames_sys
+                        } else {
+                            &mut app.settings.mmu_map_frames_user
+                        };
                         ui.scope(|ui| {
                             ui.set_width(map_grid_width);
                             egui::Grid::new("mmu_map_grid")
@@ -393,7 +411,7 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                                 let resp = ui.add_sized(
                                                     (map_width, h + 6.0),
                                                     egui::TextEdit::singleline(
-                                                        &mut app.settings.mmu_map_frames[p],
+                                                        &mut map_frames[p],
                                                     )
                                                     .hint_text("0x00")
                                                     .char_limit(4),
@@ -401,12 +419,11 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                                 resp
                                             });
                                             if cell_resp.response.changed() {
-                                                let txt = app.settings.mmu_map_frames[p].trim();
+                                                let txt = map_frames[p].trim();
                                                 if let Some(v) = parse_u8_hex(txt) {
-                                                    app.settings.mmu_map_frames[p] =
-                                                        format!("{:02X}", v);
+                                                    map_frames[p] = format!("{:02X}", v);
                                                 } else if !txt.is_empty() {
-                                                    app.settings.mmu_map_frames[p].clear();
+                                                    map_frames[p].clear();
                                                 }
                                             }
                                         }
@@ -418,6 +435,11 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                         ui.label(fl!(LOADER, "attributes-note"));
                         let attr_width = 42.0;
                         let attr_grid_width = 200.0;
+                        let attr_bytes = if app.settings.mmu_edit_sys {
+                            &mut app.settings.mmu_attr_bytes_sys
+                        } else {
+                            &mut app.settings.mmu_attr_bytes_user
+                        };
                         ui.scope(|ui| {
                             ui.set_width(attr_grid_width);
                             egui::Grid::new("mmu_attr_grid")
@@ -434,7 +456,7 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                                 ui.add_sized(
                                                     (attr_width, h + 6.0),
                                                     egui::TextEdit::singleline(
-                                                        &mut app.settings.mmu_attr_bytes[p],
+                                                        &mut attr_bytes[p],
                                                     )
                                                     .hint_text("0x00"),
                                                 );

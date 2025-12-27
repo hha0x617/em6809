@@ -11,7 +11,8 @@ pub struct Mc6829 {
     pub task: u8,                                // current task (0..7)
     map_user: [[u16; NUM_LOG_PAGES]; NUM_TASKS], // user map
     map_sys: [[u16; NUM_LOG_PAGES]; NUM_TASKS],  // system map
-    attr: [[u8; NUM_LOG_PAGES]; NUM_TASKS], // per-page attributes: bit0=WPROT, bit1=RPROT, bit2=NX
+    attr_user: [[u8; NUM_LOG_PAGES]; NUM_TASKS], // per-page attributes: bit0=WPROT, bit1=RPROT, bit2=NX
+    attr_sys: [[u8; NUM_LOG_PAGES]; NUM_TASKS],
     sys_mode: bool,                         // false=user, true=system
     prot_ctrl: u8, // bit0=WPROT_EN, bit1=IRQ on fault, bit2=RPROT_EN, bit3=NX_EN, bit4=FIRQ on fault
     fault_status: u8, // bit0=WPROT, bit1=RPROT, bit2=NX
@@ -27,7 +28,8 @@ impl Mc6829 {
             task: 0,
             map_user: [[0; NUM_LOG_PAGES]; NUM_TASKS],
             map_sys: [[0; NUM_LOG_PAGES]; NUM_TASKS],
-            attr: [[0; NUM_LOG_PAGES]; NUM_TASKS],
+            attr_user: [[0; NUM_LOG_PAGES]; NUM_TASKS],
+            attr_sys: [[0; NUM_LOG_PAGES]; NUM_TASKS],
             sys_mode: false,
             prot_ctrl: 0,
             fault_status: 0,
@@ -85,14 +87,44 @@ impl Mc6829 {
             } else {
                 self.map_user[t][i]
             } & 0x00FF;
-            let attr = self.attr[t][i] as u16;
+            let attr = if self.sys_mode {
+                self.attr_sys[t][i]
+            } else {
+                self.attr_user[t][i]
+            } as u16;
             out[i] = frame | (attr << 8);
         }
         (out, self.sys_mode, self.task)
     }
 
+    pub fn snapshot_map_for(&self, sys_mode: bool) -> [u16; NUM_LOG_PAGES] {
+        let t = self.task as usize;
+        let mut out = [0u16; NUM_LOG_PAGES];
+        for i in 0..NUM_LOG_PAGES {
+            let frame = if sys_mode {
+                self.map_sys[t][i]
+            } else {
+                self.map_user[t][i]
+            } & 0x00FF;
+            let attr = if sys_mode {
+                self.attr_sys[t][i]
+            } else {
+                self.attr_user[t][i]
+            } as u16;
+            out[i] = frame | (attr << 8);
+        }
+        out
+    }
+
+    pub fn snapshot_maps(&self) -> ([u16; NUM_LOG_PAGES], [u16; NUM_LOG_PAGES], bool, u8) {
+        let sys = self.snapshot_map_for(true);
+        let user = self.snapshot_map_for(false);
+        (sys, user, self.sys_mode, self.task)
+    }
+
     fn in_regs(&self, addr: u16) -> bool {
-        addr.wrapping_sub(self.regs_base) < 0x20
+        // MMU regs: 0x00..0x0F map, 0x10..0x13 ctrl/fault, 0x18..0x27 attr
+        addr.wrapping_sub(self.regs_base) < 0x28
     }
 
     fn regs_read(&mut self, addr: u16) -> u8 {
@@ -124,7 +156,11 @@ impl Mc6829 {
             }
             0x18..=0x27 => {
                 let page = (off - 0x18) as usize;
-                self.attr[self.task as usize][page]
+                if self.sys_mode {
+                    self.attr_sys[self.task as usize][page]
+                } else {
+                    self.attr_user[self.task as usize][page]
+                }
             }
             _ => 0xFF,
         }
@@ -148,7 +184,11 @@ impl Mc6829 {
             }
             0x18..=0x27 => {
                 let page = (off - 0x18) as usize;
-                self.attr[self.task as usize][page] = data;
+                if self.sys_mode {
+                    self.attr_sys[self.task as usize][page] = data;
+                } else {
+                    self.attr_user[self.task as usize][page] = data;
+                }
             }
             _ => {}
         }
@@ -184,6 +224,10 @@ impl Mc6829 {
             self.phys[pbase..end].copy_from_slice(bytes);
         }
     }
+
+    pub fn clear_physical(&mut self, value: u8) {
+        self.phys.fill(value);
+    }
 }
 
 impl Bus for Mc6829 {
@@ -194,7 +238,11 @@ impl Bus for Mc6829 {
         if let Some(paddr) = self.translate(addr) {
             // RPROT enforcement (data read)
             let page = (addr as usize) >> PAGE_SHIFT;
-            let attr = self.attr[self.task as usize][page];
+            let attr = if self.sys_mode {
+                self.attr_sys[self.task as usize][page]
+            } else {
+                self.attr_user[self.task as usize][page]
+            };
             let rprot_on = (self.prot_ctrl & 0x04) != 0 && (attr & 0x02) != 0;
             if rprot_on {
                 self.fault_status |= 0x02;
@@ -212,7 +260,11 @@ impl Bus for Mc6829 {
         if let Some(paddr) = self.translate(addr) {
             // NX enforcement (instruction fetch)
             let page = (addr as usize) >> PAGE_SHIFT;
-            let attr = self.attr[self.task as usize][page];
+            let attr = if self.sys_mode {
+                self.attr_sys[self.task as usize][page]
+            } else {
+                self.attr_user[self.task as usize][page]
+            };
             let nx_on = (self.prot_ctrl & 0x08) != 0 && (attr & 0x04) != 0;
             if nx_on {
                 self.fault_status |= 0x04;
@@ -231,7 +283,11 @@ impl Bus for Mc6829 {
         if let Some(paddr) = self.translate(addr) {
             // Write-protect enforcement
             let page = (addr as usize) >> PAGE_SHIFT;
-            let attr = self.attr[self.task as usize][page];
+            let attr = if self.sys_mode {
+                self.attr_sys[self.task as usize][page]
+            } else {
+                self.attr_user[self.task as usize][page]
+            };
             let wprot = (self.prot_ctrl & 0x01) != 0 && (attr & 0x01) != 0;
             if wprot {
                 self.fault_status |= 0x01;

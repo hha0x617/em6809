@@ -21,6 +21,9 @@ impl Memory {
     pub fn new() -> Self {
         Self { data: [0; 0x10000] }
     }
+    pub fn clear(&mut self, value: u8) {
+        self.data.fill(value);
+    }
     pub fn load_slice(&mut self, base: u16, bytes: &[u8]) {
         let start = base as usize;
         let end = (base as usize).saturating_add(bytes.len()).min(0x10000);

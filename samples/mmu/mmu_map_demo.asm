@@ -30,7 +30,8 @@ PROT_FLAGS  EQU   $0B               ; WPROT_EN + IRQ on fault + NX_EN
 
         ORG   $E000
 
-START   JSR   INIT_MMU
+START   LDS   #$E1FF
+        JSR   INIT_MMU
         LDX   #MSG_HELLO
         JSR   PRINT_STR
 
@@ -44,6 +45,7 @@ START   JSR   INIT_MMU
         JSR   SHOW_VIEW
 
         ; Write-protect demo on vectors page
+        CLR   MMU_MODE
         JSR   TEST_WPROT
 
 HALT    BRA   HALT
@@ -95,6 +97,8 @@ TEST_WPROT
         PSHS  A,B,X
         LDX   #MSG_WPROT
         JSR   PRINT_STR
+        LDA   #$01
+        STA   MMU_ATTR+PAGE_VECT
         LDA   #$55
         STA   $FFF0               ; falls in vectors page ($0F), WPROT triggers
         LDA   MMU_FAULT           ; read & clear fault bits

@@ -11,12 +11,14 @@ pub struct BusOptions {
     pub mmu_task: u8,
     pub mmu_idmap: bool,
     pub mmu_log_maps: bool,
-    pub mmu_maps: Vec<(usize, u16)>,
+    pub mmu_maps_sys: Vec<(usize, u16)>,
+    pub mmu_maps_user: Vec<(usize, u16)>,
     pub mmu_map_file: Option<String>,
     pub preset_name: Option<String>,
     pub mmu_mode_sys: Option<bool>,
     pub mmu_prot: Option<u8>,
-    pub mmu_attrs: Vec<(usize, u8)>,
+    pub mmu_attrs_sys: Vec<(usize, u8)>,
+    pub mmu_attrs_user: Vec<(usize, u8)>,
     pub protect_vectors: bool,
     pub console_base: Option<u16>,
     pub console_rx_wm: Option<usize>,
@@ -87,8 +89,19 @@ pub fn build_bus(mut opts: BusOptions) -> Option<(Box<dyn Bus>, Option<u16>)> {
         if opts.mmu_idmap {
             mmu.identity_map_current();
         }
-        for (p, f) in &opts.mmu_maps {
+        mmu.write8(mmu.regs_base + 0x11, 0x01);
+        for (p, f) in &opts.mmu_maps_sys {
             mmu.set_map_entry(*p, *f);
+        }
+        for (pg, val) in &opts.mmu_attrs_sys {
+            mmu.write8(mmu.regs_base + 0x18 + (*pg as u16), *val);
+        }
+        mmu.write8(mmu.regs_base + 0x11, 0x00);
+        for (p, f) in &opts.mmu_maps_user {
+            mmu.set_map_entry(*p, *f);
+        }
+        for (pg, val) in &opts.mmu_attrs_user {
+            mmu.write8(mmu.regs_base + 0x18 + (*pg as u16), *val);
         }
         if let Some(path) = &opts.mmu_map_file {
             match std::fs::read_to_string(path) {
@@ -123,12 +136,14 @@ pub fn build_bus(mut opts: BusOptions) -> Option<(Box<dyn Bus>, Option<u16>)> {
         if let Some(p) = opts.mmu_prot {
             mmu.write8(mmu.regs_base + 0x12, p);
         }
-        for (pg, val) in &opts.mmu_attrs {
-            mmu.write8(mmu.regs_base + 0x18 + (*pg as u16), *val);
-        }
         if opts.protect_vectors {
+            let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
             mmu.write8(mmu.regs_base + 0x12, 0x03);
+            mmu.write8(mmu.regs_base + 0x11, 0x01);
             mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01);
+            mmu.write8(mmu.regs_base + 0x11, 0x00);
+            mmu.write8(mmu.regs_base + 0x18 + 0x0F, 0x01);
+            mmu.write8(mmu.regs_base + 0x11, prev_mode);
         }
         let need_iobus = opts.console_base.is_some()
             || opts.block_base.is_some()

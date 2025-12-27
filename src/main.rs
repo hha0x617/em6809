@@ -148,6 +148,48 @@ mod signals {
     } // SIGINT=2
 }
 
+fn clear_logical_memory(bus: &mut dyn Bus) {
+    if let Some(io_mmu) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+        let inner = io_mmu.inner_any_mut();
+        if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+            mmu.clear_physical(0);
+            return;
+        }
+        if let Some(mem) = inner.downcast_mut::<Memory>() {
+            mem.clear(0);
+            return;
+        }
+    } else if let Some(mmu) = bus.as_any_mut().downcast_mut::<Mc6829>() {
+        mmu.clear_physical(0);
+        return;
+    } else if let Some(mem) = bus.as_any_mut().downcast_mut::<Memory>() {
+        mem.clear(0);
+        return;
+    } else if let Some(wt) = bus.as_any_mut().downcast_mut::<bus::WriteTrack>() {
+        let inner = wt.inner_any_mut();
+        if let Some(io_mmu) = inner.downcast_mut::<IoBus<Mc6829>>() {
+            let inner2 = io_mmu.inner_any_mut();
+            if let Some(mmu) = inner2.downcast_mut::<Mc6829>() {
+                mmu.clear_physical(0);
+                return;
+            }
+            if let Some(mem) = inner2.downcast_mut::<Memory>() {
+                mem.clear(0);
+                return;
+            }
+        } else if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+            mmu.clear_physical(0);
+            return;
+        } else if let Some(mem) = inner.downcast_mut::<Memory>() {
+            mem.clear(0);
+            return;
+        }
+    }
+    for addr in 0u32..=0xFFFF {
+        bus.write8(addr as u16, 0);
+    }
+}
+
 fn main() {
     // Initialize i18n (Fluent) from environment/OS locale
     i18n::init_from_env();
@@ -249,6 +291,11 @@ fn main() {
         mut debug_settings_log,
         mut debug_show_settings_origins,
     } = cli_opts;
+
+    let mut mmu_maps_sys: Vec<(usize, u16)> = Vec::new();
+    let mut mmu_maps_user: Vec<(usize, u16)> = Vec::new();
+    let mut mmu_attrs_sys: Vec<(usize, u8)> = Vec::new();
+    let mut mmu_attrs_user: Vec<(usize, u8)> = Vec::new();
 
     // Debug toggles initial state from env/CLI
     if env::var("EM6809_SETTINGS_DEBUG")
@@ -418,23 +465,61 @@ fn main() {
         if !mmu_log_maps {
             mmu_log_maps = m.log_maps.unwrap_or(false);
         }
-        if mmu_maps.is_empty() {
-            if let Some(frames) = &m.map_frames {
+        if mmu_maps_sys.is_empty() {
+            if let Some(frames) = &m.map_frames_sys {
                 for (i, f) in frames {
-                    mmu_maps.push((*i, *f));
+                    mmu_maps_sys.push((*i, *f));
                 }
             }
         }
-        if mmu_attrs.is_empty() {
+        if mmu_maps_user.is_empty() {
+            if let Some(frames) = &m.map_frames_user {
+                for (i, f) in frames {
+                    mmu_maps_user.push((*i, *f));
+                }
+            }
+        }
+        if mmu_attrs_sys.is_empty() {
+            if let Some(attrs) = &m.attr_bytes_sys {
+                for (i, a) in attrs {
+                    mmu_attrs_sys.push((*i, *a));
+                }
+            }
+        }
+        if mmu_attrs_user.is_empty() {
+            if let Some(attrs) = &m.attr_bytes_user {
+                for (i, a) in attrs {
+                    mmu_attrs_user.push((*i, *a));
+                }
+            }
+        }
+        if mmu_maps_sys.is_empty() && mmu_maps_user.is_empty() {
+            if let Some(frames) = &m.map_frames {
+                for (i, f) in frames {
+                    mmu_maps_sys.push((*i, *f));
+                    mmu_maps_user.push((*i, *f));
+                }
+            }
+        }
+        if mmu_attrs_sys.is_empty() && mmu_attrs_user.is_empty() {
             if let Some(attrs) = &m.attr_bytes {
                 for (i, a) in attrs {
-                    mmu_attrs.push((*i, *a));
+                    mmu_attrs_sys.push((*i, *a));
+                    mmu_attrs_user.push((*i, *a));
                 }
             }
         }
         if preset_name.is_none() {
             preset_name = m.preset_name.clone();
         }
+    }
+    if !mmu_maps.is_empty() {
+        mmu_maps_sys = mmu_maps.clone();
+        mmu_maps_user = mmu_maps.clone();
+    }
+    if !mmu_attrs.is_empty() {
+        mmu_attrs_sys = mmu_attrs.clone();
+        mmu_attrs_user = mmu_attrs.clone();
     }
     if let Some(d) = &persisted.debug {
         debug_console_log = d.console_log.unwrap_or(debug_console_log);
@@ -478,12 +563,14 @@ fn main() {
         mmu_task,
         mmu_idmap,
         mmu_log_maps,
-        mmu_maps: mmu_maps.clone(),
+        mmu_maps_sys: mmu_maps_sys.clone(),
+        mmu_maps_user: mmu_maps_user.clone(),
         mmu_map_file: mmu_map_file.clone(),
         preset_name: preset_name.clone(),
         mmu_mode_sys,
         mmu_prot,
-        mmu_attrs: mmu_attrs.clone(),
+        mmu_attrs_sys: mmu_attrs_sys.clone(),
+        mmu_attrs_user: mmu_attrs_user.clone(),
         protect_vectors,
         console_base,
         console_rx_wm,
@@ -564,7 +651,18 @@ fn main() {
     let reset_pc = cpu.r.pc;
     if let Some(pc) = force_pc {
         cpu.set_pc(pc);
-    } else if let Some(entry) = loaded.entry {
+    } else if let Some(entry) = loaded.entry.and_then(|e| {
+        if e == 0x0000
+            && !loaded
+                .loaded_ranges
+                .iter()
+                .any(|(s, e2)| *s <= e && e < *e2)
+        {
+            None
+        } else {
+            Some(e)
+        }
+    }) {
         if reset_pc == 0x0000 || reset_pc == 0xFFFF {
             cpu.set_pc(entry);
         }
@@ -922,6 +1020,7 @@ fn main() {
         s.mmu_regs_base_hex = format!("0x{:04X}", mmu_regs_base);
         s.mmu_phys_bytes = format!("{}", mmu_phys);
         s.mmu_mode_sys = mmu_mode_sys.unwrap_or(false);
+        s.mmu_edit_sys = s.mmu_mode_sys;
         s.mmu_task = format!("{}", mmu_task);
         s.mmu_prot_hex = mmu_prot.map(|v| format!("0x{:02X}", v)).unwrap_or_default();
         s.mmu_log_maps = mmu_log_maps;
@@ -958,11 +1057,17 @@ fn main() {
             cli_mmu_log_maps,
             pm.and_then(|m| m.log_maps).is_some(),
         );
-        for (i, f) in &mmu_maps {
-            s.mmu_map_frames[*i] = format!("0x{:02X}", *f & 0x00FF);
+        for (i, f) in &mmu_maps_sys {
+            s.mmu_map_frames_sys[*i] = format!("0x{:02X}", *f & 0x00FF);
         }
-        for (i, a) in &mmu_attrs {
-            s.mmu_attr_bytes[*i] = format!("0x{:02X}", *a);
+        for (i, f) in &mmu_maps_user {
+            s.mmu_map_frames_user[*i] = format!("0x{:02X}", *f & 0x00FF);
+        }
+        for (i, a) in &mmu_attrs_sys {
+            s.mmu_attr_bytes_sys[*i] = format!("0x{:02X}", *a);
+        }
+        for (i, a) in &mmu_attrs_user {
+            s.mmu_attr_bytes_user[*i] = format!("0x{:02X}", *a);
         }
         s.mmu_preset_name = preset_name.clone().unwrap_or_default();
         // Debug flags
@@ -1004,12 +1109,12 @@ fn main() {
         if let Some(io_mmu) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
             let inner = io_mmu.inner_any_mut();
             if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                let (map, sys, task) = mmu.snapshot_current_map();
-                viewer.sync_mmu(sys, task, map);
+                let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
+                viewer.sync_mmu(sys, task, map_sys, map_user);
             }
         } else if let Some(mmu) = bus.as_mut().as_any_mut().downcast_mut::<Mc6829>() {
-            let (map, sys, task) = mmu.snapshot_current_map();
-            viewer.sync_mmu(sys, task, map);
+            let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
+            viewer.sync_mmu(sys, task, map_sys, map_user);
         }
         // GPIO snapshot from current bus
         let mut pushed_gpio = false;
@@ -1388,10 +1493,8 @@ fn main() {
                                         // Handle file load on worker side (macOS/Linux GUI-main-thread mode)
                                         match std::fs::read(&path) {
                                             Ok(bytes) => {
-                                                // Clear logical memory before loading new image
-                                                for addr in 0u32..=0xFFFF {
-                                                    bus_worker.as_mut().write8(addr as u16, 0);
-                                                }
+                                                // Clear memory without clobbering MMU regs
+                                                clear_logical_memory(bus_worker.as_mut());
                                                 let mut new_loaded = LoadedImage {
                                                     loaded_ranges: Vec::new(),
                                                     entry: None,
@@ -1434,7 +1537,17 @@ fn main() {
                                                     new_pc = Some(vec_pc);
                                                 }
                                                 if new_pc.is_none() {
-                                                    new_pc = new_loaded.entry;
+                                                    new_pc = new_loaded.entry.and_then(|e| {
+                                                        if e == 0x0000
+                                                            && !new_loaded.loaded_ranges.iter().any(
+                                                                |(s, e2)| *s <= e && e < *e2,
+                                                            )
+                                                        {
+                                                            None
+                                                        } else {
+                                                            Some(e)
+                                                        }
+                                                    });
                                                 }
                                                 if new_pc.is_none() {
                                                     if let Some((s, _e)) =
@@ -1711,28 +1824,39 @@ fn main() {
                                         let apply =
                                             |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                                 let _ = em6809::config::apply_preset(mmu, &name);
-                                                let (map, sys, task) = mmu.snapshot_current_map();
+                                                let (map_sys, map_user, sys, task) =
+                                                    mmu.snapshot_maps();
                                                 if let Some(v) = viewer {
-                                                    v.sync_mmu(sys, task, map);
+                                                    v.sync_mmu(sys, task, map_sys, map_user);
                                                 }
                                                 if let Some((mut s, _origins, color_opt)) =
                                                     regview::get_latest_settings_baseline()
                                                 {
                                                     s.use_mmu = true;
                                                     s.mmu_mode_sys = sys;
+                                                    s.mmu_edit_sys = sys;
                                                     s.mmu_task = format!("{}", task & 0x07);
                                                     s.mmu_preset_name = name.clone();
                                                     let prot = mmu.read8(mmu.regs_base + 0x12);
                                                     s.mmu_prot_hex = format!("{:02X}", prot);
-                                                    for (i, f) in map.iter().enumerate() {
-                                                        s.mmu_map_frames[i] =
-                                                            format!("{:02X}", f & 0x00FF);
+                                                    let map_view = if sys { &map_sys } else { &map_user };
+                                                    let map_target = if sys {
+                                                        &mut s.mmu_map_frames_sys
+                                                    } else {
+                                                        &mut s.mmu_map_frames_user
+                                                    };
+                                                    for (i, f) in map_view.iter().enumerate() {
+                                                        map_target[i] = format!("{:02X}", f & 0x00FF);
                                                     }
+                                                    let attr_target = if sys {
+                                                        &mut s.mmu_attr_bytes_sys
+                                                    } else {
+                                                        &mut s.mmu_attr_bytes_user
+                                                    };
                                                     for i in 0..16 {
                                                         let attr = mmu
                                                             .read8(mmu.regs_base + 0x18 + i as u16);
-                                                        s.mmu_attr_bytes[i] =
-                                                            format!("{:02X}", attr);
+                                                        attr_target[i] = format!("{:02X}", attr);
                                                     }
                                                     settings_runtime::publish_settings_baseline(
                                                         &s,
@@ -1781,28 +1905,39 @@ fn main() {
                                                 let _ = em6809::config::apply_mmu_config_from_str(
                                                     mmu, &text,
                                                 );
-                                                let (map, sys, task) = mmu.snapshot_current_map();
+                                                let (map_sys, map_user, sys, task) =
+                                                    mmu.snapshot_maps();
                                                 if let Some(v) = viewer {
-                                                    v.sync_mmu(sys, task, map);
+                                                    v.sync_mmu(sys, task, map_sys, map_user);
                                                 }
                                                 if let Some((mut s, _origins, color_opt)) =
                                                     regview::get_latest_settings_baseline()
                                                 {
                                                     s.use_mmu = true;
                                                     s.mmu_mode_sys = sys;
+                                                    s.mmu_edit_sys = sys;
                                                     s.mmu_task = format!("{}", task & 0x07);
                                                     s.mmu_preset_name.clear();
                                                     let prot = mmu.read8(mmu.regs_base + 0x12);
                                                     s.mmu_prot_hex = format!("{:02X}", prot);
-                                                    for (i, f) in map.iter().enumerate() {
-                                                        s.mmu_map_frames[i] =
-                                                            format!("{:02X}", f & 0x00FF);
+                                                    let map_view = if sys { &map_sys } else { &map_user };
+                                                    let map_target = if sys {
+                                                        &mut s.mmu_map_frames_sys
+                                                    } else {
+                                                        &mut s.mmu_map_frames_user
+                                                    };
+                                                    for (i, f) in map_view.iter().enumerate() {
+                                                        map_target[i] = format!("{:02X}", f & 0x00FF);
                                                     }
+                                                    let attr_target = if sys {
+                                                        &mut s.mmu_attr_bytes_sys
+                                                    } else {
+                                                        &mut s.mmu_attr_bytes_user
+                                                    };
                                                     for i in 0..16 {
                                                         let attr = mmu
                                                             .read8(mmu.regs_base + 0x18 + i as u16);
-                                                        s.mmu_attr_bytes[i] =
-                                                            format!("{:02X}", attr);
+                                                        attr_target[i] = format!("{:02X}", attr);
                                                     }
                                                     settings_runtime::publish_settings_baseline(
                                                         &s,
@@ -1850,32 +1985,46 @@ fn main() {
                                         task,
                                         prot,
                                         log_maps,
-                                        maps,
-                                        attrs,
+                                        maps_sys,
+                                        maps_user,
+                                        attrs_sys,
+                                        attrs_user,
                                     } => {
                                         // Apply settings to whichever MMU backend is active
                                         let apply = |mmu: &mut Mc6829| {
+                                            let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                             if let Some(on) = log_maps {
                                                 mmu.set_log_maps(on);
                                             }
                                             if let Some(t) = task {
                                                 mmu.write8(mmu.regs_base + 0x10, t & 0x07);
                                             }
+                                            if let Some(p) = prot {
+                                                mmu.write8(mmu.regs_base + 0x12, p);
+                                            }
+                                            mmu.write8(mmu.regs_base + 0x11, 0x01);
+                                            for (pg, fr) in &maps_sys {
+                                                mmu.set_map_entry(*pg, *fr);
+                                            }
+                                            for (pg, at) in &attrs_sys {
+                                                let off = 0x18u16 + (*pg as u16);
+                                                mmu.write8(mmu.regs_base + off, *at);
+                                            }
+                                            mmu.write8(mmu.regs_base + 0x11, 0x00);
+                                            for (pg, fr) in &maps_user {
+                                                mmu.set_map_entry(*pg, *fr);
+                                            }
+                                            for (pg, at) in &attrs_user {
+                                                let off = 0x18u16 + (*pg as u16);
+                                                mmu.write8(mmu.regs_base + off, *at);
+                                            }
                                             if let Some(sys) = sys_mode {
                                                 mmu.write8(
                                                     mmu.regs_base + 0x11,
                                                     if sys { 1 } else { 0 },
                                                 );
-                                            }
-                                            if let Some(p) = prot {
-                                                mmu.write8(mmu.regs_base + 0x12, p);
-                                            }
-                                            for (pg, fr) in &maps {
-                                                mmu.set_map_entry(*pg, *fr);
-                                            }
-                                            for (pg, at) in &attrs {
-                                                let off = 0x18u16 + (*pg as u16);
-                                                mmu.write8(mmu.regs_base + off, *at);
+                                            } else {
+                                                mmu.write8(mmu.regs_base + 0x11, prev_mode);
                                             }
                                         };
                                         if let Some(io_mmu) = bus_worker
@@ -2268,14 +2417,14 @@ fn main() {
                         {
                             let inner = io_mmu_io.inner_any_mut();
                             if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                let (map, sys, task) = mmu.snapshot_current_map();
-                                viewer_cpu.sync_mmu(sys, task, map);
+                                let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
+                                viewer_cpu.sync_mmu(sys, task, map_sys, map_user);
                             }
                         } else if let Some(mmu) =
                             bus_worker.as_mut().as_any_mut().downcast_mut::<Mc6829>()
                         {
-                            let (map, sys, task) = mmu.snapshot_current_map();
-                            viewer_cpu.sync_mmu(sys, task, map);
+                            let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
+                            viewer_cpu.sync_mmu(sys, task, map_sys, map_user);
                         }
                         // Timer state
                         let mut t_present = false;
@@ -3108,8 +3257,10 @@ fn main() {
                                 task,
                                 prot,
                                 log_maps,
-                                maps,
-                                attrs,
+                                maps_sys,
+                                maps_user,
+                                attrs_sys,
+                                attrs_user,
                             } => {
                                 // Apply to active MMU if present; use separate scopes to avoid overlapping borrows
                                 {
@@ -3118,27 +3269,40 @@ fn main() {
                                     {
                                         let inner = io_mmu.inner_any_mut();
                                         if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                            let prev_mode =
+                                                mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                             if let Some(on) = log_maps {
                                                 mmu.set_log_maps(on);
                                             }
                                             if let Some(t) = task {
                                                 mmu.write8(mmu.regs_base + 0x10, t & 0x07);
                                             }
+                                            if let Some(p) = prot {
+                                                mmu.write8(mmu.regs_base + 0x12, p);
+                                            }
+                                            mmu.write8(mmu.regs_base + 0x11, 0x01);
+                                            for (pg, fr) in &maps_sys {
+                                                mmu.set_map_entry(*pg, *fr);
+                                            }
+                                            for (pg, at) in &attrs_sys {
+                                                let off = 0x18u16 + (*pg as u16);
+                                                mmu.write8(mmu.regs_base + off, *at);
+                                            }
+                                            mmu.write8(mmu.regs_base + 0x11, 0x00);
+                                            for (pg, fr) in &maps_user {
+                                                mmu.set_map_entry(*pg, *fr);
+                                            }
+                                            for (pg, at) in &attrs_user {
+                                                let off = 0x18u16 + (*pg as u16);
+                                                mmu.write8(mmu.regs_base + off, *at);
+                                            }
                                             if let Some(sys) = sys_mode {
                                                 mmu.write8(
                                                     mmu.regs_base + 0x11,
                                                     if sys { 1 } else { 0 },
                                                 );
-                                            }
-                                            if let Some(p) = prot {
-                                                mmu.write8(mmu.regs_base + 0x12, p);
-                                            }
-                                            for (pg, fr) in &maps {
-                                                mmu.set_map_entry(*pg, *fr);
-                                            }
-                                            for (pg, at) in &attrs {
-                                                let off = 0x18u16 + (*pg as u16);
-                                                mmu.write8(mmu.regs_base + off, *at);
+                                            } else {
+                                                mmu.write8(mmu.regs_base + 0x11, prev_mode);
                                             }
                                             continue;
                                         }
@@ -3148,27 +3312,39 @@ fn main() {
                                     if let Some(mmu) =
                                         bus.as_mut().as_any_mut().downcast_mut::<Mc6829>()
                                     {
+                                        let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                         if let Some(on) = log_maps {
                                             mmu.set_log_maps(on);
                                         }
                                         if let Some(t) = task {
                                             mmu.write8(mmu.regs_base + 0x10, t & 0x07);
                                         }
+                                        if let Some(p) = prot {
+                                            mmu.write8(mmu.regs_base + 0x12, p);
+                                        }
+                                        mmu.write8(mmu.regs_base + 0x11, 0x01);
+                                        for (pg, fr) in maps_sys {
+                                            mmu.set_map_entry(pg, fr);
+                                        }
+                                        for (pg, at) in attrs_sys {
+                                            let off = 0x18u16 + (pg as u16);
+                                            mmu.write8(mmu.regs_base + off, at);
+                                        }
+                                        mmu.write8(mmu.regs_base + 0x11, 0x00);
+                                        for (pg, fr) in maps_user {
+                                            mmu.set_map_entry(pg, fr);
+                                        }
+                                        for (pg, at) in attrs_user {
+                                            let off = 0x18u16 + (pg as u16);
+                                            mmu.write8(mmu.regs_base + off, at);
+                                        }
                                         if let Some(sys) = sys_mode {
                                             mmu.write8(
                                                 mmu.regs_base + 0x11,
                                                 if sys { 1 } else { 0 },
                                             );
-                                        }
-                                        if let Some(p) = prot {
-                                            mmu.write8(mmu.regs_base + 0x12, p);
-                                        }
-                                        for (pg, fr) in maps {
-                                            mmu.set_map_entry(pg, fr);
-                                        }
-                                        for (pg, at) in attrs {
-                                            let off = 0x18u16 + (pg as u16);
-                                            mmu.write8(mmu.regs_base + off, at);
+                                        } else {
+                                            mmu.write8(mmu.regs_base + 0x11, prev_mode);
                                         }
                                     }
                                 }
@@ -3196,10 +3372,8 @@ fn main() {
                             regview::Command::OpenImage { path, base } => {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
-                                        // Clear logical memory before loading new image
-                                        for addr in 0u32..=0xFFFF {
-                                            bus.as_mut().write8(addr as u16, 0);
-                                        }
+                                        // Clear memory without clobbering MMU regs
+                                        clear_logical_memory(bus.as_mut());
                                         let mut new_loaded = LoadedImage {
                                             loaded_ranges: Vec::new(),
                                             entry: None,
@@ -3237,7 +3411,17 @@ fn main() {
                                             new_pc = Some(vec_pc);
                                         }
                                         if new_pc.is_none() {
-                                            new_pc = new_loaded.entry;
+                                            new_pc = new_loaded.entry.and_then(|e| {
+                                                if e == 0x0000
+                                                    && !new_loaded.loaded_ranges.iter().any(
+                                                        |(s, e2)| *s <= e && e < *e2,
+                                                    )
+                                                {
+                                                    None
+                                                } else {
+                                                    Some(e)
+                                                }
+                                            });
                                         }
                                         if new_pc.is_none() {
                                             if let Some((s, _e)) =
@@ -3344,25 +3528,37 @@ fn main() {
                             regview::Command::ApplyMmuPreset { name } => {
                                 let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                     let _ = em6809::config::apply_preset(mmu, &name);
-                                    let (map, sys, task) = mmu.snapshot_current_map();
+                                    let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
                                     if let Some(v) = viewer {
-                                        v.sync_mmu(sys, task, map);
+                                        v.sync_mmu(sys, task, map_sys, map_user);
                                     }
                                     if let Some((mut s, _origins, color_opt)) =
                                         regview::get_latest_settings_baseline()
                                     {
                                         s.use_mmu = true;
                                         s.mmu_mode_sys = sys;
+                                        s.mmu_edit_sys = sys;
                                         s.mmu_task = format!("{}", task & 0x07);
                                         s.mmu_preset_name = name.clone();
                                         let prot = mmu.read8(mmu.regs_base + 0x12);
                                         s.mmu_prot_hex = format!("{:02X}", prot);
-                                        for (i, f) in map.iter().enumerate() {
-                                            s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                        let map_view = if sys { &map_sys } else { &map_user };
+                                        let map_target = if sys {
+                                            &mut s.mmu_map_frames_sys
+                                        } else {
+                                            &mut s.mmu_map_frames_user
+                                        };
+                                        for (i, f) in map_view.iter().enumerate() {
+                                            map_target[i] = format!("{:02X}", f & 0x00FF);
                                         }
+                                        let attr_target = if sys {
+                                            &mut s.mmu_attr_bytes_sys
+                                        } else {
+                                            &mut s.mmu_attr_bytes_user
+                                        };
                                         for i in 0..16 {
                                             let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                            s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                            attr_target[i] = format!("{:02X}", attr);
                                         }
                                         settings_runtime::publish_settings_baseline(
                                             &s,
@@ -3388,26 +3584,38 @@ fn main() {
                                     |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                         let _ =
                                             em6809::config::apply_mmu_config_from_str(mmu, &text);
-                                        let (map, sys, task) = mmu.snapshot_current_map();
+                                        let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
                                         if let Some(v) = viewer {
-                                            v.sync_mmu(sys, task, map);
+                                            v.sync_mmu(sys, task, map_sys, map_user);
                                         }
                                         if let Some((mut s, _origins, color_opt)) =
                                             regview::get_latest_settings_baseline()
                                         {
                                             s.use_mmu = true;
                                             s.mmu_mode_sys = sys;
+                                            s.mmu_edit_sys = sys;
                                             s.mmu_task = format!("{}", task & 0x07);
                                             s.mmu_preset_name.clear();
                                             let prot = mmu.read8(mmu.regs_base + 0x12);
                                             s.mmu_prot_hex = format!("{:02X}", prot);
-                                            for (i, f) in map.iter().enumerate() {
-                                                s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                            let map_view = if sys { &map_sys } else { &map_user };
+                                            let map_target = if sys {
+                                                &mut s.mmu_map_frames_sys
+                                            } else {
+                                                &mut s.mmu_map_frames_user
+                                            };
+                                            for (i, f) in map_view.iter().enumerate() {
+                                                map_target[i] = format!("{:02X}", f & 0x00FF);
                                             }
+                                            let attr_target = if sys {
+                                                &mut s.mmu_attr_bytes_sys
+                                            } else {
+                                                &mut s.mmu_attr_bytes_user
+                                            };
                                             for i in 0..16 {
                                                 let attr =
                                                     mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                                s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                                attr_target[i] = format!("{:02X}", attr);
                                             }
                                             settings_runtime::publish_settings_baseline(
                                                 &s,
@@ -3588,7 +3796,7 @@ fn main() {
                                 }
                             }
                             regview::Command::UiSetGpio(_, _, _, _) => {}
-                            regview::Command::UiSetMmu(_, _, _) => {}
+                            regview::Command::UiSetMmu(_, _, _, _) => {}
                             regview::Command::UiSetTimer(..) => {}
                         }
                     }
@@ -3867,8 +4075,10 @@ fn main() {
                             task,
                             prot,
                             log_maps,
-                            maps,
-                            attrs,
+                            maps_sys,
+                            maps_user,
+                            attrs_sys,
+                            attrs_user,
                         } => {
                             // Apply to active MMU on non-worker path; use scoped borrows
                             {
@@ -3877,27 +4087,40 @@ fn main() {
                                 {
                                     let inner = io_mmu.inner_any_mut();
                                     if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                        let prev_mode =
+                                            mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                         if let Some(on) = log_maps {
                                             mmu.set_log_maps(on);
                                         }
                                         if let Some(t) = task {
                                             mmu.write8(mmu.regs_base + 0x10, t & 0x07);
                                         }
+                                        if let Some(p) = prot {
+                                            mmu.write8(mmu.regs_base + 0x12, p);
+                                        }
+                                        mmu.write8(mmu.regs_base + 0x11, 0x01);
+                                        for (pg, fr) in &maps_sys {
+                                            mmu.set_map_entry(*pg, *fr);
+                                        }
+                                        for (pg, at) in &attrs_sys {
+                                            let off = 0x18u16 + (*pg as u16);
+                                            mmu.write8(mmu.regs_base + off, *at);
+                                        }
+                                        mmu.write8(mmu.regs_base + 0x11, 0x00);
+                                        for (pg, fr) in &maps_user {
+                                            mmu.set_map_entry(*pg, *fr);
+                                        }
+                                        for (pg, at) in &attrs_user {
+                                            let off = 0x18u16 + (*pg as u16);
+                                            mmu.write8(mmu.regs_base + off, *at);
+                                        }
                                         if let Some(sys) = sys_mode {
                                             mmu.write8(
                                                 mmu.regs_base + 0x11,
                                                 if sys { 1 } else { 0 },
                                             );
-                                        }
-                                        if let Some(p) = prot {
-                                            mmu.write8(mmu.regs_base + 0x12, p);
-                                        }
-                                        for (pg, fr) in &maps {
-                                            mmu.set_map_entry(*pg, *fr);
-                                        }
-                                        for (pg, at) in &attrs {
-                                            let off = 0x18u16 + (*pg as u16);
-                                            mmu.write8(mmu.regs_base + off, *at);
+                                        } else {
+                                            mmu.write8(mmu.regs_base + 0x11, prev_mode);
                                         }
                                         // done
                                     } else {
@@ -3911,24 +4134,36 @@ fn main() {
                                 if let Some(mmu) =
                                     bus.as_mut().as_any_mut().downcast_mut::<Mc6829>()
                                 {
+                                    let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                     if let Some(on) = log_maps {
                                         mmu.set_log_maps(on);
                                     }
                                     if let Some(t) = task {
                                         mmu.write8(mmu.regs_base + 0x10, t & 0x07);
                                     }
-                                    if let Some(sys) = sys_mode {
-                                        mmu.write8(mmu.regs_base + 0x11, if sys { 1 } else { 0 });
-                                    }
                                     if let Some(p) = prot {
                                         mmu.write8(mmu.regs_base + 0x12, p);
                                     }
-                                    for (pg, fr) in maps {
+                                    mmu.write8(mmu.regs_base + 0x11, 0x01);
+                                    for (pg, fr) in maps_sys {
                                         mmu.set_map_entry(pg, fr);
                                     }
-                                    for (pg, at) in attrs {
+                                    for (pg, at) in attrs_sys {
                                         let off = 0x18u16 + (pg as u16);
                                         mmu.write8(mmu.regs_base + off, at);
+                                    }
+                                    mmu.write8(mmu.regs_base + 0x11, 0x00);
+                                    for (pg, fr) in maps_user {
+                                        mmu.set_map_entry(pg, fr);
+                                    }
+                                    for (pg, at) in attrs_user {
+                                        let off = 0x18u16 + (pg as u16);
+                                        mmu.write8(mmu.regs_base + off, at);
+                                    }
+                                    if let Some(sys) = sys_mode {
+                                        mmu.write8(mmu.regs_base + 0x11, if sys { 1 } else { 0 });
+                                    } else {
+                                        mmu.write8(mmu.regs_base + 0x11, prev_mode);
                                     }
                                 }
                             }
@@ -3936,25 +4171,37 @@ fn main() {
                         regview::Command::ApplyMmuPreset { name } => {
                             let apply = |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                 let _ = em6809::config::apply_preset(mmu, &name);
-                                let (map, sys, task) = mmu.snapshot_current_map();
+                                let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
                                 if let Some(v) = viewer {
-                                    v.sync_mmu(sys, task, map);
+                                    v.sync_mmu(sys, task, map_sys, map_user);
                                 }
                                 if let Some((mut s, _origins, color_opt)) =
                                     regview::get_latest_settings_baseline()
                                 {
                                     s.use_mmu = true;
                                     s.mmu_mode_sys = sys;
+                                    s.mmu_edit_sys = sys;
                                     s.mmu_task = format!("{}", task & 0x07);
                                     s.mmu_preset_name = name.clone();
-                                    let prot = mmu.read8(mmu.regs_base + 0x12);
-                                    s.mmu_prot_hex = format!("{:02X}", prot);
-                                    for (i, f) in map.iter().enumerate() {
-                                        s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
-                                    }
+                                        let prot = mmu.read8(mmu.regs_base + 0x12);
+                                        s.mmu_prot_hex = format!("{:02X}", prot);
+                                        let map_view = if sys { &map_sys } else { &map_user };
+                                        let map_target = if sys {
+                                            &mut s.mmu_map_frames_sys
+                                        } else {
+                                            &mut s.mmu_map_frames_user
+                                        };
+                                        for (i, f) in map_view.iter().enumerate() {
+                                            map_target[i] = format!("{:02X}", f & 0x00FF);
+                                        }
+                                    let attr_target = if sys {
+                                        &mut s.mmu_attr_bytes_sys
+                                    } else {
+                                        &mut s.mmu_attr_bytes_user
+                                    };
                                     for i in 0..16 {
                                         let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                        s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                        attr_target[i] = format!("{:02X}", attr);
                                     }
                                     settings_runtime::publish_settings_baseline(
                                         &s,
@@ -3979,25 +4226,37 @@ fn main() {
                             let apply_text =
                                 |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                     let _ = em6809::config::apply_mmu_config_from_str(mmu, &text);
-                                    let (map, sys, task) = mmu.snapshot_current_map();
+                                    let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
                                     if let Some(v) = viewer {
-                                        v.sync_mmu(sys, task, map);
+                                        v.sync_mmu(sys, task, map_sys, map_user);
                                     }
                                     if let Some((mut s, _origins, color_opt)) =
                                         regview::get_latest_settings_baseline()
                                     {
                                         s.use_mmu = true;
                                         s.mmu_mode_sys = sys;
+                                        s.mmu_edit_sys = sys;
                                         s.mmu_task = format!("{}", task & 0x07);
                                         s.mmu_preset_name.clear();
                                         let prot = mmu.read8(mmu.regs_base + 0x12);
                                         s.mmu_prot_hex = format!("{:02X}", prot);
-                                        for (i, f) in map.iter().enumerate() {
-                                            s.mmu_map_frames[i] = format!("{:02X}", f & 0x00FF);
+                                        let map_view = if sys { &map_sys } else { &map_user };
+                                        let map_target = if sys {
+                                            &mut s.mmu_map_frames_sys
+                                        } else {
+                                            &mut s.mmu_map_frames_user
+                                        };
+                                        for (i, f) in map_view.iter().enumerate() {
+                                            map_target[i] = format!("{:02X}", f & 0x00FF);
                                         }
+                                        let attr_target = if sys {
+                                            &mut s.mmu_attr_bytes_sys
+                                        } else {
+                                            &mut s.mmu_attr_bytes_user
+                                        };
                                         for i in 0..16 {
                                             let attr = mmu.read8(mmu.regs_base + 0x18 + i as u16);
-                                            s.mmu_attr_bytes[i] = format!("{:02X}", attr);
+                                            attr_target[i] = format!("{:02X}", attr);
                                         }
                                         settings_runtime::publish_settings_baseline(
                                             &s,
@@ -4412,7 +4671,7 @@ fn main() {
                             }
                         }
                         regview::Command::UiSetGpio(_, _, _, _) => {}
-                        regview::Command::UiSetMmu(_, _, _) => {}
+                        regview::Command::UiSetMmu(_, _, _, _) => {}
                         regview::Command::UiSetTimer(..) => {}
                         regview::Command::OpenImage { .. } => {}
                     }
