@@ -1558,12 +1558,8 @@ fn main() {
                                                 }
                                                 if let Some(pc) = new_pc {
                                                     cpu_worker.r.pc = pc;
-                                                    // Also align memory pane to program start for visibility
-                                                    viewer_cpu.set_memory_window(
-                                                        pc,
-                                                        None,
-                                                        Some(true),
-                                                    );
+                                                    // Align memory pane to program start without changing follow state.
+                                                    viewer_cpu.set_memory_window(pc, None, None);
                                                 }
                                                 loader_util::log_program_info(
                                                     &new_loaded,
