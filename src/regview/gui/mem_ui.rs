@@ -124,9 +124,15 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                         app.mem_jump_text = format!("0x{sv:04X}");
                     }
                 } else {
+                    let start_id = egui::Id::new("mem_start_edit");
+                    let start_has_focus = ctx.memory(|m| m.has_focus(start_id));
+                    if !follow_pc && !start_has_focus {
+                        app.mem_jump_text = format!("0x{start:04X}");
+                    }
                     let te = egui::TextEdit::singleline(&mut app.mem_jump_text)
                         .desired_width(80.0)
-                        .hint_text("0x0000");
+                        .hint_text("0x0000")
+                        .id(start_id);
                     let start_resp = ui.add_enabled(!follow_pc, te);
                     if !follow_pc {
                         if start_resp.has_focus() {
