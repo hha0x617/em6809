@@ -3,7 +3,8 @@ use egui_extras::{Column, TableBuilder};
 use i18n_embed_fl::fl;
 
 use super::{
-    parse_num_u16_any_gui, parse_u16_any, Command, DeviceTab, RegApp, RegSnapshot, LOADER,
+    console_ui, parse_num_u16_any_gui, parse_u16_any, Command, DeviceTab, RegApp, RegSnapshot,
+    LOADER,
 };
 
 pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
@@ -302,6 +303,21 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     ui.monospace("Console:");
                                     if let Some(base) = app.console_base {
                                         ui.monospace(format!("@${:04X}", base));
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    let vt100_enabled = app.settings_baseline.console_gui;
+                                    let mut vt100_visible = app.console_gui_open;
+                                    let resp = ui.add_enabled(
+                                        vt100_enabled,
+                                        egui::Checkbox::new(&mut vt100_visible, "VT100 window"),
+                                    );
+                                    if resp.clicked() && vt100_enabled {
+                                        app.console_gui_open = vt100_visible;
+                                        console_ui::set_console_visible(
+                                            ui.ctx(),
+                                            vt100_visible && app.settings_baseline.console_gui,
+                                        );
                                     }
                                 });
                                 ui.horizontal_wrapped(|ui| {
