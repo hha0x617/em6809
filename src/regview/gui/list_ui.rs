@@ -79,125 +79,115 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             app.window_len.store(win_len, Ordering::SeqCst);
                         }
                     });
-                    egui::ScrollArea::both()
-                        .auto_shrink([false, false])
+                    egui::ScrollArea::horizontal()
+                        .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                             let cur_pc = app.snap.lock().map(|g| g.pc).unwrap_or(0);
-                            let pc_hex = format!("{cur_pc:04X}");
+                            let need_scroll = app.scroll_to_pc_req.load(Ordering::SeqCst)
+                                || (cur_pc != app.last_pc_for_scroll);
+                            let text_style = egui::TextStyle::Monospace;
+                            let row_height = ui.text_style_height(&text_style);
+                            let row_height_with_spacing =
+                                row_height + ui.spacing().item_spacing.y;
+
+                            let mut pc_line_index: Option<usize> = None;
                             let mut highlight_rect: Option<egui::Rect> = None;
-                            let render_lines = |ui: &mut egui::Ui,
-                                                text: &str,
-                                                highlight_rect: &mut Option<egui::Rect>| {
-                                for line in text.lines() {
-                                    let ltrim = line.trim_start();
-                                    let mut token = ltrim.split_whitespace().next().unwrap_or("");
-                                    if token.ends_with(':') {
-                                        token = &token[..token.len() - 1];
-                                    }
-                                    let addr_for_line: Option<u16> =
-                                        if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
-                                    let upper = ltrim.to_ascii_uppercase();
-                                    let is_macro_line = upper.contains(" MACRO")
-                                        || upper.contains(" ENDM")
-                                        || upper.starts_with("MACRO ");
-                                    let is_pc_addr_token = addr_for_line.is_some()
-                                        && token.eq_ignore_ascii_case(&pc_hex)
-                                        && !is_macro_line;
-                                    let (label_run_until, label_set_pc, label_cancel) = (
-                                        fl!(LOADER, "run-to-here"),
-                                        fl!(LOADER, "set-pc-to-here"),
-                                        fl!(LOADER, "cancel"),
-                                    );
-                                    if is_pc_addr_token {
-                                        let mut rt = egui::RichText::new(line).monospace();
-                                        rt = rt
-                                            .background_color(egui::Color32::from_rgb(255, 60, 60))
-                                            .color(egui::Color32::BLACK);
-                                        let resp = ui.add(
-                                            egui::Label::new(rt).sense(egui::Sense::hover()),
-                                        );
-                                        if let Some(addr) = addr_for_line {
-                                            resp.context_menu(|ui| {
-                                                if ui.button(label_run_until).clicked() {
-                                                    if let Ok(mut q) = app.cmds.lock() {
-                                                        q.push(Command::RunUntil(addr));
-                                                    }
-                                                    ui.close_menu();
-                                                }
-                                                if ui.button(label_set_pc).clicked() {
-                                                    if let Ok(mut q) = app.cmds.lock() {
-                                                        q.push(Command::SetPc(addr));
-                                                    }
-                                                    ui.close_menu();
-                                                }
-                                                if ui.button(label_cancel).clicked() {
-                                                    ui.close_menu();
-                                                }
-                                            });
-                                        }
-                                        *highlight_rect = Some(resp.rect);
-                                    } else {
-                                        let resp = ui.add(
-                                            egui::Label::new(egui::RichText::new(line).monospace())
-                                                .sense(egui::Sense::hover()),
-                                        );
-                                        if let Some(addr) = addr_for_line {
-                                            resp.context_menu(|ui| {
-                                                if ui.button(label_run_until).clicked() {
-                                                    if let Ok(mut q) = app.cmds.lock() {
-                                                        q.push(Command::RunUntil(addr));
-                                                    }
-                                                    ui.close_menu();
-                                                }
-                                                if ui.button(label_set_pc).clicked() {
-                                                    if let Ok(mut q) = app.cmds.lock() {
-                                                        q.push(Command::SetPc(addr));
-                                                    }
-                                                    ui.close_menu();
-                                                }
-                                                if ui.button(label_cancel).clicked() {
-                                                    ui.close_menu();
-                                                }
-                                            });
-                                        }
-                                        if resp.hovered() {
-                                            let fill =
-                                                egui::Color32::from_rgba_unmultiplied(128, 128, 128, 40);
-                                            let stroke_col = ui.visuals().widgets.hovered.fg_stroke.color;
-                                            ui.painter().rect_filled(
-                                                resp.rect,
-                                                egui::Rounding::same(0.0),
-                                                fill,
-                                            );
-                                            ui.painter().rect_stroke(
-                                                resp.rect,
-                                                egui::Rounding::same(0.0),
-                                                egui::Stroke::new(1.0, stroke_col),
-                                            );
-                                        }
-                                    }
-                                }
-                            };
+                            let mut inner_rect: Option<egui::Rect> = None;
+
                             if use_hex_view {
                                 if let Some(txt) = &app.lst_text {
                                     if let Ok(s) = txt.lock() {
-                                        render_lines(ui, s.as_str(), &mut highlight_rect);
+                                        let rev = app.hex_rev.load(Ordering::SeqCst);
+                                        if app.hex_cache.rev != rev {
+                                            app.hex_cache.line_offsets = build_line_offsets(&s);
+                                            app.hex_cache.line_count = app.hex_cache.line_offsets.len();
+                                            app.hex_cache.lossy_text = None;
+                                            app.hex_cache.rev = rev;
+                                        }
+                                        let total_rows = app.hex_cache.line_count;
+                                        if follow_pc && need_scroll {
+                                            pc_line_index = find_pc_line_index(
+                                                &s,
+                                                &app.hex_cache.line_offsets,
+                                                cur_pc,
+                                            );
+                                        }
+                                        let (highlight, inner) = render_listing_lines(
+                                            ui,
+                                            &s,
+                                            &app.hex_cache.line_offsets,
+                                            row_height,
+                                            total_rows,
+                                            cur_pc,
+                                            &app.cmds,
+                                        );
+                                        highlight_rect = highlight;
+                                        inner_rect = inner;
                                     }
                                 }
                             } else if let Some(m) = &app.lst_mmap {
-                                match std::str::from_utf8(&m[..]) {
-                                    Ok(s) => render_lines(ui, s, &mut highlight_rect),
-                                    Err(_) => {
-                                        let cow = String::from_utf8_lossy(&m[..]);
-                                        render_lines(ui, cow.as_ref(), &mut highlight_rect);
+                                let rev = app.lst_rev.load(Ordering::SeqCst);
+                                let text_ref = match std::str::from_utf8(&m[..]) {
+                                    Ok(s) => {
+                                        if app.lst_cache.rev != rev {
+                                            app.lst_cache.line_offsets = build_line_offsets(s);
+                                            app.lst_cache.line_count = app.lst_cache.line_offsets.len();
+                                            app.lst_cache.lossy_text = None;
+                                            app.lst_cache.rev = rev;
+                                        }
+                                        Some(s)
                                     }
+                                    Err(_) => {
+                                        if app.lst_cache.rev != rev {
+                                            let cow = String::from_utf8_lossy(&m[..]);
+                                            app.lst_cache.lossy_text = Some(cow.to_string());
+                                            if let Some(text) = app.lst_cache.lossy_text.as_deref() {
+                                                app.lst_cache.line_offsets = build_line_offsets(text);
+                                                app.lst_cache.line_count = app.lst_cache.line_offsets.len();
+                                            }
+                                            app.lst_cache.rev = rev;
+                                        }
+                                        app.lst_cache.lossy_text.as_deref()
+                                    }
+                                };
+                                if let Some(text) = text_ref {
+                                    let total_rows = app.lst_cache.line_count;
+                                    if follow_pc && need_scroll {
+                                        pc_line_index = find_pc_line_index(
+                                            text,
+                                            &app.lst_cache.line_offsets,
+                                            cur_pc,
+                                        );
+                                    }
+                                    let (highlight, inner) = render_listing_lines(
+                                        ui,
+                                        text,
+                                        &app.lst_cache.line_offsets,
+                                        row_height,
+                                        total_rows,
+                                        cur_pc,
+                                        &app.cmds,
+                                    );
+                                    highlight_rect = highlight;
+                                    inner_rect = inner;
                                 }
                             }
-                            let need_scroll = app.scroll_to_pc_req.load(Ordering::SeqCst)
-                                || (cur_pc != app.last_pc_for_scroll);
+
                             if follow_pc && need_scroll {
-                                if let Some(rect) = highlight_rect {
+                                if let Some(idx) = pc_line_index {
+                                    if let Some(inner) = inner_rect {
+                                        let y = inner.top()
+                                            + idx as f32 * row_height_with_spacing;
+                                        let rect = egui::Rect::from_min_size(
+                                            egui::pos2(inner.left(), y),
+                                            egui::vec2(inner.width(), row_height),
+                                        );
+                                        ui.scroll_to_rect(rect, None);
+                                        app.scroll_to_pc_req.store(false, Ordering::SeqCst);
+                                        app.last_pc_for_scroll = cur_pc;
+                                    }
+                                } else if let Some(rect) = highlight_rect {
                                     ui.scroll_to_rect(rect, None);
                                     app.scroll_to_pc_req.store(false, Ordering::SeqCst);
                                     app.last_pc_for_scroll = cur_pc;
@@ -206,4 +196,157 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                         });
                 });
         });
+}
+
+fn build_line_offsets(text: &str) -> Vec<usize> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let bytes = text.as_bytes();
+    let mut offsets = Vec::new();
+    offsets.push(0);
+    for (idx, b) in bytes.iter().enumerate() {
+        if *b == b'\n' && idx + 1 < bytes.len() {
+            offsets.push(idx + 1);
+        }
+    }
+    offsets
+}
+
+fn line_at<'a>(text: &'a str, offsets: &[usize], idx: usize) -> &'a str {
+    let start = offsets[idx];
+    let mut end = if idx + 1 < offsets.len() {
+        offsets[idx + 1].saturating_sub(1)
+    } else {
+        text.len()
+    };
+    if end > start && text.as_bytes()[end - 1] == b'\r' {
+        end = end.saturating_sub(1);
+    }
+    &text[start..end]
+}
+
+fn render_listing_lines(
+    ui: &mut egui::Ui,
+    text: &str,
+    offsets: &[usize],
+    row_height: f32,
+    total_rows: usize,
+    cur_pc: u16,
+    cmds: &std::sync::Arc<std::sync::Mutex<Vec<Command>>>,
+) -> (Option<egui::Rect>, Option<egui::Rect>) {
+    let mut highlight_rect: Option<egui::Rect> = None;
+    let output = egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show_rows(ui, row_height, total_rows, |ui, row_range| {
+            let end = row_range.end.min(offsets.len());
+            for idx in row_range.start..end {
+                let line = line_at(text, offsets, idx);
+                let ltrim = line.trim_start();
+                let mut token = ltrim.split_whitespace().next().unwrap_or("");
+                if token.ends_with(':') {
+                    token = &token[..token.len() - 1];
+                }
+                let addr_for_line: Option<u16> =
+                    if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
+                let upper = ltrim.to_ascii_uppercase();
+                let is_macro_line =
+                    upper.contains(" MACRO") || upper.contains(" ENDM") || upper.starts_with("MACRO ");
+                let is_pc_addr_token = addr_for_line == Some(cur_pc) && !is_macro_line;
+                let (label_run_until, label_set_pc, label_cancel) = (
+                    fl!(LOADER, "run-to-here"),
+                    fl!(LOADER, "set-pc-to-here"),
+                    fl!(LOADER, "cancel"),
+                );
+                if is_pc_addr_token {
+                    let mut rt = egui::RichText::new(line).monospace();
+                    rt = rt
+                        .background_color(egui::Color32::from_rgb(255, 60, 60))
+                        .color(egui::Color32::BLACK);
+                    let resp = ui.add(egui::Label::new(rt).sense(egui::Sense::hover()));
+                    if let Some(addr) = addr_for_line {
+                        resp.context_menu(|ui| {
+                            if ui.button(label_run_until).clicked() {
+                                if let Ok(mut q) = cmds.lock() {
+                                    q.push(Command::RunUntil(addr));
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button(label_set_pc).clicked() {
+                                if let Ok(mut q) = cmds.lock() {
+                                    q.push(Command::SetPc(addr));
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button(label_cancel).clicked() {
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                    highlight_rect = Some(resp.rect);
+                } else {
+                    let resp = ui.add(
+                        egui::Label::new(egui::RichText::new(line).monospace())
+                            .sense(egui::Sense::hover()),
+                    );
+                    if let Some(addr) = addr_for_line {
+                        resp.context_menu(|ui| {
+                            if ui.button(label_run_until).clicked() {
+                                if let Ok(mut q) = cmds.lock() {
+                                    q.push(Command::RunUntil(addr));
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button(label_set_pc).clicked() {
+                                if let Ok(mut q) = cmds.lock() {
+                                    q.push(Command::SetPc(addr));
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button(label_cancel).clicked() {
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                    if resp.hovered() {
+                        let fill = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 40);
+                        let stroke_col = ui.visuals().widgets.hovered.fg_stroke.color;
+                        ui.painter().rect_filled(
+                            resp.rect,
+                            egui::Rounding::same(0.0),
+                            fill,
+                        );
+                        ui.painter().rect_stroke(
+                            resp.rect,
+                            egui::Rounding::same(0.0),
+                            egui::Stroke::new(1.0, stroke_col),
+                        );
+                    }
+                }
+            }
+        });
+    (highlight_rect, Some(output.inner_rect))
+}
+
+fn find_pc_line_index(text: &str, offsets: &[usize], pc: u16) -> Option<usize> {
+    for (idx, _) in offsets.iter().enumerate() {
+        let line = line_at(text, offsets, idx);
+        let ltrim = line.trim_start();
+        let mut token = ltrim.split_whitespace().next().unwrap_or("");
+        if token.ends_with(':') {
+            token = &token[..token.len() - 1];
+        }
+        let addr_for_line: Option<u16> =
+            if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
+        if addr_for_line != Some(pc) {
+            continue;
+        }
+        let upper = ltrim.to_ascii_uppercase();
+        let is_macro_line =
+            upper.contains(" MACRO") || upper.contains(" ENDM") || upper.starts_with("MACRO ");
+        if !is_macro_line {
+            return Some(idx);
+        }
+    }
+    None
 }

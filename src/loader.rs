@@ -12,6 +12,99 @@ pub struct LoadedImage {
     pub entry: Option<u16>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ParsedImage {
+    pub blocks: Vec<(u16, Vec<u8>)>,
+    pub loaded_ranges: Vec<(u16, u16)>,
+    pub entry: Option<u16>,
+}
+
+pub fn parse_binary(base: u16, data: &[u8]) -> ParsedImage {
+    ParsedImage {
+        blocks: vec![(base, data.to_vec())],
+        loaded_ranges: vec![(base, base.wrapping_add(data.len() as u16))],
+        entry: None,
+    }
+}
+
+pub fn parse_srec(s: &str) -> Result<ParsedImage, String> {
+    let mut entry: Option<u16> = None;
+    let mut ranges: Vec<(u16, u16)> = Vec::new();
+    let mut blocks: Vec<(u16, Vec<u8>)> = Vec::new();
+    for (lineno, line) in s.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.starts_with('S') {
+            return Err(format!("Line {}: Not an S-record", lineno + 1));
+        }
+        let rtype = line.as_bytes().get(1).copied().unwrap_or(b'?');
+        if line.len() < 4 {
+            return Err(format!("Line {}: too short", lineno + 1));
+        }
+        let count = u8::from_str_radix(&line[2..4], 16)
+            .map_err(|_| format!("Line {}: bad count", lineno + 1))? as usize;
+        match rtype {
+            b'0' => { /* header, ignore */ }
+            b'1' => {
+                if line.len() < 4 + count * 2 {
+                    return Err(format!("Line {}: too short for count", lineno + 1));
+                }
+                let addr = u16::from_str_radix(&line[4..8], 16)
+                    .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
+                let data_bytes = count - 3;
+                let mut bytes: Vec<u8> = Vec::with_capacity(data_bytes);
+                let mut i = 8;
+                for _ in 0..data_bytes {
+                    let b = u8::from_str_radix(&line[i..i + 2], 16)
+                        .map_err(|_| format!("Line {}: bad data", lineno + 1))?;
+                    bytes.push(b);
+                    i += 2;
+                }
+                ranges.push((addr, addr.wrapping_add(bytes.len() as u16)));
+                blocks.push((addr, bytes));
+            }
+            b'2' => {
+                if line.len() < 4 + count * 2 {
+                    return Err(format!("Line {}: too short for count", lineno + 1));
+                }
+                let addr24 = u32::from_str_radix(&line[4..10], 16)
+                    .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
+                let addr = (addr24 & 0xFFFF) as u16;
+                let data_bytes = count - 4;
+                let mut bytes: Vec<u8> = Vec::with_capacity(data_bytes);
+                let mut i = 10;
+                for _ in 0..data_bytes {
+                    let b = u8::from_str_radix(&line[i..i + 2], 16)
+                        .map_err(|_| format!("Line {}: bad data", lineno + 1))?;
+                    bytes.push(b);
+                    i += 2;
+                }
+                ranges.push((addr, addr.wrapping_add(bytes.len() as u16)));
+                blocks.push((addr, bytes));
+            }
+            b'9' => {
+                if line.len() >= 8 {
+                    entry = u16::from_str_radix(&line[4..8], 16).ok();
+                }
+            }
+            b'8' => {
+                if line.len() >= 10 {
+                    let e = u32::from_str_radix(&line[4..10], 16).ok();
+                    entry = e.map(|v| (v & 0xFFFF) as u16);
+                }
+            }
+            _ => { /* ignore other types */ }
+        }
+    }
+    Ok(ParsedImage {
+        blocks,
+        loaded_ranges: ranges,
+        entry,
+    })
+}
+
 pub fn load_binary(mem: &mut Memory, base: u16, data: &[u8]) -> LoadedImage {
     mem.load_slice(base, data);
     LoadedImage {

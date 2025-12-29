@@ -18,10 +18,10 @@ pub fn apply_settings_runtime(
     regview::gui::set_show_settings_origins(settings.debug_show_origins);
     crate::settings_native::set_settings_debug_log(settings.debug_settings_log);
     let gui_active = viewer.is_some();
-    let gui_console_on = gui_active && settings.use_console && settings.console_gui;
+    let gui_console_capture = gui_active && settings.use_console;
     em6809::io::set_console_gui_active(gui_active);
-    em6809::io::set_console_gui_enabled(gui_console_on);
-    em6809::io::set_console_stdout_enabled(!gui_console_on);
+    em6809::io::set_console_gui_enabled(gui_console_capture);
+    em6809::io::set_console_stdout_enabled(!gui_console_capture);
     let console_base = parse_settings_u16(&settings.console_base_hex).unwrap_or(0xFF00);
     let console_out_path = if settings.console_out_path.trim().is_empty() {
         None

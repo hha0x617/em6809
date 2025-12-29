@@ -91,7 +91,7 @@ impl RegSnapshot {
 pub static SHOW_ORIGINS_OVERRIDE: OnceCell<AtomicBool> = OnceCell::new();
 
 pub mod gui {
-    mod console_ui;
+    pub(crate) mod console_ui;
     mod list_ui;
     mod mem_ui;
     mod regs_ui;
@@ -710,6 +710,11 @@ pub mod gui {
         UiSetGpio(bool, u8, u32, u32),
         UiSetMmu(bool, u8, [u16; 16], [u16; 16]),
         UiSetTimer(bool, bool, bool),
+        UiOpenImageDialog,
+        OpenImageParsed {
+            path: std::path::PathBuf,
+            parsed: crate::loader::ParsedImage,
+        },
         UiSetBlockStatus {
             present: bool,
             base: Option<u16>,
@@ -811,12 +816,35 @@ pub mod gui {
         }
     }
 
+    #[derive(Default)]
+    pub(crate) struct ListingCache {
+        pub rev: usize,
+        pub line_offsets: Vec<usize>,
+        pub line_count: usize,
+        pub lossy_text: Option<String>,
+    }
+
+    impl ListingCache {
+        pub fn force_refresh() -> Self {
+            Self {
+                rev: usize::MAX,
+                line_offsets: Vec::new(),
+                line_count: 0,
+                lossy_text: None,
+            }
+        }
+    }
+
     pub struct RegApp {
         pub snap: Arc<Mutex<RegSnapshot>>,
         pub paused: Arc<AtomicBool>,
         pub step_requests: Arc<AtomicUsize>,
         pub lst_mmap: Option<Arc<Mmap>>,
         pub lst_text: Option<Arc<Mutex<String>>>,
+        pub lst_rev: Arc<AtomicUsize>,
+        pub hex_rev: Arc<AtomicUsize>,
+        pub lst_cache: ListingCache,
+        pub hex_cache: ListingCache,
         pub use_hex: Arc<AtomicBool>,
         pub auto_hex_on_edit: Arc<AtomicBool>,
         pub scroll_to_pc_req: Arc<AtomicBool>,
@@ -944,6 +972,43 @@ pub mod gui {
     }
 
     impl RegApp {
+        fn spawn_image_loader(&self, path: std::path::PathBuf, base: Option<u16>) {
+            let cmds = Arc::clone(&self.cmds);
+            std::thread::spawn(move || {
+                let lower = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let parsed = if lower == "s19" || lower == "srec" {
+                    match std::fs::read(&path) {
+                        Ok(bytes) => match crate::loader::parse_srec(&String::from_utf8_lossy(&bytes)) {
+                            Ok(img) => Ok(img),
+                            Err(e) => Err(format!("Open failed (SREC): {e}")),
+                        },
+                        Err(e) => Err(format!("Open failed (read): {e}")),
+                    }
+                } else if lower == "bin" {
+                    match std::fs::read(&path) {
+                        Ok(bytes) => Ok(crate::loader::parse_binary(base.unwrap_or(0), &bytes)),
+                        Err(e) => Err(format!("Open failed (read): {e}")),
+                    }
+                } else {
+                    Err(format!("Unsupported extension for Open: {}", lower))
+                };
+                match parsed {
+                    Ok(parsed) => {
+                        if let Ok(mut q) = cmds.lock() {
+                            q.push(Command::OpenImageParsed { path, parsed });
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                    }
+                }
+            });
+        }
+
         fn open_in_app_settings(&mut self) {
             // Open and reset fields to baseline on each open
             self.settings = self.settings_baseline.clone();
@@ -963,11 +1028,12 @@ pub mod gui {
     }
 
     impl App for RegApp {
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             // Initialize color text once if empty (for first render before opening settings)
             if self.gpio_on_color_text.is_empty() {
                 self.gpio_on_color_text = format_color_hex(self.gpio_on_color);
             }
+            let frame_ref = &*frame;
             if console_ui::take_console_closed() {
                 self.console_gui_open = false;
             }
@@ -1195,6 +1261,32 @@ pub mod gui {
                         self.open_bin_base_text = "0x0000".to_string();
                         self.open_dialog_active = true;
                     }
+                    Command::UiOpenImageDialog => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        let file = rfd::FileDialog::new()
+                            .set_parent(frame_ref)
+                            .add_filter("Images", &["s19", "srec", "bin"])
+                            .pick_file();
+                        if let Some(path) = file {
+                            self.paused.store(true, Ordering::SeqCst);
+                            let ext = path
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if ext == "bin" {
+                                self.open_pending_path = Some(path);
+                                self.open_bin_base_text = "0x0000".to_string();
+                                self.open_dialog_active = true;
+                            } else {
+                                self.spawn_image_loader(path, None);
+                            }
+                        }
+                    }
+                    Command::OpenImageParsed { .. } => {
+                        // Worker-only; leave for CPU thread.
+                        rest.push(cmd);
+                    }
                     Command::OpenImage { .. } => {
                         if let Ok(mut st) = self.console_state.lock() {
                             st.commit_screen_to_history();
@@ -1274,24 +1366,17 @@ pub mod gui {
                 let cmds = self.cmds.clone();
                 em6809::platform::macos::install_global_menubar_once(Box::new(move || {
                     // Runs on main thread via ObjC target/selector
-                    let file = rfd::FileDialog::new()
-                        .add_filter("Images", &["s19", "srec", "bin"])
-                        .pick_file();
-                    if let Some(path) = file {
-                        let ext = path
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        if ext == "bin" {
-                            if let Ok(mut q) = cmds.lock() {
-                                q.push(Command::UiPromptBinBase(path));
-                            }
-                        } else {
-                            if let Ok(mut q) = cmds.lock() {
-                                q.push(Command::OpenImage { path, base: None });
-                            }
-                        }
+                    let mut pushed = false;
+                    if let Ok(mut q) = cmds.lock() {
+                        q.push(Command::UiOpenImageDialog);
+                        pushed = true;
+                    }
+                    if !pushed {
+                        let _ = crate::regview::push_global_command(Command::UiOpenImageDialog);
+                    }
+                    if let Some(ctx) = super::GUI_CTX.get() {
+                        ctx.request_repaint();
+                        ctx.request_repaint_after(Duration::from_millis(10));
                     }
                 }));
                 self.menu_fixed = true;
@@ -1307,9 +1392,11 @@ pub mod gui {
                         ui.menu_button("File", |ui| {
                             if ui.button("Open…").clicked() {
                                 let file = rfd::FileDialog::new()
+                                    .set_parent(frame_ref)
                                     .add_filter("Images", &["s19", "srec", "bin"])
                                     .pick_file();
                                 if let Some(path) = file {
+                                    self.paused.store(true, Ordering::SeqCst);
                                     let ext = path
                                         .extension()
                                         .and_then(|s| s.to_str())
@@ -1320,9 +1407,7 @@ pub mod gui {
                                         self.open_bin_base_text = "0x0000".to_string();
                                         self.open_dialog_active = true;
                                     } else {
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::OpenImage { path, base: None });
-                                        }
+                                        self.spawn_image_loader(path, None);
                                     }
                                 }
                                 ui.close_menu();
@@ -1366,9 +1451,11 @@ pub mod gui {
                         ui.menu_button("File", |ui| {
                             if ui.button("Open…").clicked() {
                                 let file = rfd::FileDialog::new()
+                                    .set_parent(frame_ref)
                                     .add_filter("Images", &["s19", "srec", "bin"])
                                     .pick_file();
                                 if let Some(path) = file {
+                                    self.paused.store(true, Ordering::SeqCst);
                                     let ext = path
                                         .extension()
                                         .and_then(|s| s.to_str())
@@ -1379,9 +1466,7 @@ pub mod gui {
                                         self.open_bin_base_text = "0x0000".to_string();
                                         self.open_dialog_active = true;
                                     } else {
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::OpenImage { path, base: None });
-                                        }
+                                        self.spawn_image_loader(path, None);
                                     }
                                 }
                                 ui.close_menu();
@@ -1413,9 +1498,11 @@ pub mod gui {
                             ui.menu_button("File", |ui| {
                                 if ui.button("Open…").clicked() {
                                     let file = rfd::FileDialog::new()
+                                        .set_parent(frame_ref)
                                         .add_filter("Images", &["s19", "srec", "bin"])
                                         .pick_file();
                                     if let Some(path) = file {
+                                        self.paused.store(true, Ordering::SeqCst);
                                         let ext = path
                                             .extension()
                                             .and_then(|s| s.to_str())
@@ -1426,9 +1513,7 @@ pub mod gui {
                                             self.open_bin_base_text = "0x0000".to_string();
                                             self.open_dialog_active = true;
                                         } else {
-                                            if let Ok(mut q) = self.cmds.lock() {
-                                                q.push(Command::OpenImage { path, base: None });
-                                            }
+                                            self.spawn_image_loader(path, None);
                                         }
                                     }
                                     ui.close_menu();
@@ -1504,12 +1589,7 @@ pub mod gui {
                                         txt.parse::<u16>().ok()
                                     };
                                     if let Some(b) = base {
-                                        if let Ok(mut q) = self.cmds.lock() {
-                                            q.push(Command::OpenImage {
-                                                path,
-                                                base: Some(b),
-                                            });
-                                        }
+                                        self.spawn_image_loader(path, Some(b));
                                         self.open_dialog_active = false;
                                     }
                                 }
@@ -1522,7 +1602,7 @@ pub mod gui {
                     });
             }
 
-            settings_ui::render_settings_dialog(self, ctx);
+            settings_ui::render_settings_dialog(self, ctx, frame);
 
             let prev_edit_mode = self.edit_mode;
             mem_ui::render_memory_panel(self, ctx);
@@ -1588,9 +1668,7 @@ pub mod gui {
             .unwrap_or(1000)
             .clamp(0, 20000);
             let console_cfg = console_ui::ConsoleConfig {
-                enabled: self.settings_baseline.use_console
-                    && self.settings_baseline.console_gui
-                    && self.console_gui_open,
+                enabled: self.settings_baseline.console_gui && self.console_gui_open,
                 title: console_title,
                 font_size: console_font_size,
                 cols: console_cols,
@@ -1598,16 +1676,12 @@ pub mod gui {
                 scrollback: console_scrollback,
                 ctrl_keys: self.settings_baseline.console_gui_ctrl_keys,
             };
-            if self.console_gui_open && console_cfg.enabled {
-                console_ui::show_console_viewport(
-                    ctx,
-                    self.console_state.clone(),
-                    self.console_input.clone(),
-                    console_cfg,
-                );
-            } else {
-                console_ui::close_console_viewport(ctx);
-            }
+            console_ui::show_console_viewport(
+                ctx,
+                self.console_state.clone(),
+                self.console_input.clone(),
+                console_cfg,
+            );
 
             // Keep the UI ticking while emulation is running so highlights and panels update.
             if !self.paused.load(Ordering::SeqCst) {
@@ -1622,6 +1696,8 @@ pub mod gui {
         pub step_requests: Arc<AtomicUsize>,
         pub lst_mmap: Option<Arc<Mmap>>,
         pub lst_text: Option<Arc<Mutex<String>>>,
+        pub lst_rev: Arc<AtomicUsize>,
+        pub hex_rev: Arc<AtomicUsize>,
         use_hex: Arc<AtomicBool>,
         auto_hex_on_edit: Arc<AtomicBool>,
         scroll_to_pc_req: Arc<AtomicBool>,
@@ -1657,6 +1733,8 @@ pub mod gui {
                 step_requests: Arc::clone(&self.step_requests),
                 lst_mmap: self.lst_mmap.as_ref().map(Arc::clone),
                 lst_text: self.lst_text.as_ref().map(Arc::clone),
+                lst_rev: Arc::clone(&self.lst_rev),
+                hex_rev: Arc::clone(&self.hex_rev),
                 use_hex: Arc::clone(&self.use_hex),
                 auto_hex_on_edit: Arc::clone(&self.auto_hex_on_edit),
                 scroll_to_pc_req: Arc::clone(&self.scroll_to_pc_req),
@@ -1740,6 +1818,8 @@ pub mod gui {
             let lst_text: Option<Arc<Mutex<String>>> = lst_fallback_text
                 .map(|s| Arc::new(Mutex::new(s)))
                 .or_else(|| Some(Arc::new(Mutex::new(String::new()))));
+            let lst_rev = Arc::new(AtomicUsize::new(0));
+            let hex_rev = Arc::new(AtomicUsize::new(0));
             let default_use_hex_view: bool = lst_mmap.is_none();
             let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
             let auto_hex_on_edit = Arc::new(AtomicBool::new(true));
@@ -1840,6 +1920,8 @@ pub mod gui {
             let step_requests_clone = Arc::clone(&step_requests);
             let lst_clone = lst_mmap.as_ref().map(Arc::clone);
             let lst_text_clone = lst_text.as_ref().map(Arc::clone);
+            let lst_rev_clone = Arc::clone(&lst_rev);
+            let hex_rev_clone = Arc::clone(&hex_rev);
             let use_hex_clone = Arc::clone(&use_hex);
             let follow_clone = Arc::clone(&follow_pc_flag);
             let span_policy_clone = Arc::clone(&span_policy);
@@ -1911,6 +1993,10 @@ pub mod gui {
                     step_requests: step_requests_clone,
                     lst_mmap: lst_clone,
                     lst_text: lst_text_clone,
+                    lst_rev: lst_rev_clone,
+                    hex_rev: hex_rev_clone,
+                    lst_cache: ListingCache::force_refresh(),
+                    hex_cache: ListingCache::force_refresh(),
                     use_hex: use_hex_clone,
                     auto_hex_on_edit: Arc::clone(&auto_hex_on_edit_thread),
                     scroll_to_pc_req: Arc::clone(&scroll_to_pc_req_thread),
@@ -2065,6 +2151,8 @@ pub mod gui {
                 step_requests,
                 lst_mmap,
                 lst_text,
+                lst_rev,
+                hex_rev,
                 use_hex,
                 auto_hex_on_edit,
                 scroll_to_pc_req,
@@ -2110,6 +2198,8 @@ pub mod gui {
             });
             let lst_text: Option<Arc<Mutex<String>>> =
                 lst_fallback_text.map(|s| Arc::new(Mutex::new(s)));
+            let lst_rev = Arc::new(AtomicUsize::new(0));
+            let hex_rev = Arc::new(AtomicUsize::new(0));
             let default_use_hex_view: bool = lst_mmap.is_none();
             let use_hex = Arc::new(AtomicBool::new(default_use_hex_view));
             let auto_hex_on_edit = Arc::new(AtomicBool::new(true));
@@ -2212,6 +2302,8 @@ pub mod gui {
                 step_requests,
                 lst_mmap,
                 lst_text,
+                lst_rev,
+                hex_rev,
                 use_hex,
                 auto_hex_on_edit,
                 scroll_to_pc_req,
@@ -2252,6 +2344,8 @@ pub mod gui {
             let step_requests_clone = Arc::clone(&self.step_requests);
             let lst_clone = self.lst_mmap.as_ref().map(Arc::clone);
             let lst_text_clone = self.lst_text.as_ref().map(Arc::clone);
+            let lst_rev_clone = Arc::clone(&self.lst_rev);
+            let hex_rev_clone = Arc::clone(&self.hex_rev);
             let use_hex_clone = Arc::clone(&self.use_hex);
             let follow_clone = Arc::clone(&self.follow_pc_flag);
             let span_policy_clone = Arc::clone(&self.span_policy);
@@ -2309,6 +2403,10 @@ pub mod gui {
                 step_requests: step_requests_clone,
                 lst_mmap: lst_clone,
                 lst_text: lst_text_clone,
+                lst_rev: lst_rev_clone,
+                hex_rev: hex_rev_clone,
+                lst_cache: ListingCache::force_refresh(),
+                hex_cache: ListingCache::force_refresh(),
                 use_hex: use_hex_clone,
                 auto_hex_on_edit: Arc::clone(&auto_hex_on_edit),
                 scroll_to_pc_req: Arc::clone(&self.scroll_to_pc_req),
@@ -2500,6 +2598,7 @@ pub mod gui {
                     *g = s;
                 }
             }
+            self.hex_rev.fetch_add(1, Ordering::SeqCst);
         }
 
         pub fn update_hex_lines(&self, items: Vec<(u16, String)>) {
@@ -2527,6 +2626,7 @@ pub mod gui {
                     *g = lines.join("\n");
                 }
             }
+            self.hex_rev.fetch_add(1, Ordering::SeqCst);
         }
 
         pub fn get_span_policy(&self) -> (usize, usize) {
@@ -2651,6 +2751,7 @@ pub mod gui {
                             | Command::UiAckSettings { .. }
                             | Command::UiPromptBinBase(..)
                             | Command::UiLoadLst(..)
+                            | Command::UiOpenImageDialog
                     )
                 }) {
                     return Some(q.remove(idx));

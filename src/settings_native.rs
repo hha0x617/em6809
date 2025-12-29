@@ -8,6 +8,7 @@ use crate::regview::{
     draw_origin_badge, format_color_hex, get_latest_settings_baseline, parse_color_hex,
     push_global_command, Command as UiCommand, SettingsState,
 };
+use crate::regview::gui::console_ui;
 use crate::settings_worker::{self, CloseReason, SettingsPayload, WorkerCommand};
 #[cfg(windows)]
 use em6809::platform::windows::native_settings as win_settings;
@@ -208,9 +209,11 @@ impl SettingsNativeApp {
                                 );
                                 draw_origin_badge(ui, &self.settings_origins, "console.out_path");
                                 if ui.button(fl!(LOADER, "browse")).clicked() {
-                                    if let Some(path) =
-                                        FileDialog::new().set_directory(".").pick_file()
-                                    {
+                                    let file: Option<std::path::PathBuf> =
+                                        console_ui::with_console_hidden(ui.ctx(), || {
+                                            FileDialog::new().set_directory(".").pick_file()
+                                        });
+                                    if let Some(path) = file {
                                         self.settings.console_out_path =
                                             path.to_string_lossy().to_string();
                                     }
@@ -361,10 +364,13 @@ impl SettingsNativeApp {
                                 );
                                 draw_origin_badge(ui, &self.settings_origins, "block.file_path");
                                 if ui.button(fl!(LOADER, "browse")).clicked() {
-                                    if let Some(path) = FileDialog::new()
-                                        .add_filter("Disk image", &["img", "bin", "raw"])
-                                        .pick_file()
-                                    {
+                                    let file: Option<std::path::PathBuf> =
+                                        console_ui::with_console_hidden(ui.ctx(), || {
+                                            FileDialog::new()
+                                                .add_filter("Disk image", &["img", "bin", "raw"])
+                                                .pick_file()
+                                        });
+                                    if let Some(path) = file {
                                         self.settings.block_file_path =
                                             path.to_string_lossy().to_string();
                                     }
@@ -649,10 +655,13 @@ impl SettingsNativeApp {
                                     });
                                 }
                                 if ui.button(fl!(LOADER, "load-map-file")).clicked() {
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .add_filter("MMU map", &["txt", "cfg", "mmu"])
-                                        .pick_file()
-                                    {
+                                    let file: Option<std::path::PathBuf> =
+                                        console_ui::with_console_hidden(ui.ctx(), || {
+                                            rfd::FileDialog::new()
+                                                .add_filter("MMU map", &["txt", "cfg", "mmu"])
+                                                .pick_file()
+                                        });
+                                    if let Some(path) = file {
                                         if let Ok(text) = std::fs::read_to_string(&path) {
                                             let _ = push_global_command(
                                                 UiCommand::ApplyMmuMapFileText { text },

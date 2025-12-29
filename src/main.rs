@@ -1479,6 +1479,7 @@ fn main() {
                                 match cmd {
                                     regview::Command::UiOpenSettings
                                     | regview::Command::UiOpenSettingsExternal => {}
+                                    regview::Command::UiOpenImageDialog => {}
                                     regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                                     regview::Command::UiAckSettings { .. } => {}
                                     regview::Command::SetPc(a) => {
@@ -1568,6 +1569,120 @@ fn main() {
                                             cc: cpu_worker.r.cc,
                                         };
                                         viewer_cpu.push(snap2);
+                                    }
+                                    regview::Command::OpenImageParsed { path: _, parsed } => {
+                                        // Apply pre-parsed image from loader thread.
+                                        clear_logical_memory(bus_worker.as_mut());
+                                        for (addr, bytes) in parsed.blocks.iter() {
+                                            for (i, b) in bytes.iter().enumerate() {
+                                                bus_worker
+                                                    .as_mut()
+                                                    .write8(addr.wrapping_add(i as u16), *b);
+                                            }
+                                        }
+                                        let new_loaded = LoadedImage {
+                                            loaded_ranges: parsed.loaded_ranges.clone(),
+                                            entry: parsed.entry,
+                                        };
+                                        let mut new_pc: Option<u16> = None;
+                                        let pch = bus_worker.as_mut().read8(0xFFFE) as u16;
+                                        let pcl = bus_worker.as_mut().read8(0xFFFF) as u16;
+                                        let vec_pc = (pch << 8) | pcl;
+                                        if vec_pc != 0x0000 {
+                                            new_pc = Some(vec_pc);
+                                        }
+                                        if new_pc.is_none() {
+                                            new_pc = new_loaded.entry.and_then(|e| {
+                                                if e == 0x0000
+                                                    && !new_loaded.loaded_ranges.iter().any(
+                                                        |(s, e2)| *s <= e && e < *e2,
+                                                    )
+                                                {
+                                                    None
+                                                } else {
+                                                    Some(e)
+                                                }
+                                            });
+                                        }
+                                        if new_pc.is_none() {
+                                            if let Some((s, _e)) =
+                                                new_loaded.loaded_ranges.first().copied()
+                                            {
+                                                new_pc = Some(s);
+                                            }
+                                        }
+                                        if let Some(pc) = new_pc {
+                                            cpu_worker.r.pc = pc;
+                                            viewer_cpu.set_memory_window(pc, None, None);
+                                        }
+                                        loader_util::log_program_info(&new_loaded, cpu_worker.r.pc);
+                                        let snap = regview::RegSnapshot {
+                                            a: cpu_worker.r.a,
+                                            b: cpu_worker.r.b,
+                                            d: ((cpu_worker.r.a as u16) << 8)
+                                                | (cpu_worker.r.b as u16),
+                                            x: cpu_worker.r.x,
+                                            y: cpu_worker.r.y,
+                                            u: cpu_worker.r.u,
+                                            s: cpu_worker.r.s,
+                                            dp: cpu_worker.r.dp,
+                                            pc: cpu_worker.r.pc,
+                                            cc: cpu_worker.r.cc,
+                                        };
+                                        viewer_cpu.push(snap);
+                                        loaded_ranges_worker = new_loaded.loaded_ranges.clone();
+                                        viewer_cpu.force_hex_view();
+                                        viewer_cpu.set_paused(true);
+                                        let (mstart_w, mlen_w, mfollow_w) =
+                                            viewer_cpu.get_memory_window();
+                                        let eff_start_w: u16 = if mfollow_w {
+                                            cpu_worker.r.pc & 0xFFF0
+                                        } else {
+                                            mstart_w
+                                        };
+                                        if mfollow_w {
+                                            viewer_cpu.set_memory_window_start(
+                                                (cpu_worker.r.pc & 0xFFF0) as usize,
+                                            );
+                                        }
+                                        let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
+                                        let mut a = eff_start_w;
+                                        for _ in 0..mlen_w {
+                                            nbuf.push(bus_worker.as_mut().read8(a));
+                                            a = a.wrapping_add(1);
+                                        }
+                                        viewer_cpu.update_memory_window(eff_start_w, nbuf);
+                                        let (consumed, _) = em6809::disasm::disasm_one_hex(
+                                            bus_worker.as_mut(),
+                                            cpu_worker.r.pc,
+                                        );
+                                        let clen = core::cmp::max(consumed as usize, 1);
+                                        viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
+                                        let spans = loader_util::coalesce_ranges(
+                                            loaded_ranges_worker.clone(),
+                                        );
+                                        if let Some((start, end)) = spans
+                                            .iter()
+                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
+                                            .copied()
+                                        {
+                                            let mut cur = start;
+                                            let mut out = String::new();
+                                            let mut processed: usize = 0;
+                                            let total_len: usize = end.wrapping_sub(start) as usize;
+                                            while processed < total_len {
+                                                let (consumed, text) = em6809::disasm::disasm_one_hex(
+                                                    bus_worker.as_mut(),
+                                                    cur,
+                                                );
+                                                use core::fmt::Write as _;
+                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                                let step = core::cmp::max(consumed as usize, 1);
+                                                processed += step;
+                                                cur = cur.wrapping_add(step as u16);
+                                            }
+                                            viewer_cpu.update_hex_listing(out);
+                                        }
                                     }
                                     regview::Command::OpenImage { path, base } => {
                                         // Handle file load on worker side (macOS/Linux GUI-main-thread mode)
@@ -2930,6 +3045,8 @@ fn main() {
                     match cmd {
                         regview::Command::UiOpenSettings
                         | regview::Command::UiOpenSettingsExternal => {}
+                        regview::Command::UiOpenImageDialog => {}
+                        regview::Command::OpenImageParsed { .. } => {}
                         regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                         regview::Command::UiAckSettings { .. } => {}
                         regview::Command::UiSetGpioOnColor(_) => {}
@@ -3155,6 +3272,8 @@ fn main() {
                         match cmd {
                             regview::Command::UiOpenSettings
                             | regview::Command::UiOpenSettingsExternal => {}
+                            regview::Command::UiOpenImageDialog => {}
+                            regview::Command::OpenImageParsed { .. } => {}
                             regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                             regview::Command::UiAckSettings { .. } => {}
                             regview::Command::UiSetGpioOnColor(_) => {}
@@ -4068,6 +4187,8 @@ fn main() {
                     match cmd {
                         regview::Command::UiOpenSettings
                         | regview::Command::UiOpenSettingsExternal => {}
+                        regview::Command::UiOpenImageDialog => {}
+                        regview::Command::OpenImageParsed { .. } => {}
                         regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                         regview::Command::UiAckSettings { .. } => {}
                         regview::Command::UiSetBlockStatus { .. } => {}

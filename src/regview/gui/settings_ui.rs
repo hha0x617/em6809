@@ -4,9 +4,15 @@ use eframe::egui;
 use i18n_embed_fl::fl;
 use rfd::FileDialog;
 
-use super::{draw_origin_badge, format_color_hex, parse_color_hex, parse_u8_hex, Command, RegApp};
+use super::{
+    console_ui, draw_origin_badge, format_color_hex, parse_color_hex, parse_u8_hex, Command, RegApp,
+};
 
-pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
+pub(super) fn render_settings_dialog(
+    app: &mut RegApp,
+    ctx: &egui::Context,
+    frame: &eframe::Frame,
+) {
     if !app.settings_open {
         return;
     }
@@ -121,9 +127,13 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                 );
                                 draw_origin_badge(ui, &app.settings_origins, "console.out_path");
                                 if ui.button(fl!(LOADER, "browse")).clicked() {
-                                    if let Some(path) =
-                                        FileDialog::new().set_directory(".").pick_file()
-                                    {
+                                    let file = console_ui::with_console_hidden(ui.ctx(), || {
+                                        FileDialog::new()
+                                            .set_parent(frame)
+                                            .set_directory(".")
+                                            .pick_file()
+                                    });
+                                    if let Some(path) = file {
                                         app.settings.console_out_path =
                                             path.to_string_lossy().to_string();
                                     }
@@ -278,10 +288,13 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                 );
                                 draw_origin_badge(ui, &app.settings_origins, "block.file_path");
                                 if ui.button(fl!(LOADER, "browse")).clicked() {
-                                    if let Some(path) = FileDialog::new()
-                                        .add_filter("Disk image", &["img", "bin", "raw"])
-                                        .pick_file()
-                                    {
+                                    let file = console_ui::with_console_hidden(ui.ctx(), || {
+                                        FileDialog::new()
+                                            .set_parent(frame)
+                                            .add_filter("Disk image", &["img", "bin", "raw"])
+                                            .pick_file()
+                                    });
+                                    if let Some(path) = file {
                                         app.settings.block_file_path =
                                             path.to_string_lossy().to_string();
                                     }
@@ -607,10 +620,13 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                 }
                             }
                             if ui.button(fl!(LOADER, "load-map-file")).clicked() {
-                                if let Some(path) = FileDialog::new()
-                                    .add_filter("MMU map", &["txt", "cfg", "mmu"])
-                                    .pick_file()
-                                {
+                                let file = console_ui::with_console_hidden(ui.ctx(), || {
+                                    FileDialog::new()
+                                        .set_parent(frame)
+                                        .add_filter("MMU map", &["txt", "cfg", "mmu"])
+                                        .pick_file()
+                                });
+                                if let Some(path) = file {
                                     if let Ok(text) = std::fs::read_to_string(&path) {
                                         if let Ok(mut q) = app.cmds.lock() {
                                             q.push(Command::ApplyMmuMapFileText { text });

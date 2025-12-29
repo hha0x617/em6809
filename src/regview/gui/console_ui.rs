@@ -18,6 +18,34 @@ pub(super) struct ConsoleConfig {
 }
 
 static CONSOLE_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
+static CONSOLE_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
+
+fn update_console_visible(desired: bool) -> bool {
+    let flag = CONSOLE_VISIBLE.get_or_init(|| AtomicBool::new(desired));
+    let prev = flag.swap(desired, std::sync::atomic::Ordering::SeqCst);
+    prev != desired
+}
+
+pub(crate) fn set_console_visible(ctx: &egui::Context, visible: bool) {
+    let id = egui::ViewportId::from_hash_of("console_vt100");
+    update_console_visible(visible);
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(visible));
+}
+
+pub(crate) fn with_console_hidden<R>(ctx: &egui::Context, f: impl FnOnce() -> R) -> R {
+    let was_visible = CONSOLE_VISIBLE
+        .get()
+        .map(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false);
+    if was_visible {
+        set_console_visible(ctx, false);
+    }
+    let out = f();
+    if was_visible {
+        set_console_visible(ctx, true);
+    }
+    out
+}
 
 fn measure_char_size(ctx: &egui::Context, font_size: f32) -> egui::Vec2 {
     let font_id = egui::FontId::monospace(font_size);
@@ -211,8 +239,27 @@ fn render_console(
                         let content_rect = ui.allocate_space(content_size).1;
                         let origin = content_rect.min;
                         let painter = ui.painter().clone();
-                        let mut last_row_rect: Option<egui::Rect> = None;
-                        for line_index in 0..total_rows {
+                        let clip_rect = ui.clip_rect();
+                        let start_row = ((clip_rect.min.y - origin.y) / row_height)
+                            .floor()
+                            .max(0.0) as usize;
+                        let end_row = ((clip_rect.max.y - origin.y) / row_height)
+                            .ceil()
+                            .max(0.0) as usize;
+                        let start_row = start_row.min(total_rows);
+                        let end_row = end_row.min(total_rows);
+                        let last_row_rect = if total_rows == 0 {
+                            None
+                        } else {
+                            Some(egui::Rect::from_min_size(
+                                egui::pos2(
+                                    origin.x,
+                                    origin.y + (total_rows.saturating_sub(1)) as f32 * row_height,
+                                ),
+                                egui::vec2(content_size.x, row_height),
+                            ))
+                        };
+                        for line_index in start_row..end_row {
                             let line = if line_index < history_len {
                                 st.term.history.get(line_index)
                             } else {
@@ -263,10 +310,7 @@ fn render_console(
                             );
                             let galley = painter.layout_job(job);
                             painter.galley(row_rect.min, galley, egui::Color32::WHITE);
-                            let resp = ui.allocate_rect(row_rect, egui::Sense::hover());
-                            if line_index + 1 == total_rows {
-                                last_row_rect = Some(resp.rect);
-                            }
+                            ui.allocate_rect(row_rect, egui::Sense::hover());
                         }
                         if st.follow && !user_scrolling_now {
                             if let Some(rect) = last_row_rect {
@@ -318,22 +362,29 @@ pub(super) fn show_console_viewport(
     input: Arc<Mutex<Vec<u8>>>,
     cfg: ConsoleConfig,
 ) {
-    if !cfg.enabled {
-        return;
-    }
     let id = egui::ViewportId::from_hash_of("console_vt100");
+    if update_console_visible(cfg.enabled) {
+        set_console_visible(ctx, cfg.enabled);
+    }
     let char_size = measure_char_size(ctx, cfg.font_size);
     let width = (char_size.x * cfg.cols as f32 + 16.0).max(320.0);
     let height = (char_size.y * cfg.rows as f32 + 16.0).max(240.0);
     let builder = egui::ViewportBuilder::default()
         .with_title(cfg.title.clone())
         .with_inner_size(egui::vec2(width, height))
+        .with_visible(cfg.enabled)
+        .with_active(false)
+        .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
     ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
-        render_console(ctx, &state, &input, &cfg);
+        if cfg.enabled {
+            render_console(ctx, &state, &input, &cfg);
+        }
         if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            update_console_visible(false);
             note_console_closed();
         }
     });
@@ -341,7 +392,8 @@ pub(super) fn show_console_viewport(
 
 pub(super) fn close_console_viewport(ctx: &egui::Context) {
     let id = egui::ViewportId::from_hash_of("console_vt100");
-    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::CancelClose);
+    set_console_visible(ctx, false);
 }
 
 pub(super) fn note_console_closed() {
