@@ -16,6 +16,8 @@ Options to control the emulator’s console input/output with practical recipes.
 
 ## Recipes
 
+- VT100 console demo (GUI window):
+  - `... samples/vt100/vt100_demo.s19 --console 0xFF00`
 - Send one command line:
   - `... --console-in "HELP\\r\\n"`
 - Interactive input with local echo:

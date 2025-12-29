@@ -1,0 +1,361 @@
+use std::sync::{Arc, Mutex};
+use once_cell::sync::OnceCell;
+use std::sync::atomic::AtomicBool;
+
+use eframe::egui;
+
+use crate::regview::gui::{ConsoleState, TermColor};
+
+#[derive(Clone)]
+pub(super) struct ConsoleConfig {
+    pub enabled: bool,
+    pub title: String,
+    pub font_size: f32,
+    pub cols: u16,
+    pub rows: u16,
+    pub scrollback: usize,
+    pub ctrl_keys: bool,
+}
+
+static CONSOLE_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
+
+fn measure_char_size(ctx: &egui::Context, font_size: f32) -> egui::Vec2 {
+    let font_id = egui::FontId::monospace(font_size);
+    let size = ctx.fonts(|f| {
+        f.layout_no_wrap("M".to_string(), font_id.clone(), egui::Color32::WHITE)
+            .size()
+    });
+    let row_height = ctx.fonts(|f| f.row_height(&font_id));
+    egui::vec2(size.x, row_height.max(size.y))
+}
+
+fn color_from_idx(idx: u8) -> egui::Color32 {
+    match idx {
+        0 => egui::Color32::from_rgb(0x00, 0x00, 0x00),
+        1 => egui::Color32::from_rgb(0x80, 0x00, 0x00),
+        2 => egui::Color32::from_rgb(0x00, 0x80, 0x00),
+        3 => egui::Color32::from_rgb(0x80, 0x80, 0x00),
+        4 => egui::Color32::from_rgb(0x00, 0x00, 0x80),
+        5 => egui::Color32::from_rgb(0x80, 0x00, 0x80),
+        6 => egui::Color32::from_rgb(0x00, 0x80, 0x80),
+        7 => egui::Color32::from_rgb(0xC0, 0xC0, 0xC0),
+        8 => egui::Color32::from_rgb(0x80, 0x80, 0x80),
+        9 => egui::Color32::from_rgb(0xFF, 0x00, 0x00),
+        10 => egui::Color32::from_rgb(0x00, 0xFF, 0x00),
+        11 => egui::Color32::from_rgb(0xFF, 0xFF, 0x00),
+        12 => egui::Color32::from_rgb(0x00, 0x00, 0xFF),
+        13 => egui::Color32::from_rgb(0xFF, 0x00, 0xFF),
+        14 => egui::Color32::from_rgb(0x00, 0xFF, 0xFF),
+        15 => egui::Color32::from_rgb(0xFF, 0xFF, 0xFF),
+        16..=231 => {
+            let idx = idx - 16;
+            let r = idx / 36;
+            let g = (idx / 6) % 6;
+            let b = idx % 6;
+            let conv = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            egui::Color32::from_rgb(conv(r), conv(g), conv(b))
+        }
+        232..=255 => {
+            let gray = 8 + (idx - 232) * 10;
+            egui::Color32::from_rgb(gray, gray, gray)
+        }
+    }
+}
+
+fn map_color(color: TermColor, fallback: egui::Color32) -> egui::Color32 {
+    match color {
+        TermColor::Default => fallback,
+        TermColor::Idx(idx) => color_from_idx(idx),
+        TermColor::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+    }
+}
+
+fn ctrl_key_to_byte(key: egui::Key) -> Option<u8> {
+    match key {
+        egui::Key::A => Some(0x01),
+        egui::Key::B => Some(0x02),
+        egui::Key::C => Some(0x03),
+        egui::Key::D => Some(0x04),
+        egui::Key::E => Some(0x05),
+        egui::Key::F => Some(0x06),
+        egui::Key::G => Some(0x07),
+        egui::Key::H => Some(0x08),
+        egui::Key::I => Some(0x09),
+        egui::Key::J => Some(0x0A),
+        egui::Key::K => Some(0x0B),
+        egui::Key::L => Some(0x0C),
+        egui::Key::M => Some(0x0D),
+        egui::Key::N => Some(0x0E),
+        egui::Key::O => Some(0x0F),
+        egui::Key::P => Some(0x10),
+        egui::Key::Q => Some(0x11),
+        egui::Key::R => Some(0x12),
+        egui::Key::S => Some(0x13),
+        egui::Key::T => Some(0x14),
+        egui::Key::U => Some(0x15),
+        egui::Key::V => Some(0x16),
+        egui::Key::W => Some(0x17),
+        egui::Key::X => Some(0x18),
+        egui::Key::Y => Some(0x19),
+        egui::Key::Z => Some(0x1A),
+        _ => None,
+    }
+}
+
+fn collect_input(ctx: &egui::Context, ctrl_keys: bool) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut enter_handled = false;
+    let events = ctx.input(|i| i.events.clone());
+    for ev in &events {
+        if let egui::Event::Key {
+            key,
+            pressed,
+            modifiers,
+            ..
+        } = ev
+        {
+            if !*pressed {
+                continue;
+            }
+            if modifiers.ctrl && ctrl_keys {
+                if let Some(b) = ctrl_key_to_byte(*key) {
+                    out.push(b);
+                    continue;
+                }
+            }
+            match key {
+                egui::Key::Enter => {
+                    out.push(b'\r');
+                    enter_handled = true;
+                }
+                egui::Key::Backspace => out.push(0x08),
+                egui::Key::Tab => out.push(0x09),
+                egui::Key::Escape => out.push(0x1B),
+                egui::Key::ArrowUp => out.extend_from_slice(b"\x1B[A"),
+                egui::Key::ArrowDown => out.extend_from_slice(b"\x1B[B"),
+                egui::Key::ArrowRight => out.extend_from_slice(b"\x1B[C"),
+                egui::Key::ArrowLeft => out.extend_from_slice(b"\x1B[D"),
+                egui::Key::Home => out.extend_from_slice(b"\x1B[H"),
+                egui::Key::End => out.extend_from_slice(b"\x1B[F"),
+                egui::Key::PageUp => out.extend_from_slice(b"\x1B[5~"),
+                egui::Key::PageDown => out.extend_from_slice(b"\x1B[6~"),
+                egui::Key::Insert => out.extend_from_slice(b"\x1B[2~"),
+                egui::Key::Delete => out.extend_from_slice(b"\x1B[3~"),
+                _ => {}
+            }
+        }
+    }
+    for ev in events {
+        if let egui::Event::Text(text) = ev {
+            if enter_handled && (text == "\n" || text == "\r") {
+                continue;
+            }
+            out.extend_from_slice(text.as_bytes());
+        }
+    }
+    out
+}
+
+fn render_console(
+    ctx: &egui::Context,
+    state: &Arc<Mutex<ConsoleState>>,
+    input: &Arc<Mutex<Vec<u8>>>,
+    cfg: &ConsoleConfig,
+) {
+    let font_id = egui::FontId::monospace(cfg.font_size);
+    let default_fg = egui::Color32::from_rgb(0xE0, 0xE0, 0xE0);
+    let default_bg = egui::Color32::from_rgb(0x10, 0x10, 0x10);
+    let char_size = measure_char_size(ctx, cfg.font_size);
+    let bytes = em6809::io::take_console_gui_bytes();
+    egui::CentralPanel::default()
+        .frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)))
+        .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, default_bg);
+            let cols = cfg.cols.max(1);
+            let rows = cfg.rows.max(1);
+            if let Ok(mut st) = state.lock() {
+                st.set_scrollback_len(cfg.scrollback);
+                st.set_size(rows, cols);
+                if !bytes.is_empty() {
+                    st.process_bytes(&bytes);
+                }
+                let rows = st.term.rows;
+                let cols = st.term.cols;
+                let history_len = st.term.history.len();
+                let content_rows = history_len.saturating_add(st.screen_content_rows());
+                let total_rows = content_rows.max(rows);
+                let scroll_id = egui::Id::new("console_scroll");
+                let row_height = char_size.y.max(1.0);
+                let view_height = (rows as f32 * row_height).max(1.0);
+                let hover_pos = ctx.input(|i| i.pointer.hover_pos());
+                let hover_in_console = hover_pos
+                    .map(|p| ui.max_rect().contains(p))
+                    .unwrap_or(false);
+                let user_scrolling_now = ctx.input(|i| {
+                    i.raw_scroll_delta.y != 0.0
+                        || (hover_in_console && i.pointer.primary_down())
+                });
+                let output = egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .id_salt(scroll_id)
+                    .max_height(view_height)
+                    .min_scrolled_height(view_height)
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                    .stick_to_bottom(false)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                        let content_size =
+                            egui::vec2(ui.available_width(), total_rows as f32 * row_height);
+                        let content_rect = ui.allocate_space(content_size).1;
+                        let origin = content_rect.min;
+                        let painter = ui.painter().clone();
+                        let mut last_row_rect: Option<egui::Rect> = None;
+                        for line_index in 0..total_rows {
+                            let line = if line_index < history_len {
+                                st.term.history.get(line_index)
+                            } else {
+                                st.term.screen.get(line_index.saturating_sub(history_len))
+                            };
+                            let mut job = egui::text::LayoutJob::default();
+                            job.halign = egui::Align::LEFT;
+                            job.wrap.max_width = f32::INFINITY;
+                            let mut c = 0;
+                            while c < cols {
+                                let cell = line.and_then(|l| l.get(c));
+                                if let Some(cell) = cell {
+                                    let text = cell.ch;
+                                    let mut fg = map_color(cell.fg, default_fg);
+                                    let mut bg = map_color(cell.bg, default_bg);
+                                    if cell.inverse {
+                                        std::mem::swap(&mut fg, &mut bg);
+                                    }
+                                    let mut format = egui::TextFormat {
+                                        font_id: font_id.clone(),
+                                        color: fg,
+                                        background: bg,
+                                        ..Default::default()
+                                    };
+                                    if cell.bold {
+                                        format.font_id.size = cfg.font_size + 1.0;
+                                    }
+                                    if cell.underline {
+                                        format.underline =
+                                            egui::Stroke::new(1.0, format.color);
+                                    }
+                                    let mut buf = [0u8; 4];
+                                    job.append(text.encode_utf8(&mut buf), 0.0, format);
+                                } else {
+                                    let format = egui::TextFormat {
+                                        font_id: font_id.clone(),
+                                        color: default_fg,
+                                        background: default_bg,
+                                        ..Default::default()
+                                    };
+                                    job.append(" ", 0.0, format);
+                                }
+                                c = c.saturating_add(1);
+                            }
+                            let row_rect = egui::Rect::from_min_size(
+                                egui::pos2(origin.x, origin.y + line_index as f32 * row_height),
+                                egui::vec2(content_size.x, row_height),
+                            );
+                            let galley = painter.layout_job(job);
+                            painter.galley(row_rect.min, galley, egui::Color32::WHITE);
+                            let resp = ui.allocate_rect(row_rect, egui::Sense::hover());
+                            if line_index + 1 == total_rows {
+                                last_row_rect = Some(resp.rect);
+                            }
+                        }
+                        if st.follow && !user_scrolling_now {
+                            if let Some(rect) = last_row_rect {
+                                ui.scroll_to_rect(rect, Some(egui::Align::BOTTOM));
+                            }
+                        }
+                        if st.follow {
+                            let row = st.term.cursor_row.min(rows.saturating_sub(1));
+                            let col = st.term.cursor_col.min(cols.saturating_sub(1));
+                            let cursor_line = history_len.saturating_add(row);
+                            let pos = origin
+                                + egui::vec2(
+                                    col as f32 * char_size.x,
+                                    cursor_line as f32 * row_height,
+                                );
+                            let rect = egui::Rect::from_min_size(pos, char_size);
+                            let color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 80);
+                            painter.rect_filled(rect, 0.0, color);
+                        }
+                    });
+                let max_offset_y =
+                    (total_rows as f32 * row_height - output.inner_rect.height()).max(0.0);
+                let at_bottom = output.state.offset.y >= (max_offset_y - row_height * 0.25);
+                let scroll_y = output.state.offset.y;
+                let user_scrolled = user_scrolling_now && scroll_y != st.last_scroll_y;
+                if user_scrolled {
+                    // Only user intent toggles follow. Re-enable only if user scrolls to bottom.
+                    st.follow = at_bottom;
+                    if st.follow {
+                        st.scroll_offset = 0;
+                    }
+                }
+                st.last_scroll_y = scroll_y;
+            }
+            if ctx.input(|i| i.viewport().focused).unwrap_or(true) {
+                let input_bytes = collect_input(ctx, cfg.ctrl_keys);
+                if !input_bytes.is_empty() {
+                    if let Ok(mut g) = input.lock() {
+                        g.extend_from_slice(&input_bytes);
+                    }
+                }
+            }
+        });
+}
+
+pub(super) fn show_console_viewport(
+    ctx: &egui::Context,
+    state: Arc<Mutex<ConsoleState>>,
+    input: Arc<Mutex<Vec<u8>>>,
+    cfg: ConsoleConfig,
+) {
+    if !cfg.enabled {
+        return;
+    }
+    let id = egui::ViewportId::from_hash_of("console_vt100");
+    let char_size = measure_char_size(ctx, cfg.font_size);
+    let width = (char_size.x * cfg.cols as f32 + 16.0).max(320.0);
+    let height = (char_size.y * cfg.rows as f32 + 16.0).max(240.0);
+    let builder = egui::ViewportBuilder::default()
+        .with_title(cfg.title.clone())
+        .with_inner_size(egui::vec2(width, height))
+        .with_resizable(true);
+    ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
+        render_console(ctx, &state, &input, &cfg);
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            note_console_closed();
+        }
+    });
+}
+
+pub(super) fn close_console_viewport(ctx: &egui::Context) {
+    let id = egui::ViewportId::from_hash_of("console_vt100");
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+}
+
+pub(super) fn note_console_closed() {
+    if let Some(flag) = CONSOLE_CLOSED.get() {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    } else {
+        let _ = CONSOLE_CLOSED.set(std::sync::atomic::AtomicBool::new(true));
+    }
+}
+
+pub(super) fn take_console_closed() -> bool {
+    if let Some(flag) = CONSOLE_CLOSED.get() {
+        flag.swap(false, std::sync::atomic::Ordering::SeqCst)
+    } else {
+        false
+    }
+}

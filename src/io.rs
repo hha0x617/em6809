@@ -43,6 +43,35 @@ pub fn set_console_log(on: bool) {
     CONSOLE_LOG.store(on, Ordering::SeqCst);
 }
 
+// GUI console output routing (VT100 window)
+static CONSOLE_GUI_ENABLED: AtomicBool = AtomicBool::new(false);
+static CONSOLE_GUI_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CONSOLE_STDOUT_ENABLED: AtomicBool = AtomicBool::new(true);
+static CONSOLE_GUI_BUF: OnceCell<Mutex<Vec<u8>>> = OnceCell::new();
+
+pub fn set_console_gui_enabled(on: bool) {
+    CONSOLE_GUI_ENABLED.store(on, Ordering::SeqCst);
+}
+
+pub fn set_console_gui_active(on: bool) {
+    CONSOLE_GUI_ACTIVE.store(on, Ordering::SeqCst);
+}
+
+pub fn set_console_stdout_enabled(on: bool) {
+    CONSOLE_STDOUT_ENABLED.store(on, Ordering::SeqCst);
+}
+
+pub fn take_console_gui_bytes() -> Vec<u8> {
+    if let Some(m) = CONSOLE_GUI_BUF.get() {
+        if let Ok(mut g) = m.lock() {
+            let out = g.clone();
+            g.clear();
+            return out;
+        }
+    }
+    Vec::new()
+}
+
 static BLOCK_LOG: AtomicBool = AtomicBool::new(false);
 pub fn set_block_log(on: bool) {
     BLOCK_LOG.store(on, Ordering::SeqCst);
@@ -118,11 +147,28 @@ impl ConsoleDev {
         if let Some(f) = self.out_file.as_mut() {
             let _ = f.write_all(&[b]);
         }
+        // Route to GUI console if enabled
+        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst)
+            && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst)
+        {
+            if let Some(m) = CONSOLE_GUI_BUF.get() {
+                if let Ok(mut g) = m.lock() {
+                    g.push(b);
+                }
+            } else {
+                let _ = CONSOLE_GUI_BUF.set(Mutex::new(vec![b]));
+            }
+        }
+        let stdout_enabled = CONSOLE_STDOUT_ENABLED.load(Ordering::SeqCst)
+            || !CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst);
         // ASCII fast path
-        if b < 0x80 && self.utf8_need == 0 {
+        if stdout_enabled
+            && b < 0x80
+            && self.utf8_need == 0
+        {
             let ch = b as char;
             print!("{ch}");
-        } else {
+        } else if stdout_enabled {
             // Determine expected length if starting sequence
             if self.utf8_need == 0 {
                 self.utf8_need = match b {
@@ -149,7 +195,9 @@ impl ConsoleDev {
             }
         }
         if need_flush {
-            let _ = std::io::stdout().flush();
+            if stdout_enabled {
+                let _ = std::io::stdout().flush();
+            }
             if let Some(f) = self.out_file.as_mut() {
                 let _ = f.flush();
             }

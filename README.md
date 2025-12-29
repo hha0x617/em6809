@@ -24,6 +24,7 @@ em6809 is a software emulator for the MC6809. It provides a GUI with register/me
 
 - Attach stdin with local echo: `... samples/echo/echo.s19 --console 0xFF00 --console-stdin --console-echo`
   (Disasm/Memory/Trace are available in the GUI window)
+- VT100 console demo: `... samples/vt100/vt100_demo.s19 --console 0xFF00`
 
 ## Documentation
 

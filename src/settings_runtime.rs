@@ -17,6 +17,11 @@ pub fn apply_settings_runtime(
     em6809::io::set_gpio_log(settings.debug_gpio_log);
     regview::gui::set_show_settings_origins(settings.debug_show_origins);
     crate::settings_native::set_settings_debug_log(settings.debug_settings_log);
+    let gui_active = viewer.is_some();
+    let gui_console_on = gui_active && settings.use_console && settings.console_gui;
+    em6809::io::set_console_gui_active(gui_active);
+    em6809::io::set_console_gui_enabled(gui_console_on);
+    em6809::io::set_console_stdout_enabled(!gui_console_on);
     let console_base = parse_settings_u16(&settings.console_base_hex).unwrap_or(0xFF00);
     let console_out_path = if settings.console_out_path.trim().is_empty() {
         None
@@ -276,6 +281,17 @@ pub fn persist_settings_snapshot(state: &regview::SettingsState, gpio_on_color: 
         rx_watermark: parse_settings_usize(&state.console_rx_wm),
         irq_hold: parse_settings_u32(&state.console_irq_hold),
         tee_stderr: Some(state.console_tee_stderr),
+        gui_enable: Some(state.console_gui),
+        gui_title: if state.console_gui_title.is_empty() {
+            None
+        } else {
+            Some(state.console_gui_title.clone())
+        },
+        gui_font_size: parse_settings_f32(&state.console_gui_font_size),
+        gui_cols: parse_settings_usize(&state.console_gui_cols),
+        gui_rows: parse_settings_usize(&state.console_gui_rows),
+        gui_scrollback: parse_settings_usize(&state.console_gui_scrollback),
+        gui_ctrl_keys: Some(state.console_gui_ctrl_keys),
     });
     p.block = Some(prefs::Block {
         enable: Some(state.use_block),
@@ -541,6 +557,14 @@ fn parse_settings_u8(s: &str) -> Option<u8> {
     u32::from_str_radix(digits, base)
         .ok()
         .map(|v| (v & 0xFF) as u8)
+}
+
+fn parse_settings_f32(s: &str) -> Option<f32> {
+    let sl = s.trim();
+    if sl.is_empty() {
+        return None;
+    }
+    sl.parse::<f32>().ok()
 }
 
 fn apply_console_config<B: bus::Bus>(

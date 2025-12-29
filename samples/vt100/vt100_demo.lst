@@ -1,0 +1,164 @@
+                      (00/vt100_demo.asm):00001                 ORG   $E000
+     FF00             (00/vt100_demo.asm):00002         CONBASE EQU   $FF00       ; console base (TX/RX)
+     0001             (00/vt100_demo.asm):00003         TDRE    EQU   $01         ; TX ready bit
+     001B             (00/vt100_demo.asm):00004         ESC     EQU   $1B
+                      (00/vt100_demo.asm):00005         
+E000 10CEDFFF         (00/vt100_demo.asm):00006         START   LDS   #$DFFF
+E004 5F               (00/vt100_demo.asm):00007                 CLRB
+E005 8EE090           (00/vt100_demo.asm):00008                 LDX   #CLRSEQ
+E008 8D46             (00/vt100_demo.asm):00009                 BSR   PUTSTR
+E00A 8EE098           (00/vt100_demo.asm):00010                 LDX   #TITLE
+E00D 8D41             (00/vt100_demo.asm):00011                 BSR   PUTSTR
+E00F 8EE0A5           (00/vt100_demo.asm):00012                 LDX   #COLOR1
+E012 8D3C             (00/vt100_demo.asm):00013                 BSR   PUTSTR
+E014 8EE0B9           (00/vt100_demo.asm):00014                 LDX   #COLOR2
+E017 8D37             (00/vt100_demo.asm):00015                 BSR   PUTSTR
+E019 8EE0CF           (00/vt100_demo.asm):00016                 LDX   #COLOR3
+E01C 8D32             (00/vt100_demo.asm):00017                 BSR   PUTSTR
+E01E 8EE0E4           (00/vt100_demo.asm):00018                 LDX   #STYLE1
+E021 8D2D             (00/vt100_demo.asm):00019                 BSR   PUTSTR
+E023 8EE108           (00/vt100_demo.asm):00020                 LDX   #MOVE1
+E026 8D28             (00/vt100_demo.asm):00021                 BSR   PUTSTR
+                      (00/vt100_demo.asm):00022         
+E028                  (00/vt100_demo.asm):00023         LINELOOP
+E028 1F98             (00/vt100_demo.asm):00024                 TFR   B,A
+E02A 8D47             (00/vt100_demo.asm):00025                 BSR   SET_COLOR
+E02C 8EE133           (00/vt100_demo.asm):00026                 LDX   #LINEPFX
+E02F 8D1F             (00/vt100_demo.asm):00027                 BSR   PUTSTR
+E031 1F98             (00/vt100_demo.asm):00028                 TFR   B,A
+E033 8D24             (00/vt100_demo.asm):00029                 BSR   PRINT_HEX
+E035 8EE139           (00/vt100_demo.asm):00030                 LDX   #CRLF
+E038 8D16             (00/vt100_demo.asm):00031                 BSR   PUTSTR
+E03A 5C               (00/vt100_demo.asm):00032                 INCB
+E03B C120             (00/vt100_demo.asm):00033                 CMPB  #$20
+E03D 25E9             (00/vt100_demo.asm):00034                 BLO   LINELOOP
+                      (00/vt100_demo.asm):00035         
+E03F 20FE             (00/vt100_demo.asm):00036         HALT    BRA   HALT
+                      (00/vt100_demo.asm):00037         
+                      (00/vt100_demo.asm):00038         ; ---------------------------
+                      (00/vt100_demo.asm):00039         ; Console output helpers
+                      (00/vt100_demo.asm):00040         ; ---------------------------
+E041 3402             (00/vt100_demo.asm):00041         PUTCH   PSHS  A
+E043 B6FF01           (00/vt100_demo.asm):00042         WAIT    LDA   CONBASE+1
+E046 8501             (00/vt100_demo.asm):00043                 BITA  #TDRE
+E048 27F9             (00/vt100_demo.asm):00044                 BEQ   WAIT
+E04A 3502             (00/vt100_demo.asm):00045                 PULS  A
+E04C B7FF00           (00/vt100_demo.asm):00046                 STA   CONBASE
+E04F 39               (00/vt100_demo.asm):00047                 RTS
+                      (00/vt100_demo.asm):00048         
+E050 A680             (00/vt100_demo.asm):00049         PUTSTR  LDA   ,X+
+E052 2704             (00/vt100_demo.asm):00050                 BEQ   PUTSTR_DONE
+E054 8DEB             (00/vt100_demo.asm):00051                 BSR   PUTCH
+E056 20F8             (00/vt100_demo.asm):00052                 BRA   PUTSTR
+E058                  (00/vt100_demo.asm):00053         PUTSTR_DONE
+E058 39               (00/vt100_demo.asm):00054                 RTS
+                      (00/vt100_demo.asm):00055         
+E059                  (00/vt100_demo.asm):00056         PRINT_HEX
+E059 3402             (00/vt100_demo.asm):00057                 PSHS  A
+E05B 44               (00/vt100_demo.asm):00058                 LSRA
+E05C 44               (00/vt100_demo.asm):00059                 LSRA
+E05D 44               (00/vt100_demo.asm):00060                 LSRA
+E05E 44               (00/vt100_demo.asm):00061                 LSRA
+E05F 8D07             (00/vt100_demo.asm):00062                 BSR   HEX_DIGIT
+E061 3502             (00/vt100_demo.asm):00063                 PULS  A
+E063 840F             (00/vt100_demo.asm):00064                 ANDA  #$0F
+E065 8D01             (00/vt100_demo.asm):00065                 BSR   HEX_DIGIT
+E067 39               (00/vt100_demo.asm):00066                 RTS
+                      (00/vt100_demo.asm):00067         
+E068                  (00/vt100_demo.asm):00068         HEX_DIGIT
+E068 8B30             (00/vt100_demo.asm):00069                 ADDA  #'0'
+E06A 8139             (00/vt100_demo.asm):00070                 CMPA  #'9'
+E06C 2302             (00/vt100_demo.asm):00071                 BLS   HEX_OUT
+E06E 8B07             (00/vt100_demo.asm):00072                 ADDA  #7
+E070                  (00/vt100_demo.asm):00073         HEX_OUT
+E070 8DCF             (00/vt100_demo.asm):00074                 BSR   PUTCH
+E072 39               (00/vt100_demo.asm):00075                 RTS
+                      (00/vt100_demo.asm):00076         
+E073                  (00/vt100_demo.asm):00077         SET_COLOR
+E073 8406             (00/vt100_demo.asm):00078                 ANDA  #$06
+E075 8B01             (00/vt100_demo.asm):00079                 ADDA  #1
+E077 8B30             (00/vt100_demo.asm):00080                 ADDA  #'0'
+E079 3402             (00/vt100_demo.asm):00081                 PSHS  A
+E07B 861B             (00/vt100_demo.asm):00082                 LDA   #ESC
+E07D 8DC2             (00/vt100_demo.asm):00083                 BSR   PUTCH
+E07F 865B             (00/vt100_demo.asm):00084                 LDA   #'['
+E081 8DBE             (00/vt100_demo.asm):00085                 BSR   PUTCH
+E083 8633             (00/vt100_demo.asm):00086                 LDA   #'3'
+E085 8DBA             (00/vt100_demo.asm):00087                 BSR   PUTCH
+E087 3502             (00/vt100_demo.asm):00088                 PULS  A
+E089 8DB6             (00/vt100_demo.asm):00089                 BSR   PUTCH
+E08B 866D             (00/vt100_demo.asm):00090                 LDA   #'m'
+E08D 8DB2             (00/vt100_demo.asm):00091                 BSR   PUTCH
+E08F 39               (00/vt100_demo.asm):00092                 RTS
+                      (00/vt100_demo.asm):00093         
+                      (00/vt100_demo.asm):00094         ; ---------------------------
+                      (00/vt100_demo.asm):00095         ; Data
+                      (00/vt100_demo.asm):00096         ; ---------------------------
+E090 1B               (00/vt100_demo.asm):00097         CLRSEQ  FCB   ESC
+E091 5B324A           (00/vt100_demo.asm):00098                 FCC   "[2J"
+E094 1B               (00/vt100_demo.asm):00099                 FCB   ESC
+E095 5B48             (00/vt100_demo.asm):00100                 FCC   "[H"
+E097 00               (00/vt100_demo.asm):00101                 FCB   0
+                      (00/vt100_demo.asm):00102         
+E098 5654313030204445 (00/vt100_demo.asm):00103         TITLE   FCC   "VT100 DEMO"
+     4D4F
+E0A2 0D0A00           (00/vt100_demo.asm):00104                 FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00105         
+E0A5 1B               (00/vt100_demo.asm):00106         COLOR1  FCB   ESC
+E0A6 5B33316D52656420 (00/vt100_demo.asm):00107                 FCC   "[31mRed text"
+     74657874
+E0B2 1B               (00/vt100_demo.asm):00108                 FCB   ESC
+E0B3 5B306D           (00/vt100_demo.asm):00109                 FCC   "[0m"
+E0B6 0D0A00           (00/vt100_demo.asm):00110                 FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00111         
+E0B9 1B               (00/vt100_demo.asm):00112         COLOR2  FCB   ESC
+E0BA 5B33326D47726565 (00/vt100_demo.asm):00113                 FCC   "[32mGreen text"
+     6E2074657874
+E0C8 1B               (00/vt100_demo.asm):00114                 FCB   ESC
+E0C9 5B306D           (00/vt100_demo.asm):00115                 FCC   "[0m"
+E0CC 0D0A00           (00/vt100_demo.asm):00116                 FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00117         
+E0CF 1B               (00/vt100_demo.asm):00118         COLOR3  FCB   ESC
+E0D0 5B33346D426C7565 (00/vt100_demo.asm):00119                 FCC   "[34mBlue text"
+     2074657874
+E0DD 1B               (00/vt100_demo.asm):00120                 FCB   ESC
+E0DE 5B306D           (00/vt100_demo.asm):00121                 FCC   "[0m"
+E0E1 0D0A00           (00/vt100_demo.asm):00122                 FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00123         
+E0E4 1B               (00/vt100_demo.asm):00124         STYLE1  FCB   ESC
+E0E5 5B346D556E646572 (00/vt100_demo.asm):00125                 FCC   "[4mUnderline"
+     6C696E65
+E0F1 1B               (00/vt100_demo.asm):00126                 FCB   ESC
+E0F2 5B306D           (00/vt100_demo.asm):00127                 FCC   "[0m"
+E0F5 20               (00/vt100_demo.asm):00128                 FCB   "  "
+E0F6 1B               (00/vt100_demo.asm):00129                 FCB   ESC
+E0F7 5B376D496E766572 (00/vt100_demo.asm):00130                 FCC   "[7mInverse"
+     7365
+E101 1B               (00/vt100_demo.asm):00131                 FCB   ESC
+E102 5B306D           (00/vt100_demo.asm):00132                 FCC   "[0m"
+E105 0D0A00           (00/vt100_demo.asm):00133                 FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00134         
+E108 1B               (00/vt100_demo.asm):00135         MOVE1   FCB   ESC
+E109 5B353B3130484375 (00/vt100_demo.asm):00136                 FCC   "[5;10HCursor moved to row 5, col 10"
+     72736F72206D6F76
+     656420746F20726F
+     7720352C20636F6C
+     203130
+E12C 1B               (00/vt100_demo.asm):00137                 FCB   ESC
+E12D 5B306D           (00/vt100_demo.asm):00138                 FCC   "[0m"
+E130 0D0A00           (00/vt100_demo.asm):00139                 FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00140         
+E133 4C696E6520       (00/vt100_demo.asm):00141         LINEPFX FCC   "Line "
+E138 00               (00/vt100_demo.asm):00142                 FCB   0
+                      (00/vt100_demo.asm):00143         
+E139 0D0A00           (00/vt100_demo.asm):00144         CRLF    FCB   $0D,$0A,0
+                      (00/vt100_demo.asm):00145         
+                      (00/vt100_demo.asm):00146         ; IRQ vector
+E13C 3B               (00/vt100_demo.asm):00147         IRQ_ENT RTI
+                      (00/vt100_demo.asm):00148         
+                      (00/vt100_demo.asm):00149                 ORG   $FFF4
+FFF4 E13C             (00/vt100_demo.asm):00150                 FDB   IRQ_ENT
+                      (00/vt100_demo.asm):00151                 ORG   $FFF6
+FFF6 E13C             (00/vt100_demo.asm):00152                 FDB   IRQ_ENT
+                      (00/vt100_demo.asm):00153                 ORG   $FFFE
+FFFE E000             (00/vt100_demo.asm):00154                 FDB   START

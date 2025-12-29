@@ -28,6 +28,7 @@ image = { version = "0.24" }
 rfd = "0.16"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+vte = "0.11"
 
 [lib]
 name = "em6809"

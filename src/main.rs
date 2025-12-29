@@ -296,6 +296,13 @@ fn main() {
     let mut mmu_maps_user: Vec<(usize, u16)> = Vec::new();
     let mut mmu_attrs_sys: Vec<(usize, u8)> = Vec::new();
     let mut mmu_attrs_user: Vec<(usize, u8)> = Vec::new();
+    let mut console_gui_enable: bool = true;
+    let mut console_gui_title: String = "em6809 Console".to_string();
+    let mut console_gui_font_size: f32 = 14.0;
+    let mut console_gui_cols: usize = 80;
+    let mut console_gui_rows: usize = 24;
+    let mut console_gui_scrollback: usize = 1000;
+    let mut console_gui_ctrl_keys: bool = true;
 
     // Debug toggles initial state from env/CLI
     if env::var("EM6809_SETTINGS_DEBUG")
@@ -369,6 +376,31 @@ fn main() {
             if !console_tee_stderr {
                 console_tee_stderr = c.tee_stderr.unwrap_or(false);
             }
+        }
+    }
+    if let Some(c) = &persisted.console {
+        if let Some(v) = c.gui_enable {
+            console_gui_enable = v;
+        }
+        if let Some(v) = c.gui_title.as_ref() {
+            if !v.trim().is_empty() {
+                console_gui_title = v.clone();
+            }
+        }
+        if let Some(v) = c.gui_font_size {
+            console_gui_font_size = v;
+        }
+        if let Some(v) = c.gui_cols {
+            console_gui_cols = v;
+        }
+        if let Some(v) = c.gui_rows {
+            console_gui_rows = v;
+        }
+        if let Some(v) = c.gui_scrollback {
+            console_gui_scrollback = v;
+        }
+        if let Some(v) = c.gui_ctrl_keys {
+            console_gui_ctrl_keys = v;
         }
     }
     // Block
@@ -809,6 +841,12 @@ fn main() {
         }
     };
 
+    let gui_active = reg_viewer.is_some();
+    let gui_console_on = gui_active && console_base.is_some() && console_gui_enable;
+    em6809::io::set_console_gui_active(gui_active);
+    em6809::io::set_console_gui_enabled(gui_console_on);
+    em6809::io::set_console_stdout_enabled(!gui_console_on);
+
     // Send effective configuration to Settings baseline for the GUI
     if let Some(viewer) = &reg_viewer {
         let mut s = regview::SettingsState::default();
@@ -838,6 +876,13 @@ fn main() {
         s.console_rx_wm = console_rx_wm.map(|v| v.to_string()).unwrap_or_default();
         s.console_irq_hold = console_irq_hold.map(|v| v.to_string()).unwrap_or_default();
         s.console_tee_stderr = console_tee_stderr;
+        s.console_gui = console_gui_enable;
+        s.console_gui_title = console_gui_title.clone();
+        s.console_gui_font_size = format!("{}", console_gui_font_size);
+        s.console_gui_cols = console_gui_cols.to_string();
+        s.console_gui_rows = console_gui_rows.to_string();
+        s.console_gui_scrollback = console_gui_scrollback.to_string();
+        s.console_gui_ctrl_keys = console_gui_ctrl_keys;
         // Origin markers: general + console
         let saved_protect = persisted
             .mmu
@@ -899,6 +944,41 @@ fn main() {
             "console.tee_stderr",
             cli_console_tee_stderr,
             pc.and_then(|c| c.tee_stderr).is_some(),
+        );
+        mark(
+            "console.gui_enable",
+            false,
+            pc.and_then(|c| c.gui_enable).is_some(),
+        );
+        mark(
+            "console.gui_title",
+            false,
+            pc.and_then(|c| c.gui_title.as_ref()).is_some(),
+        );
+        mark(
+            "console.gui_font_size",
+            false,
+            pc.and_then(|c| c.gui_font_size).is_some(),
+        );
+        mark(
+            "console.gui_cols",
+            false,
+            pc.and_then(|c| c.gui_cols).is_some(),
+        );
+        mark(
+            "console.gui_rows",
+            false,
+            pc.and_then(|c| c.gui_rows).is_some(),
+        );
+        mark(
+            "console.gui_scrollback",
+            false,
+            pc.and_then(|c| c.gui_scrollback).is_some(),
+        );
+        mark(
+            "console.gui_ctrl_keys",
+            false,
+            pc.and_then(|c| c.gui_ctrl_keys).is_some(),
         );
 
         s.use_block = block_base.is_some();
@@ -2334,6 +2414,37 @@ fn main() {
                                 {
                                     io_mmu.feed_console_input(&v);
                                 }
+                            }
+                        }
+                    }
+                    let gui_input = viewer_cpu.take_console_input();
+                    if !gui_input.is_empty() {
+                        if let Some(io_mem) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Memory>>()
+                        {
+                            io_mem.feed_console_input(&gui_input);
+                        } else if let Some(io_mmu) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<IoBus<Mc6829>>()
+                        {
+                            io_mmu.feed_console_input(&gui_input);
+                        } else if let Some(wt) = bus_worker
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<bus::WriteTrack>()
+                        {
+                            let inner_any = wt.inner_any_mut();
+                            if let Some(io_mem) =
+                                inner_any.downcast_mut::<IoBus<Memory>>()
+                            {
+                                io_mem.feed_console_input(&gui_input);
+                            } else if let Some(io_mmu) =
+                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                io_mmu.feed_console_input(&gui_input);
                             }
                         }
                     }
@@ -3833,6 +3944,29 @@ fn main() {
                             io_mem.feed_console_input(&v);
                         } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
                             io_mmu.feed_console_input(&v);
+                        }
+                    }
+                }
+            }
+            if let Some(viewer) = &reg_viewer {
+                let gui_input = viewer.take_console_input();
+                if !gui_input.is_empty() {
+                    if let Some(io_mem) =
+                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
+                    {
+                        io_mem.feed_console_input(&gui_input);
+                    } else if let Some(io_mmu) =
+                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Mc6829>>()
+                    {
+                        io_mmu.feed_console_input(&gui_input);
+                    } else if let Some(wt) =
+                        bus.as_mut().as_any_mut().downcast_mut::<bus::WriteTrack>()
+                    {
+                        let inner_any = wt.inner_any_mut();
+                        if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                            io_mem.feed_console_input(&gui_input);
+                        } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                            io_mmu.feed_console_input(&gui_input);
                         }
                     }
                 }

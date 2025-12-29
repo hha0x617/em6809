@@ -151,6 +151,105 @@ pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context) {
                                 );
                                 draw_origin_badge(ui, &app.settings_origins, "console.irq_hold");
                             });
+                            ui.separator();
+                            ui.label(fl!(LOADER, "console-gui-header"));
+                            ui.horizontal(|ui| {
+                                ui.checkbox(
+                                    &mut app.settings.console_gui,
+                                    fl!(LOADER, "console-gui-enable"),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_enable",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(fl!(LOADER, "console-gui-title"));
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut app.settings.console_gui_title,
+                                    )
+                                    .hint_text("em6809 Console")
+                                    .desired_width(220.0),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_title",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(fl!(LOADER, "console-gui-font-size"));
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut app.settings.console_gui_font_size,
+                                    )
+                                    .hint_text("14")
+                                    .desired_width(80.0),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_font_size",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(fl!(LOADER, "console-gui-cols"));
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut app.settings.console_gui_cols,
+                                    )
+                                    .hint_text("80")
+                                    .desired_width(80.0),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_cols",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(fl!(LOADER, "console-gui-rows"));
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut app.settings.console_gui_rows,
+                                    )
+                                    .hint_text("24")
+                                    .desired_width(80.0),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_rows",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(fl!(LOADER, "console-gui-scrollback"));
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut app.settings.console_gui_scrollback,
+                                    )
+                                    .hint_text("1000")
+                                    .desired_width(80.0),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_scrollback",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.checkbox(
+                                    &mut app.settings.console_gui_ctrl_keys,
+                                    fl!(LOADER, "console-gui-ctrl-keys"),
+                                );
+                                draw_origin_badge(
+                                    ui,
+                                    &app.settings_origins,
+                                    "console.gui_ctrl_keys",
+                                );
+                            });
                         });
                     }
                     2 => {

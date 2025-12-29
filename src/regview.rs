@@ -91,6 +91,7 @@ impl RegSnapshot {
 pub static SHOW_ORIGINS_OVERRIDE: OnceCell<AtomicBool> = OnceCell::new();
 
 pub mod gui {
+    mod console_ui;
     mod list_ui;
     mod mem_ui;
     mod regs_ui;
@@ -107,10 +108,568 @@ pub mod gui {
     use std::collections::HashMap;
     use std::fs::File;
     use std::path::PathBuf;
+    use vte;
 
     // Type aliases to simplify complex sync types
     type GpioSyncState = Option<(bool, u8, u32, u32)>;
     type MmuSyncState = Option<(bool, u8, [u16; 16])>;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum TermColor {
+        Default,
+        Idx(u8),
+        Rgb(u8, u8, u8),
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) struct TermCell {
+        pub(crate) ch: char,
+        pub(crate) fg: TermColor,
+        pub(crate) bg: TermColor,
+        pub(crate) bold: bool,
+        pub(crate) underline: bool,
+        pub(crate) inverse: bool,
+    }
+
+    impl Default for TermCell {
+        fn default() -> Self {
+            Self {
+                ch: ' ',
+                fg: TermColor::Default,
+                bg: TermColor::Default,
+                bold: false,
+                underline: false,
+                inverse: false,
+            }
+        }
+    }
+
+    impl TermCell {
+        fn has_contents(&self) -> bool {
+            self.ch != ' '
+                || self.fg != TermColor::Default
+                || self.bg != TermColor::Default
+                || self.bold
+                || self.underline
+                || self.inverse
+        }
+    }
+
+    struct TermState {
+        pub(crate) rows: usize,
+        pub(crate) cols: usize,
+        pub(crate) cursor_row: usize,
+        pub(crate) cursor_col: usize,
+        saved_row: usize,
+        saved_col: usize,
+        fg: TermColor,
+        bg: TermColor,
+        bold: bool,
+        underline: bool,
+        inverse: bool,
+        wrap_pending: bool,
+        pub(crate) screen: Vec<Vec<TermCell>>,
+        pub(crate) history: std::collections::VecDeque<Vec<TermCell>>,
+        scrollback: usize,
+        used_rows: usize,
+    }
+
+    impl TermState {
+        fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
+            let rows = rows.max(1) as usize;
+            let cols = cols.max(1) as usize;
+            let mut state = Self {
+                rows,
+                cols,
+                cursor_row: 0,
+                cursor_col: 0,
+                saved_row: 0,
+                saved_col: 0,
+                fg: TermColor::Default,
+                bg: TermColor::Default,
+                bold: false,
+                underline: false,
+                inverse: false,
+                wrap_pending: false,
+                screen: Vec::new(),
+                history: std::collections::VecDeque::new(),
+                scrollback,
+                used_rows: 0,
+            };
+            state.reset_screen();
+            state
+        }
+
+        fn reset_screen(&mut self) {
+            self.screen = vec![self.blank_line_default(); self.rows];
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            self.wrap_pending = false;
+            self.used_rows = 0;
+        }
+
+        fn blank_line_default(&self) -> Vec<TermCell> {
+            vec![TermCell::default(); self.cols]
+        }
+
+        fn blank_cell_current(&self) -> TermCell {
+            TermCell {
+                ch: ' ',
+                fg: self.fg,
+                bg: self.bg,
+                bold: self.bold,
+                underline: self.underline,
+                inverse: self.inverse,
+            }
+        }
+
+        fn set_size(&mut self, rows: u16, cols: u16) {
+            let rows = rows.max(1) as usize;
+            let cols = cols.max(1) as usize;
+            if self.rows == rows && self.cols == cols {
+                return;
+            }
+            let old_rows = self.rows;
+            let old_cols = self.cols;
+            self.rows = rows;
+            self.cols = cols;
+            self.wrap_pending = false;
+            if self.used_rows > rows {
+                self.used_rows = rows;
+            }
+
+            if cols != old_cols {
+                for line in &mut self.screen {
+                    if line.len() > cols {
+                        line.truncate(cols);
+                    } else if line.len() < cols {
+                        line.extend(std::iter::repeat_with(TermCell::default).take(cols - line.len()));
+                    }
+                }
+                for line in &mut self.history {
+                    if line.len() > cols {
+                        line.truncate(cols);
+                    } else if line.len() < cols {
+                        line.extend(std::iter::repeat_with(TermCell::default).take(cols - line.len()));
+                    }
+                }
+            }
+
+            if rows > old_rows {
+                let extra = rows - old_rows;
+                for _ in 0..extra {
+                    self.screen.push(self.blank_line_default());
+                }
+            } else if rows < old_rows {
+                let remove = old_rows - rows;
+                let drained: Vec<Vec<TermCell>> = self.screen.drain(0..remove).collect();
+                for line in drained {
+                    self.push_history_line(line);
+                }
+                self.cursor_row = self.cursor_row.saturating_sub(remove);
+                if self.cursor_row >= rows {
+                    self.cursor_row = rows.saturating_sub(1);
+                }
+            }
+        }
+
+        fn set_scrollback_len(&mut self, rows: usize) {
+            if self.scrollback == rows {
+                return;
+            }
+            self.scrollback = rows;
+            while self.history.len() > self.scrollback {
+                self.history.pop_front();
+            }
+        }
+
+        fn screen_content_rows(&self) -> usize {
+            let mut last = 0usize;
+            for (idx, row) in self.screen.iter().enumerate() {
+                if row.iter().any(|cell| cell.has_contents()) {
+                    last = idx + 1;
+                }
+            }
+            last = last.max(self.used_rows);
+            if self.wrap_pending {
+                last = last.max(self.cursor_row.saturating_add(1));
+            }
+            last
+        }
+
+        fn clear_screen(&mut self, mode: u16) {
+            match mode {
+                1 => {
+                    for r in 0..=self.cursor_row {
+                        let end = if r == self.cursor_row {
+                            self.cursor_col
+                        } else {
+                            self.cols.saturating_sub(1)
+                        };
+                        self.clear_line_range(r, 0, end);
+                    }
+                }
+                2 => {
+                    self.commit_screen_to_history();
+                    for r in 0..self.rows {
+                        self.clear_line_range(r, 0, self.cols.saturating_sub(1));
+                    }
+                    self.used_rows = 0;
+                }
+                _ => {
+                    for r in self.cursor_row..self.rows {
+                        let start = if r == self.cursor_row {
+                            self.cursor_col
+                        } else {
+                            0
+                        };
+                        self.clear_line_range(r, start, self.cols.saturating_sub(1));
+                    }
+                }
+            }
+        }
+
+        fn clear_line(&mut self, mode: u16) {
+            match mode {
+                1 => self.clear_line_range(self.cursor_row, 0, self.cursor_col),
+                2 => self.clear_line_range(self.cursor_row, 0, self.cols.saturating_sub(1)),
+                _ => self.clear_line_range(
+                    self.cursor_row,
+                    self.cursor_col,
+                    self.cols.saturating_sub(1),
+                ),
+            }
+        }
+
+        fn clear_line_range(&mut self, row: usize, start: usize, end: usize) {
+            if row >= self.rows || self.cols == 0 {
+                return;
+            }
+            let end = end.min(self.cols.saturating_sub(1));
+            let start = start.min(end);
+            let blank = self.blank_cell_current();
+            let line = &mut self.screen[row];
+            for cell in line.iter_mut().take(end + 1).skip(start) {
+                *cell = blank.clone();
+            }
+        }
+
+        fn scroll_up(&mut self, mut count: usize) {
+            count = count.min(self.rows);
+            for _ in 0..count {
+                if let Some(line) = self.screen.first().cloned() {
+                    self.push_history_line(line);
+                }
+                if !self.screen.is_empty() {
+                    self.screen.remove(0);
+                }
+                self.screen.push(self.blank_line_default());
+            }
+            self.used_rows = self.rows;
+        }
+
+        fn push_history_line(&mut self, line: Vec<TermCell>) {
+            if self.scrollback == 0 {
+                return;
+            }
+            self.history.push_back(line);
+            while self.history.len() > self.scrollback {
+                self.history.pop_front();
+            }
+        }
+
+        fn newline(&mut self) {
+            self.wrap_pending = false;
+            if self.cursor_row + 1 >= self.rows {
+                self.scroll_up(1);
+            } else {
+                self.cursor_row += 1;
+            }
+            self.used_rows = self.used_rows.max(self.cursor_row.saturating_add(1));
+        }
+
+        fn carriage_return(&mut self) {
+            self.cursor_col = 0;
+            self.wrap_pending = false;
+        }
+
+        fn backspace(&mut self) {
+            self.cursor_col = self.cursor_col.saturating_sub(1);
+            self.wrap_pending = false;
+        }
+
+        fn tab(&mut self) {
+            let next = ((self.cursor_col / 8) + 1) * 8;
+            self.cursor_col = next.min(self.cols.saturating_sub(1));
+            self.wrap_pending = false;
+        }
+
+        fn put_char(&mut self, c: char) {
+            if self.rows == 0 || self.cols == 0 {
+                return;
+            }
+            if self.wrap_pending {
+                self.cursor_col = 0;
+                self.newline();
+                self.wrap_pending = false;
+            }
+            if self.cursor_row >= self.rows {
+                self.cursor_row = self.rows.saturating_sub(1);
+            }
+            let cell = TermCell {
+                ch: c,
+                fg: self.fg,
+                bg: self.bg,
+                bold: self.bold,
+                underline: self.underline,
+                inverse: self.inverse,
+            };
+            self.screen[self.cursor_row][self.cursor_col] = cell;
+            self.used_rows = self.used_rows.max(self.cursor_row.saturating_add(1));
+            if self.cursor_col + 1 >= self.cols {
+                self.wrap_pending = true;
+            } else {
+                self.cursor_col += 1;
+            }
+        }
+
+        fn reset_attrs(&mut self) {
+            self.fg = TermColor::Default;
+            self.bg = TermColor::Default;
+            self.bold = false;
+            self.underline = false;
+            self.inverse = false;
+        }
+
+        fn cursor_pos(&mut self, row: usize, col: usize) {
+            self.cursor_row = row.min(self.rows.saturating_sub(1));
+            self.cursor_col = col.min(self.cols.saturating_sub(1));
+            self.wrap_pending = false;
+        }
+
+        fn cursor_up(&mut self, n: usize) {
+            self.cursor_row = self.cursor_row.saturating_sub(n);
+            self.wrap_pending = false;
+        }
+
+        fn cursor_down(&mut self, n: usize) {
+            self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
+            self.wrap_pending = false;
+        }
+
+        fn cursor_forward(&mut self, n: usize) {
+            self.cursor_col = (self.cursor_col + n).min(self.cols.saturating_sub(1));
+            self.wrap_pending = false;
+        }
+
+        fn cursor_back(&mut self, n: usize) {
+            self.cursor_col = self.cursor_col.saturating_sub(n);
+            self.wrap_pending = false;
+        }
+
+        fn save_cursor(&mut self) {
+            self.saved_row = self.cursor_row;
+            self.saved_col = self.cursor_col;
+        }
+
+        fn restore_cursor(&mut self) {
+            self.cursor_row = self.saved_row.min(self.rows.saturating_sub(1));
+            self.cursor_col = self.saved_col.min(self.cols.saturating_sub(1));
+        }
+
+        fn reset(&mut self) {
+            self.commit_screen_to_history();
+            self.reset_attrs();
+            self.reset_screen();
+        }
+
+        fn commit_screen_to_history(&mut self) {
+            let last = self.screen_content_rows();
+            if last == 0 {
+                return;
+            }
+            let lines: Vec<Vec<TermCell>> =
+                self.screen.iter().take(last).cloned().collect();
+            for line in lines {
+                self.push_history_line(line);
+            }
+        }
+    }
+
+    impl vte::Perform for TermState {
+        fn print(&mut self, c: char) {
+            self.put_char(c);
+        }
+
+        fn execute(&mut self, byte: u8) {
+            match byte {
+                b'\n' => self.newline(),
+                b'\r' => self.carriage_return(),
+                b'\t' => self.tab(),
+                0x08 => self.backspace(),
+                _ => {}
+            }
+        }
+
+        fn csi_dispatch(
+            &mut self,
+            params: &vte::Params,
+            _intermediates: &[u8],
+            _ignore: bool,
+            action: char,
+        ) {
+            let mut flat: Vec<u16> = Vec::new();
+            for p in params.iter() {
+                flat.extend(p.iter().copied());
+            }
+            match action {
+                'm' => {
+                    if flat.is_empty() {
+                        self.reset_attrs();
+                    } else {
+                        let mut i = 0;
+                        while i < flat.len() {
+                            let code = flat[i];
+                            match code {
+                                0 => self.reset_attrs(),
+                                1 => self.bold = true,
+                                4 => self.underline = true,
+                                7 => self.inverse = true,
+                                22 => self.bold = false,
+                                24 => self.underline = false,
+                                27 => self.inverse = false,
+                                30..=37 => self.fg = TermColor::Idx((code - 30) as u8),
+                                39 => self.fg = TermColor::Default,
+                                40..=47 => self.bg = TermColor::Idx((code - 40) as u8),
+                                49 => self.bg = TermColor::Default,
+                                90..=97 => self.fg = TermColor::Idx((code - 90 + 8) as u8),
+                                100..=107 => self.bg = TermColor::Idx((code - 100 + 8) as u8),
+                                38 | 48 => {
+                                    let is_fg = code == 38;
+                                    if i + 1 < flat.len() {
+                                        let mode = flat[i + 1];
+                                        if mode == 5 && i + 2 < flat.len() {
+                                            let idx = flat[i + 2] as u8;
+                                            if is_fg {
+                                                self.fg = TermColor::Idx(idx);
+                                            } else {
+                                                self.bg = TermColor::Idx(idx);
+                                            }
+                                            i += 2;
+                                        } else if mode == 2 && i + 4 < flat.len() {
+                                            let r = flat[i + 2] as u8;
+                                            let g = flat[i + 3] as u8;
+                                            let b = flat[i + 4] as u8;
+                                            if is_fg {
+                                                self.fg = TermColor::Rgb(r, g, b);
+                                            } else {
+                                                self.bg = TermColor::Rgb(r, g, b);
+                                            }
+                                            i += 4;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+                'H' | 'f' => {
+                    let row = flat.get(0).copied().unwrap_or(1).saturating_sub(1) as usize;
+                    let col = flat.get(1).copied().unwrap_or(1).saturating_sub(1) as usize;
+                    self.cursor_pos(row, col);
+                }
+                'A' => {
+                    let n = flat.get(0).copied().unwrap_or(1) as usize;
+                    self.cursor_up(n);
+                }
+                'B' => {
+                    let n = flat.get(0).copied().unwrap_or(1) as usize;
+                    self.cursor_down(n);
+                }
+                'C' => {
+                    let n = flat.get(0).copied().unwrap_or(1) as usize;
+                    self.cursor_forward(n);
+                }
+                'D' => {
+                    let n = flat.get(0).copied().unwrap_or(1) as usize;
+                    self.cursor_back(n);
+                }
+                'J' => {
+                    let mode = flat.get(0).copied().unwrap_or(0);
+                    self.clear_screen(mode);
+                }
+                'K' => {
+                    let mode = flat.get(0).copied().unwrap_or(0);
+                    self.clear_line(mode);
+                }
+                _ => {}
+            }
+        }
+
+        fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+            match byte as char {
+                'c' => self.reset(),
+                '7' => self.save_cursor(),
+                '8' => self.restore_cursor(),
+                _ => {}
+            }
+        }
+
+        fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
+        fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
+        fn put(&mut self, _byte: u8) {}
+        fn unhook(&mut self) {}
+    }
+
+    pub(crate) struct ConsoleState {
+        parser: vte::Parser,
+        term: TermState,
+        scroll_offset: usize,
+        follow: bool,
+        last_scroll_y: f32,
+    }
+
+    impl ConsoleState {
+        fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
+            Self {
+                parser: vte::Parser::new(),
+                term: TermState::new(rows, cols, scrollback),
+                scroll_offset: 0,
+                follow: true,
+                last_scroll_y: 0.0,
+            }
+        }
+
+        fn set_size(&mut self, rows: u16, cols: u16) {
+            self.term.set_size(rows, cols);
+        }
+
+        fn set_scrollback_len(&mut self, rows: usize) {
+            if self.term.scrollback == rows {
+                return;
+            }
+            self.term.set_scrollback_len(rows);
+            self.scroll_offset = 0;
+            self.follow = true;
+            self.last_scroll_y = 0.0;
+        }
+
+        fn process_bytes(&mut self, bytes: &[u8]) {
+            for b in bytes {
+                self.parser.advance(&mut self.term, *b);
+            }
+        }
+
+        fn screen_content_rows(&self) -> usize {
+            self.term.screen_content_rows()
+        }
+
+        fn commit_screen_to_history(&mut self) {
+            self.term.commit_screen_to_history();
+        }
+    }
 
     // macOS-specific helpers moved to crate::platform::macos
 
@@ -294,6 +853,8 @@ pub mod gui {
         pub mem_buf: Arc<Mutex<(u16, Vec<u8>)>>, // current window snapshot
         pub mem_hl: Arc<Mutex<Option<(u16, usize)>>>, // highlight range
         pub mem_utf8: Arc<AtomicBool>,
+        pub console_input: Arc<Mutex<Vec<u8>>>,
+        pub console_state: Arc<Mutex<ConsoleState>>,
         pub mem_jump_text: String,
         // GPIO LED color when ON
         pub gpio_on_color: egui::Color32,
@@ -378,6 +939,7 @@ pub mod gui {
         // Console status (for quick panel order)
         pub console_enabled: bool,
         pub console_base: Option<u16>,
+        pub console_gui_open: bool,
         pub dev_tab: DeviceTab,
     }
 
@@ -405,6 +967,9 @@ pub mod gui {
             // Initialize color text once if empty (for first render before opening settings)
             if self.gpio_on_color_text.is_empty() {
                 self.gpio_on_color_text = format_color_hex(self.gpio_on_color);
+            }
+            if console_ui::take_console_closed() {
+                self.console_gui_open = false;
             }
             // macOS: ensure GUI_CTX is set so external triggers can repaint
             #[cfg(target_os = "macos")]
@@ -475,6 +1040,7 @@ pub mod gui {
                         self.open_in_app_settings();
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
+                        let prev_console_gui = self.settings_baseline.console_gui;
                         self.settings_baseline = s.clone();
                         // Update origins map
                         self.settings_origins.clear();
@@ -487,6 +1053,13 @@ pub mod gui {
                         // Update quick-panel console state from new baseline
                         self.console_enabled = self.settings_baseline.use_console;
                         self.console_base = parse_u16_any(&self.settings_baseline.console_base_hex);
+                        if self.settings_baseline.console_gui {
+                            if !prev_console_gui {
+                                self.console_gui_open = true;
+                            }
+                        } else {
+                            self.console_gui_open = false;
+                        }
                         // publish to globals
                         let glob = GLOBAL_SETTINGS.get_or_init(|| {
                             Arc::new(Mutex::new((SettingsState::default(), HashMap::new(), None)))
@@ -525,11 +1098,19 @@ pub mod gui {
                             self.settings_busy_since = None;
                             // In case UiSetSettingsBaseline was dropped, refresh from latest baseline.
                             if let Some((s, origins, color_opt)) = get_latest_settings_baseline() {
+                                let prev_console_gui = self.settings_baseline.console_gui;
                                 self.settings_baseline = s.clone();
                                 self.settings_origins = origins;
                                 self.console_enabled = self.settings_baseline.use_console;
                                 self.console_base =
                                     parse_u16_any(&self.settings_baseline.console_base_hex);
+                                if self.settings_baseline.console_gui {
+                                    if !prev_console_gui {
+                                        self.console_gui_open = true;
+                                    }
+                                } else {
+                                    self.console_gui_open = false;
+                                }
                                 if !self.settings_open {
                                     self.settings = s;
                                 }
@@ -613,6 +1194,12 @@ pub mod gui {
                         self.open_pending_path = Some(path);
                         self.open_bin_base_text = "0x0000".to_string();
                         self.open_dialog_active = true;
+                    }
+                    Command::OpenImage { .. } => {
+                        if let Ok(mut st) = self.console_state.lock() {
+                            st.commit_screen_to_history();
+                        }
+                        rest.push(cmd);
                     }
                     Command::UiLoadLst(path) => {
                         // Map .lst and switch to LST view immediately
@@ -973,6 +1560,55 @@ pub mod gui {
                 self.edit_initialized = false;
             }
 
+            let console_title = if self.settings_baseline.console_gui_title.trim().is_empty() {
+                "em6809 Console".to_string()
+            } else {
+                self.settings_baseline.console_gui_title.clone()
+            };
+            let console_font_size = self
+                .settings_baseline
+                .console_gui_font_size
+                .trim()
+                .parse::<f32>()
+                .unwrap_or(14.0)
+                .clamp(8.0, 32.0);
+            let console_cols = parse_num_usize_any_gui(
+                &self.settings_baseline.console_gui_cols,
+            )
+            .unwrap_or(80)
+            .clamp(20, 300) as u16;
+            let console_rows = parse_num_usize_any_gui(
+                &self.settings_baseline.console_gui_rows,
+            )
+            .unwrap_or(24)
+            .clamp(10, 120) as u16;
+            let console_scrollback = parse_num_usize_any_gui(
+                &self.settings_baseline.console_gui_scrollback,
+            )
+            .unwrap_or(1000)
+            .clamp(0, 20000);
+            let console_cfg = console_ui::ConsoleConfig {
+                enabled: self.settings_baseline.use_console
+                    && self.settings_baseline.console_gui
+                    && self.console_gui_open,
+                title: console_title,
+                font_size: console_font_size,
+                cols: console_cols,
+                rows: console_rows,
+                scrollback: console_scrollback,
+                ctrl_keys: self.settings_baseline.console_gui_ctrl_keys,
+            };
+            if self.console_gui_open && console_cfg.enabled {
+                console_ui::show_console_viewport(
+                    ctx,
+                    self.console_state.clone(),
+                    self.console_input.clone(),
+                    console_cfg,
+                );
+            } else {
+                console_ui::close_console_viewport(ctx);
+            }
+
             // Keep the UI ticking while emulation is running so highlights and panels update.
             if !self.paused.load(Ordering::SeqCst) {
                 ctx.request_repaint();
@@ -1002,6 +1638,8 @@ pub mod gui {
         mem_buf: Arc<Mutex<(u16, Vec<u8>)>>,
         mem_hl: Arc<Mutex<Option<(u16, usize)>>>,
         mem_utf8: Arc<AtomicBool>,
+        console_input: Arc<Mutex<Vec<u8>>>,
+        console_state: Arc<Mutex<ConsoleState>>,
         quit_flag: Arc<AtomicBool>,
         alive: Arc<AtomicBool>,
         started: Arc<AtomicBool>,
@@ -1034,6 +1672,8 @@ pub mod gui {
                 mem_buf: Arc::clone(&self.mem_buf),
                 mem_hl: Arc::clone(&self.mem_hl),
                 mem_utf8: Arc::clone(&self.mem_utf8),
+                console_input: Arc::clone(&self.console_input),
+                console_state: Arc::clone(&self.console_state),
                 quit_flag: Arc::clone(&self.quit_flag),
                 alive: Arc::clone(&self.alive),
                 started: Arc::clone(&self.started),
@@ -1116,6 +1756,8 @@ pub mod gui {
             let mem_buf: Arc<Mutex<(u16, Vec<u8>)>> = Arc::new(Mutex::new((0, Vec::new())));
             let mem_hl: Arc<Mutex<Option<(u16, usize)>>> = Arc::new(Mutex::new(None));
             let mem_utf8 = Arc::new(AtomicBool::new(false));
+            let console_input = Arc::new(Mutex::new(Vec::new()));
+            let console_state = Arc::new(Mutex::new(ConsoleState::new(24, 80, 1000)));
 
             // Try to discover a Japanese-capable font from common system locations
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -1213,6 +1855,8 @@ pub mod gui {
             let mem_buf_thread = mem_buf.clone();
             let mem_hl_thread = mem_hl.clone();
             let mem_utf8_thread = mem_utf8.clone();
+            let console_input_thread = console_input.clone();
+            let console_state_thread = console_state.clone();
             let quit_flag_thread = Arc::new(AtomicBool::new(false));
             let quit_flag_thread_clone = quit_flag_thread.clone();
             let alive_flag = Arc::new(AtomicBool::new(false));
@@ -1302,6 +1946,8 @@ pub mod gui {
                     mem_buf: mem_buf_thread.clone(),
                     mem_hl: mem_hl_thread.clone(),
                     mem_utf8: mem_utf8_thread.clone(),
+                    console_input: console_input_thread.clone(),
+                    console_state: console_state_thread.clone(),
                     mem_jump_text: format!("0x{initial_start:04X}"),
                     mem_len_text: format!("{}", mem_window_len_thread.load(Ordering::SeqCst)),
                     quit_flag: quit_flag_thread_clone,
@@ -1371,6 +2017,7 @@ pub mod gui {
                     settings_origins: HashMap::new(),
                     console_enabled: false,
                     console_base: None,
+                    console_gui_open: true,
                     dev_tab: DeviceTab::Console,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
@@ -1433,6 +2080,8 @@ pub mod gui {
                 mem_buf,
                 mem_hl,
                 mem_utf8,
+                console_input,
+                console_state,
                 quit_flag: quit_flag_thread,
                 alive: alive_flag,
                 started: started_flag,
@@ -1475,6 +2124,8 @@ pub mod gui {
             let mem_buf: Arc<Mutex<(u16, Vec<u8>)>> = Arc::new(Mutex::new((0, Vec::new())));
             let mem_hl: Arc<Mutex<Option<(u16, usize)>>> = Arc::new(Mutex::new(None));
             let mem_utf8 = Arc::new(AtomicBool::new(false));
+            let console_input = Arc::new(Mutex::new(Vec::new()));
+            let console_state = Arc::new(Mutex::new(ConsoleState::new(24, 80, 1000)));
             let quit_flag = Arc::new(AtomicBool::new(false));
             let alive = Arc::new(AtomicBool::new(false));
             let started = Arc::new(AtomicBool::new(false));
@@ -1576,6 +2227,8 @@ pub mod gui {
                 mem_buf,
                 mem_hl,
                 mem_utf8,
+                console_input,
+                console_state,
                 quit_flag,
                 alive,
                 started,
@@ -1612,6 +2265,8 @@ pub mod gui {
             let mem_buf_thread = self.mem_buf.clone();
             let mem_hl_thread = self.mem_hl.clone();
             let mem_utf8_thread = self.mem_utf8.clone();
+            let console_input_thread = self.console_input.clone();
+            let console_state_thread = self.console_state.clone();
             let initial_start = self.mem_window_start.load(Ordering::SeqCst) as u16;
             let use_japanese = Self::is_japanese_locale();
 
@@ -1689,6 +2344,8 @@ pub mod gui {
                 mem_buf: mem_buf_thread,
                 mem_hl: mem_hl_thread,
                 mem_utf8: mem_utf8_thread,
+                console_input: console_input_thread,
+                console_state: console_state_thread,
                 mem_jump_text: format!("0x{initial_start:04X}"),
                 mem_len_text: format!("{}", self.mem_window_len.load(Ordering::SeqCst)),
                 quit_flag: self.quit_flag.clone(),
@@ -1758,6 +2415,7 @@ pub mod gui {
                 settings_origins: HashMap::new(),
                 console_enabled: false,
                 console_base: None,
+                console_gui_open: true,
                 dev_tab: DeviceTab::Console,
             };
             let mut init = init;
@@ -1911,6 +2569,15 @@ pub mod gui {
         pub fn update_memory_window(&self, start: u16, bytes: Vec<u8>) {
             if let Ok(mut g) = self.mem_buf.lock() {
                 *g = (start, bytes);
+            }
+        }
+        pub fn take_console_input(&self) -> Vec<u8> {
+            if let Ok(mut g) = self.console_input.lock() {
+                let out = g.clone();
+                g.clear();
+                out
+            } else {
+                Vec::new()
             }
         }
         pub fn set_memory_highlight(&self, start: u16, len: usize) {

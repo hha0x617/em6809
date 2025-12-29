@@ -30,6 +30,13 @@ pub struct Console {
     pub rx_watermark: Option<usize>,
     pub irq_hold: Option<u32>,
     pub tee_stderr: Option<bool>,
+    pub gui_enable: Option<bool>,
+    pub gui_title: Option<String>,
+    pub gui_font_size: Option<f32>,
+    pub gui_cols: Option<usize>,
+    pub gui_rows: Option<usize>,
+    pub gui_scrollback: Option<usize>,
+    pub gui_ctrl_keys: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

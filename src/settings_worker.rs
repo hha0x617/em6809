@@ -158,6 +158,14 @@ fn parse_usize_any(s: &str) -> Option<usize> {
     usize::from_str_radix(digits, base).ok()
 }
 
+fn parse_f32_any(s: &str) -> Option<f32> {
+    let sl = s.trim();
+    if sl.is_empty() {
+        return None;
+    }
+    sl.parse::<f32>().ok()
+}
+
 pub fn persist_settings_snapshot(state: &SettingsState, gpio_on_color: u32) {
     let mut p = prefs::Prefs::default();
     p.general = Some(prefs::General {
@@ -178,6 +186,17 @@ pub fn persist_settings_snapshot(state: &SettingsState, gpio_on_color: u32) {
         rx_watermark: parse_usize_any(&state.console_rx_wm),
         irq_hold: parse_u32_any(&state.console_irq_hold),
         tee_stderr: Some(state.console_tee_stderr),
+        gui_enable: Some(state.console_gui),
+        gui_title: if state.console_gui_title.trim().is_empty() {
+            None
+        } else {
+            Some(state.console_gui_title.clone())
+        },
+        gui_font_size: parse_f32_any(&state.console_gui_font_size),
+        gui_cols: parse_usize_any(&state.console_gui_cols),
+        gui_rows: parse_usize_any(&state.console_gui_rows),
+        gui_scrollback: parse_usize_any(&state.console_gui_scrollback),
+        gui_ctrl_keys: Some(state.console_gui_ctrl_keys),
     });
     p.block = Some(prefs::Block {
         enable: Some(state.use_block),
