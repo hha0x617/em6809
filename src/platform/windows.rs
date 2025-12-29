@@ -126,6 +126,7 @@ pub fn show_about_dialog(
         .default_width(420.0)
         .default_height(180.0)
         .show(ctx, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.horizontal(|ui| {
                 if let Some(tex) = tex {
                     let img = egui::Image::new(tex).fit_to_exact_size(egui::vec2(32.0, 32.0));
@@ -134,20 +135,18 @@ pub fn show_about_dialog(
                 ui.heading("em6809");
             });
             ui.separator();
-            ui.add(egui::Label::new(format!("Version: {}", version)).wrap(false));
+            ui.add(egui::Label::new(format!("Version: {}", version)));
             ui.add_space(8.0);
-            ui.add(egui::Label::new("Copyright (c) 2025 hha0x617").wrap(false));
+            ui.add(egui::Label::new("Copyright (c) 2025 hha0x617"));
             ui.add_space(8.0);
-            ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0").wrap(false));
+            ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0"));
             ui.add_space(8.0);
             ui.add(
-                egui::Label::new("See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)")
-                    .wrap(false),
+                egui::Label::new("See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)"),
             );
             ui.add_space(8.0);
             ui.add(
-                egui::Label::new("This software is provided \"AS IS\" without warranty.")
-                    .wrap(false),
+                egui::Label::new("This software is provided \"AS IS\" without warranty."),
             );
             ui.add_space(12.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

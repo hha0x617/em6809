@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use once_cell::sync::OnceCell;
 use std::sync::atomic::AtomicBool;
 
@@ -19,6 +20,14 @@ pub(super) struct ConsoleConfig {
 
 static CONSOLE_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
 static CONSOLE_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
+static CONSOLE_CTX: OnceCell<egui::Context> = OnceCell::new();
+static CONSOLE_VIEWPORT_SIZE: OnceCell<Mutex<egui::Vec2>> = OnceCell::new();
+#[cfg(target_os = "windows")]
+static CONSOLE_REPAINT_TICKER: OnceCell<AtomicBool> = OnceCell::new();
+
+pub(crate) fn console_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("console_vt100")
+}
 
 fn update_console_visible(desired: bool) -> bool {
     let flag = CONSOLE_VISIBLE.get_or_init(|| AtomicBool::new(desired));
@@ -27,7 +36,7 @@ fn update_console_visible(desired: bool) -> bool {
 }
 
 pub(crate) fn set_console_visible(ctx: &egui::Context, visible: bool) {
-    let id = egui::ViewportId::from_hash_of("console_vt100");
+    let id = console_viewport_id();
     update_console_visible(visible);
     ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(visible));
 }
@@ -45,6 +54,51 @@ pub(crate) fn with_console_hidden<R>(ctx: &egui::Context, f: impl FnOnce() -> R)
         set_console_visible(ctx, true);
     }
     out
+}
+
+pub(crate) fn request_console_repaint(ctx_fallback: &egui::Context) {
+    if let Some(ctx) = CONSOLE_CTX.get() {
+        ctx.request_repaint();
+        ctx.request_repaint_after(Duration::from_millis(16));
+    } else {
+        ctx_fallback.request_repaint();
+        ctx_fallback.request_repaint_after(Duration::from_millis(16));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_console_repaint_ticker() {
+    let started = CONSOLE_REPAINT_TICKER.get_or_init(|| AtomicBool::new(false));
+    if started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        let visible = CONSOLE_VISIBLE
+            .get()
+            .map(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap_or(false);
+        if visible {
+            if let Some(ctx) = CONSOLE_CTX.get() {
+                let id = console_viewport_id();
+                ctx.request_repaint();
+                ctx.request_repaint_of(id);
+                ctx.request_repaint_after_for(Duration::from_millis(33), id);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(33));
+    });
+}
+
+pub(crate) fn console_viewport_size() -> Option<egui::Vec2> {
+    CONSOLE_VIEWPORT_SIZE
+        .get()
+        .and_then(|m| m.lock().ok().map(|g| *g))
+}
+
+pub(crate) fn poke_console_viewport(ctx: &egui::Context) {
+    if let Some(size) = console_viewport_size() {
+        ctx.send_viewport_cmd_to(console_viewport_id(), egui::ViewportCommand::InnerSize(size));
+    }
 }
 
 fn measure_char_size(ctx: &egui::Context, font_size: f32) -> egui::Vec2 {
@@ -354,6 +408,8 @@ fn render_console(
                 }
             }
         });
+    // Keep repainting even when the console viewport is unfocused (Windows).
+    ctx.request_repaint_after(Duration::from_millis(33));
 }
 
 pub(super) fn show_console_viewport(
@@ -362,32 +418,59 @@ pub(super) fn show_console_viewport(
     input: Arc<Mutex<Vec<u8>>>,
     cfg: ConsoleConfig,
 ) {
-    let id = egui::ViewportId::from_hash_of("console_vt100");
+    let id = console_viewport_id();
     if update_console_visible(cfg.enabled) {
         set_console_visible(ctx, cfg.enabled);
     }
     let char_size = measure_char_size(ctx, cfg.font_size);
     let width = (char_size.x * cfg.cols as f32 + 16.0).max(320.0);
     let height = (char_size.y * cfg.rows as f32 + 16.0).max(240.0);
+    if let Some(slot) = CONSOLE_VIEWPORT_SIZE.get() {
+        if let Ok(mut g) = slot.lock() {
+            *g = egui::vec2(width, height);
+        }
+    } else {
+        let _ = CONSOLE_VIEWPORT_SIZE.set(Mutex::new(egui::vec2(width, height)));
+    }
     let builder = egui::ViewportBuilder::default()
         .with_title(cfg.title.clone())
         .with_inner_size(egui::vec2(width, height))
         .with_visible(cfg.enabled)
-        .with_active(false)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
-    ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
-        if cfg.enabled {
-            render_console(ctx, &state, &input, &cfg);
-        }
-        if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            update_console_visible(false);
-            note_console_closed();
-        }
-    });
+    #[cfg(target_os = "windows")]
+    {
+        ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
+            let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
+            ensure_console_repaint_ticker();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
+            if cfg.enabled {
+                render_console(ctx, &state, &input, &cfg);
+            }
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_console_visible(false);
+                note_console_closed();
+            }
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+            let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
+            if cfg.enabled {
+                render_console(ctx, &state, &input, &cfg);
+            }
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_console_visible(false);
+                note_console_closed();
+            }
+        });
+    }
 }
 
 pub(super) fn close_console_viewport(ctx: &egui::Context) {

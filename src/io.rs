@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub trait Device: Send {
     fn contains(&self, addr: u16) -> bool;
@@ -48,6 +48,7 @@ static CONSOLE_GUI_ENABLED: AtomicBool = AtomicBool::new(false);
 static CONSOLE_GUI_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CONSOLE_STDOUT_ENABLED: AtomicBool = AtomicBool::new(true);
 static CONSOLE_GUI_BUF: OnceCell<Mutex<Vec<u8>>> = OnceCell::new();
+static CONSOLE_REPAINT_CB: OnceCell<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = OnceCell::new();
 
 pub fn set_console_gui_enabled(on: bool) {
     CONSOLE_GUI_ENABLED.store(on, Ordering::SeqCst);
@@ -70,6 +71,22 @@ pub fn take_console_gui_bytes() -> Vec<u8> {
         }
     }
     Vec::new()
+}
+
+pub fn console_gui_pending_len() -> usize {
+    if let Some(m) = CONSOLE_GUI_BUF.get() {
+        if let Ok(g) = m.lock() {
+            return g.len();
+        }
+    }
+    0
+}
+
+pub fn set_console_repaint_callback(cb: Option<Arc<dyn Fn() + Send + Sync>>) {
+    let slot = CONSOLE_REPAINT_CB.get_or_init(|| Mutex::new(None));
+    if let Ok(mut g) = slot.lock() {
+        *g = cb;
+    }
 }
 
 static BLOCK_LOG: AtomicBool = AtomicBool::new(false);
@@ -157,6 +174,13 @@ impl ConsoleDev {
                 }
             } else {
                 let _ = CONSOLE_GUI_BUF.set(Mutex::new(vec![b]));
+            }
+            if let Some(cb) = CONSOLE_REPAINT_CB.get() {
+                if let Ok(cb) = cb.lock() {
+                    if let Some(cb) = cb.as_ref() {
+                        cb();
+                    }
+                }
             }
         }
         let stdout_enabled = CONSOLE_STDOUT_ENABLED.load(Ordering::SeqCst)

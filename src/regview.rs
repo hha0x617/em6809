@@ -11,7 +11,6 @@ pub use helpers::{
     parse_num_u16_any_gui, parse_num_usize_any_gui, parse_u16_any,
 };
 
-#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
@@ -974,6 +973,13 @@ pub mod gui {
     impl RegApp {
         fn spawn_image_loader(&self, path: std::path::PathBuf, base: Option<u16>) {
             let cmds = Arc::clone(&self.cmds);
+            #[cfg(windows)]
+            {
+                if let Ok(mut q) = cmds.lock() {
+                    q.push(Command::OpenImage { path, base });
+                }
+            };
+            #[cfg(not(windows))]
             std::thread::spawn(move || {
                 let lower = path
                     .extension()
@@ -1686,6 +1692,25 @@ pub mod gui {
             // Keep the UI ticking while emulation is running so highlights and panels update.
             if !self.paused.load(Ordering::SeqCst) {
                 ctx.request_repaint();
+            }
+            // Ensure the UI keeps repainting while the console window is visible.
+            if self.settings_baseline.console_gui && self.console_gui_open {
+                ctx.request_repaint_after(Duration::from_millis(33));
+                let console_id = console_ui::console_viewport_id();
+                ctx.request_repaint_of(console_id);
+                ctx.request_repaint_after_for(Duration::from_millis(33), console_id);
+                console_ui::request_console_repaint(ctx);
+                console_ui::poke_console_viewport(ctx);
+                let ctx_clone = ctx.clone();
+                let cb = std::sync::Arc::new(move || {
+                    ctx_clone.request_repaint();
+                    ctx_clone.request_repaint_of(console_id);
+                    ctx_clone.request_repaint_after_for(Duration::from_millis(16), console_id);
+                    console_ui::poke_console_viewport(&ctx_clone);
+                });
+                em6809::io::set_console_repaint_callback(Some(cb));
+            } else {
+                em6809::io::set_console_repaint_callback(None);
             }
         }
     }

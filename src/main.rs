@@ -190,6 +190,180 @@ fn clear_logical_memory(bus: &mut dyn Bus) {
     }
 }
 
+fn finalize_loaded_image(
+    bus: &mut dyn Bus,
+    cpu: &mut Cpu,
+    viewer: Option<&regview::Viewer>,
+    loaded: &mut LoadedImage,
+    path: &Path,
+    new_loaded: LoadedImage,
+) {
+    // PC init priority: reset vector if valid; else SREC entry; else first loaded range
+    let mut new_pc: Option<u16> = None;
+    let pch = bus.read8(0xFFFE) as u16;
+    let pcl = bus.read8(0xFFFF) as u16;
+    let vec_pc = (pch << 8) | pcl;
+    if vec_pc != 0x0000 {
+        new_pc = Some(vec_pc);
+    }
+    if new_pc.is_none() {
+        new_pc = new_loaded.entry.and_then(|e| {
+            if e == 0x0000
+                && !new_loaded
+                    .loaded_ranges
+                    .iter()
+                    .any(|(s, e2)| *s <= e && e < *e2)
+            {
+                None
+            } else {
+                Some(e)
+            }
+        });
+    }
+    if new_pc.is_none() {
+        if let Some((s, _e)) = new_loaded.loaded_ranges.first().copied() {
+            new_pc = Some(s);
+        }
+    }
+    if let Some(pc) = new_pc {
+        cpu.r.pc = pc;
+    }
+    loader_util::log_program_info(&new_loaded, cpu.r.pc);
+    if let Some(viewer) = viewer {
+        let snap = regview::RegSnapshot {
+            a: cpu.r.a,
+            b: cpu.r.b,
+            d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
+            x: cpu.r.x,
+            y: cpu.r.y,
+            u: cpu.r.u,
+            s: cpu.r.s,
+            dp: cpu.r.dp,
+            pc: cpu.r.pc,
+            cc: cpu.r.cc,
+        };
+        viewer.push(snap);
+        viewer.force_hex_view();
+        viewer.set_paused(true);
+        let (mstart, mlen, mfollow) = viewer.get_memory_window();
+        let pc_base = cpu.r.pc & 0xFFF0;
+        let desired_start = if mfollow {
+            pc_base
+        } else if mstart == 0x0000 {
+            pc_base
+        } else {
+            mstart
+        };
+        if desired_start != mstart {
+            viewer.set_memory_window_start(desired_start as usize);
+        }
+        let eff_start: u16 = if mfollow { pc_base } else { desired_start };
+        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+        let mut a = eff_start;
+        for _ in 0..mlen {
+            buf.push(bus.read8(a));
+            a = a.wrapping_add(1);
+        }
+        viewer.update_memory_window(eff_start, buf);
+        let (consumed, _) = em6809::disasm::disasm_one_hex(bus, cpu.r.pc);
+        let clen = core::cmp::max(consumed as usize, 1);
+        viewer.set_memory_highlight(cpu.r.pc, clen);
+        let spans = loader_util::coalesce_ranges(new_loaded.loaded_ranges.clone());
+        if let Some((start, end)) = spans
+            .iter()
+            .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
+            .copied()
+        {
+            let mut cur = start;
+            let mut out = String::new();
+            let mut processed: usize = 0;
+            let total_len: usize = end.wrapping_sub(start) as usize;
+            while processed < total_len {
+                let (consumed, text) = em6809::disasm::disasm_one_hex(bus, cur);
+                use core::fmt::Write as _;
+                let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                let step = core::cmp::max(consumed as usize, 1);
+                processed += step;
+                cur = cur.wrapping_add(step as u16);
+            }
+            viewer.update_hex_listing(out);
+        }
+        settings_runtime::sync_gpio_from_bus(bus, viewer);
+        settings_runtime::sync_block_from_bus(bus, viewer);
+        request_reapply_settings_from_baseline();
+        let lst_path = path.with_extension("lst");
+        let lst_path_upper = path.with_extension("LST");
+        if lst_path.exists() || lst_path_upper.exists() {
+            let p = if lst_path.exists() { lst_path } else { lst_path_upper };
+            viewer.request_load_lst(p);
+        } else {
+            viewer.force_hex_view();
+        }
+    }
+    *loaded = new_loaded;
+}
+
+fn apply_parsed_image(
+    bus: &mut dyn Bus,
+    cpu: &mut Cpu,
+    viewer: Option<&regview::Viewer>,
+    loaded: &mut LoadedImage,
+    path: &Path,
+    parsed: loader::ParsedImage,
+) {
+    clear_logical_memory(bus);
+    for (addr, bytes) in parsed.blocks.iter() {
+        for (i, b) in bytes.iter().enumerate() {
+            bus.write8(addr.wrapping_add(i as u16), *b);
+        }
+    }
+    let new_loaded = LoadedImage {
+        loaded_ranges: parsed.loaded_ranges,
+        entry: parsed.entry,
+    };
+    finalize_loaded_image(bus, cpu, viewer, loaded, path, new_loaded);
+}
+
+fn apply_open_image(
+    bus: &mut dyn Bus,
+    cpu: &mut Cpu,
+    viewer: Option<&regview::Viewer>,
+    loaded: &mut LoadedImage,
+    path: &Path,
+    base: Option<u16>,
+) {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            clear_logical_memory(bus);
+            let mut new_loaded = LoadedImage {
+                loaded_ranges: Vec::new(),
+                entry: None,
+            };
+            let lower = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if lower == "s19" || lower == "srec" {
+                let text = String::from_utf8_lossy(&bytes);
+                match loader::load_srec_bus(bus, &text) {
+                    Ok(li) => new_loaded = li,
+                    Err(e) => {
+                        eprintln!("Open failed (SREC): {e}");
+                    }
+                }
+            } else if lower == "bin" {
+                let base_addr = base.unwrap_or(0);
+                new_loaded = loader::load_binary_bus(bus, base_addr, &bytes);
+            } else {
+                eprintln!("Unsupported extension for Open: {}", lower);
+            }
+            finalize_loaded_image(bus, cpu, viewer, loaded, path, new_loaded);
+        }
+        Err(e) => eprintln!("Open failed: {e}"),
+    }
+}
+
 fn main() {
     // Initialize i18n (Fluent) from environment/OS locale
     i18n::init_from_env();
@@ -1570,119 +1744,16 @@ fn main() {
                                         };
                                         viewer_cpu.push(snap2);
                                     }
-                                    regview::Command::OpenImageParsed { path: _, parsed } => {
-                                        // Apply pre-parsed image from loader thread.
-                                        clear_logical_memory(bus_worker.as_mut());
-                                        for (addr, bytes) in parsed.blocks.iter() {
-                                            for (i, b) in bytes.iter().enumerate() {
-                                                bus_worker
-                                                    .as_mut()
-                                                    .write8(addr.wrapping_add(i as u16), *b);
-                                            }
-                                        }
-                                        let new_loaded = LoadedImage {
-                                            loaded_ranges: parsed.loaded_ranges.clone(),
-                                            entry: parsed.entry,
-                                        };
-                                        let mut new_pc: Option<u16> = None;
-                                        let pch = bus_worker.as_mut().read8(0xFFFE) as u16;
-                                        let pcl = bus_worker.as_mut().read8(0xFFFF) as u16;
-                                        let vec_pc = (pch << 8) | pcl;
-                                        if vec_pc != 0x0000 {
-                                            new_pc = Some(vec_pc);
-                                        }
-                                        if new_pc.is_none() {
-                                            new_pc = new_loaded.entry.and_then(|e| {
-                                                if e == 0x0000
-                                                    && !new_loaded.loaded_ranges.iter().any(
-                                                        |(s, e2)| *s <= e && e < *e2,
-                                                    )
-                                                {
-                                                    None
-                                                } else {
-                                                    Some(e)
-                                                }
-                                            });
-                                        }
-                                        if new_pc.is_none() {
-                                            if let Some((s, _e)) =
-                                                new_loaded.loaded_ranges.first().copied()
-                                            {
-                                                new_pc = Some(s);
-                                            }
-                                        }
-                                        if let Some(pc) = new_pc {
-                                            cpu_worker.r.pc = pc;
-                                            viewer_cpu.set_memory_window(pc, None, None);
-                                        }
-                                        loader_util::log_program_info(&new_loaded, cpu_worker.r.pc);
-                                        let snap = regview::RegSnapshot {
-                                            a: cpu_worker.r.a,
-                                            b: cpu_worker.r.b,
-                                            d: ((cpu_worker.r.a as u16) << 8)
-                                                | (cpu_worker.r.b as u16),
-                                            x: cpu_worker.r.x,
-                                            y: cpu_worker.r.y,
-                                            u: cpu_worker.r.u,
-                                            s: cpu_worker.r.s,
-                                            dp: cpu_worker.r.dp,
-                                            pc: cpu_worker.r.pc,
-                                            cc: cpu_worker.r.cc,
-                                        };
-                                        viewer_cpu.push(snap);
-                                        loaded_ranges_worker = new_loaded.loaded_ranges.clone();
-                                        viewer_cpu.force_hex_view();
-                                        viewer_cpu.set_paused(true);
-                                        let (mstart_w, mlen_w, mfollow_w) =
-                                            viewer_cpu.get_memory_window();
-                                        let eff_start_w: u16 = if mfollow_w {
-                                            cpu_worker.r.pc & 0xFFF0
-                                        } else {
-                                            mstart_w
-                                        };
-                                        if mfollow_w {
-                                            viewer_cpu.set_memory_window_start(
-                                                (cpu_worker.r.pc & 0xFFF0) as usize,
-                                            );
-                                        }
-                                        let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
-                                        let mut a = eff_start_w;
-                                        for _ in 0..mlen_w {
-                                            nbuf.push(bus_worker.as_mut().read8(a));
-                                            a = a.wrapping_add(1);
-                                        }
-                                        viewer_cpu.update_memory_window(eff_start_w, nbuf);
-                                        let (consumed, _) = em6809::disasm::disasm_one_hex(
+                                    regview::Command::OpenImageParsed { path, parsed } => {
+                                        apply_parsed_image(
                                             bus_worker.as_mut(),
-                                            cpu_worker.r.pc,
+                                            &mut cpu_worker,
+                                            Some(&viewer_cpu),
+                                            &mut loaded,
+                                            &path,
+                                            parsed,
                                         );
-                                        let clen = core::cmp::max(consumed as usize, 1);
-                                        viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
-                                        let spans = loader_util::coalesce_ranges(
-                                            loaded_ranges_worker.clone(),
-                                        );
-                                        if let Some((start, end)) = spans
-                                            .iter()
-                                            .find(|(s, e)| *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e)
-                                            .copied()
-                                        {
-                                            let mut cur = start;
-                                            let mut out = String::new();
-                                            let mut processed: usize = 0;
-                                            let total_len: usize = end.wrapping_sub(start) as usize;
-                                            while processed < total_len {
-                                                let (consumed, text) = em6809::disasm::disasm_one_hex(
-                                                    bus_worker.as_mut(),
-                                                    cur,
-                                                );
-                                                use core::fmt::Write as _;
-                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                                let step = core::cmp::max(consumed as usize, 1);
-                                                processed += step;
-                                                cur = cur.wrapping_add(step as u16);
-                                            }
-                                            viewer_cpu.update_hex_listing(out);
-                                        }
+                                        loaded_ranges_worker = loaded.loaded_ranges.clone();
                                     }
                                     regview::Command::OpenImage { path, base } => {
                                         // Handle file load on worker side (macOS/Linux GUI-main-thread mode)
@@ -3046,7 +3117,26 @@ fn main() {
                         regview::Command::UiOpenSettings
                         | regview::Command::UiOpenSettingsExternal => {}
                         regview::Command::UiOpenImageDialog => {}
-                        regview::Command::OpenImageParsed { .. } => {}
+                        regview::Command::OpenImageParsed { path, parsed } => {
+                            apply_parsed_image(
+                                bus.as_mut(),
+                                &mut cpu,
+                                Some(viewer),
+                                &mut loaded,
+                                &path,
+                                parsed,
+                            );
+                        }
+                        regview::Command::OpenImage { path, base } => {
+                            apply_open_image(
+                                bus.as_mut(),
+                                &mut cpu,
+                                Some(viewer),
+                                &mut loaded,
+                                &path,
+                                base,
+                            );
+                        }
                         regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                         regview::Command::UiAckSettings { .. } => {}
                         regview::Command::UiSetGpioOnColor(_) => {}
@@ -3273,7 +3363,26 @@ fn main() {
                             regview::Command::UiOpenSettings
                             | regview::Command::UiOpenSettingsExternal => {}
                             regview::Command::UiOpenImageDialog => {}
-                            regview::Command::OpenImageParsed { .. } => {}
+                            regview::Command::OpenImageParsed { path, parsed } => {
+                                apply_parsed_image(
+                                    bus.as_mut(),
+                                    &mut cpu,
+                                    Some(viewer),
+                                    &mut loaded,
+                                    &path,
+                                    parsed,
+                                );
+                            }
+                            regview::Command::OpenImage { path, base } => {
+                                apply_open_image(
+                                    bus.as_mut(),
+                                    &mut cpu,
+                                    Some(viewer),
+                                    &mut loaded,
+                                    &path,
+                                    base,
+                                );
+                            }
                             regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                             regview::Command::UiAckSettings { .. } => {}
                             regview::Command::UiSetGpioOnColor(_) => {}
@@ -3593,156 +3702,6 @@ fn main() {
                                     {
                                         mmu.identity_map_current();
                                     }
-                                }
-                            }
-                            regview::Command::OpenImage { path, base } => {
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        // Clear memory without clobbering MMU regs
-                                        clear_logical_memory(bus.as_mut());
-                                        let mut new_loaded = LoadedImage {
-                                            loaded_ranges: Vec::new(),
-                                            entry: None,
-                                        };
-                                        let lower = path
-                                            .extension()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("")
-                                            .to_lowercase();
-                                        if lower == "s19" || lower == "srec" {
-                                            let text = String::from_utf8_lossy(&bytes);
-                                            match loader::load_srec_bus(bus.as_mut(), &text) {
-                                                Ok(li) => new_loaded = li,
-                                                Err(e) => {
-                                                    eprintln!("Open failed (SREC): {e}");
-                                                }
-                                            }
-                                        } else if lower == "bin" {
-                                            let base_addr = base.unwrap_or(0);
-                                            new_loaded = loader::load_binary_bus(
-                                                bus.as_mut(),
-                                                base_addr,
-                                                &bytes,
-                                            );
-                                        } else {
-                                            eprintln!("Unsupported extension for Open: {}", lower);
-                                        }
-                                        // PC init priority: reset vector if valid; else SREC entry; else first loaded range
-                                        let mut new_pc: Option<u16> = None;
-                                        // If reset vector points to a non-0x0000 address, use it
-                                        let pch = bus.as_mut().read8(0xFFFE) as u16;
-                                        let pcl = bus.as_mut().read8(0xFFFF) as u16;
-                                        let vec_pc = (pch << 8) | pcl;
-                                        if vec_pc != 0x0000 {
-                                            new_pc = Some(vec_pc);
-                                        }
-                                        if new_pc.is_none() {
-                                            new_pc = new_loaded.entry.and_then(|e| {
-                                                if e == 0x0000
-                                                    && !new_loaded.loaded_ranges.iter().any(
-                                                        |(s, e2)| *s <= e && e < *e2,
-                                                    )
-                                                {
-                                                    None
-                                                } else {
-                                                    Some(e)
-                                                }
-                                            });
-                                        }
-                                        if new_pc.is_none() {
-                                            if let Some((s, _e)) =
-                                                new_loaded.loaded_ranges.first().copied()
-                                            {
-                                                new_pc = Some(s);
-                                            }
-                                        }
-                                        if let Some(pc) = new_pc {
-                                            cpu.r.pc = pc;
-                                        }
-                                        loader_util::log_program_info(&new_loaded, cpu.r.pc);
-                                        let snap = regview::RegSnapshot {
-                                            a: cpu.r.a,
-                                            b: cpu.r.b,
-                                            d: ((cpu.r.a as u16) << 8) | (cpu.r.b as u16),
-                                            x: cpu.r.x,
-                                            y: cpu.r.y,
-                                            u: cpu.r.u,
-                                            s: cpu.r.s,
-                                            dp: cpu.r.dp,
-                                            pc: cpu.r.pc,
-                                            cc: cpu.r.cc,
-                                        };
-                                        viewer.push(snap);
-                                        // Update global loaded image so subsequent Hex rebuilds use the new spans
-                                        loaded = new_loaded;
-                                        viewer.force_hex_view();
-                                        // Pause after load
-                                        viewer.set_paused(true);
-                                        // refresh memory window and listing for new content
-                                        let (mstart, mlen, mfollow) = viewer.get_memory_window();
-                                        let eff_start: u16 =
-                                            if mfollow { cpu.r.pc & 0xFFF0 } else { mstart };
-                                        if mfollow {
-                                            viewer.set_memory_window_start(
-                                                (cpu.r.pc & 0xFFF0) as usize,
-                                            );
-                                        }
-                                        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                                        let mut a = eff_start;
-                                        for _ in 0..mlen {
-                                            buf.push(bus.as_mut().read8(a));
-                                            a = a.wrapping_add(1);
-                                        }
-                                        viewer.update_memory_window(eff_start, buf);
-                                        let (consumed, _) =
-                                            em6809::disasm::disasm_one_hex(bus.as_mut(), cpu.r.pc);
-                                        let clen = core::cmp::max(consumed as usize, 1);
-                                        viewer.set_memory_highlight(cpu.r.pc, clen);
-                                        // Update Hex view: always rebuild from current memory so Hex shows disassembly
-                                        let spans = loader_util::coalesce_ranges(
-                                            loaded.loaded_ranges.clone(),
-                                        );
-                                        if let Some((start, end)) = spans
-                                            .iter()
-                                            .find(|(s, e)| *s <= cpu.r.pc && cpu.r.pc < *e)
-                                            .copied()
-                                        {
-                                            let mut cur = start;
-                                            let mut out = String::new();
-                                            let mut processed: usize = 0;
-                                            let total_len: usize = end.wrapping_sub(start) as usize;
-                                            while processed < total_len {
-                                                let (consumed, text) =
-                                                    em6809::disasm::disasm_one_hex(
-                                                        bus.as_mut(),
-                                                        cur,
-                                                    );
-                                                use core::fmt::Write as _;
-                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                                let step = core::cmp::max(consumed as usize, 1);
-                                                processed += step;
-                                                cur = cur.wrapping_add(step as u16);
-                                            }
-                                            viewer.update_hex_listing(out);
-                                        }
-                                        settings_runtime::sync_gpio_from_bus(bus.as_mut(), viewer);
-                                        settings_runtime::sync_block_from_bus(bus.as_mut(), viewer);
-                                        request_reapply_settings_from_baseline();
-                                        // If an adjacent .lst exists, request GUI to map and show it; else prefer Hex
-                                        let lst_path = path.with_extension("lst");
-                                        let lst_path_upper = path.with_extension("LST");
-                                        if lst_path.exists() || lst_path_upper.exists() {
-                                            let p = if lst_path.exists() {
-                                                lst_path
-                                            } else {
-                                                lst_path_upper
-                                            };
-                                            viewer.request_load_lst(p);
-                                        } else {
-                                            viewer.force_hex_view();
-                                        }
-                                    }
-                                    Err(e) => eprintln!("Open failed: {e}"),
                                 }
                             }
                             regview::Command::UiPromptBinBase(_) => {
@@ -4188,7 +4147,16 @@ fn main() {
                         regview::Command::UiOpenSettings
                         | regview::Command::UiOpenSettingsExternal => {}
                         regview::Command::UiOpenImageDialog => {}
-                        regview::Command::OpenImageParsed { .. } => {}
+                        regview::Command::OpenImageParsed { path, parsed } => {
+                            apply_parsed_image(
+                                bus.as_mut(),
+                                &mut cpu,
+                                Some(viewer),
+                                &mut loaded,
+                                &path,
+                                parsed,
+                            );
+                        }
                         regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                         regview::Command::UiAckSettings { .. } => {}
                         regview::Command::UiSetBlockStatus { .. } => {}
