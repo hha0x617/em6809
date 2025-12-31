@@ -1624,6 +1624,8 @@ fn main() {
                             if STOP_REQUESTED.load(Ordering::SeqCst) {
                                 break 'run_loop;
                             }
+                            // Avoid busy-waiting when the UI thread is blocked (e.g., file dialogs).
+                            std::thread::sleep(std::time::Duration::from_millis(2));
                             // Detect Memory pane setting changes (Follow PC / Start / Len)
                             let (ns, nl, nf) = viewer_cpu.get_memory_window();
                             if ns != mstart || nl != mlen || nf != mfollow {

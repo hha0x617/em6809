@@ -214,6 +214,9 @@ fn build_line_offsets(text: &str) -> Vec<usize> {
 }
 
 fn line_at<'a>(text: &'a str, offsets: &[usize], idx: usize) -> &'a str {
+    if idx >= offsets.len() {
+        return "";
+    }
     let start = offsets[idx];
     let mut end = if idx + 1 < offsets.len() {
         offsets[idx + 1].saturating_sub(1)
@@ -236,6 +239,10 @@ fn render_listing_lines(
     cmds: &std::sync::Arc<std::sync::Mutex<Vec<Command>>>,
 ) -> (Option<egui::Rect>, Option<egui::Rect>) {
     let mut highlight_rect: Option<egui::Rect> = None;
+    let total_rows = total_rows.min(offsets.len());
+    if total_rows == 0 {
+        return (None, None);
+    }
     let output = egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_rows(ui, row_height, total_rows, |ui, row_range| {

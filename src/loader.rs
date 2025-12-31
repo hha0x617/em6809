@@ -51,6 +51,9 @@ pub fn parse_srec(s: &str) -> Result<ParsedImage, String> {
                 if line.len() < 4 + count * 2 {
                     return Err(format!("Line {}: too short for count", lineno + 1));
                 }
+                if count < 3 {
+                    return Err(format!("Line {}: invalid S1 count {}", lineno + 1, count));
+                }
                 let addr = u16::from_str_radix(&line[4..8], 16)
                     .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
                 let data_bytes = count - 3;
@@ -68,6 +71,9 @@ pub fn parse_srec(s: &str) -> Result<ParsedImage, String> {
             b'2' => {
                 if line.len() < 4 + count * 2 {
                     return Err(format!("Line {}: too short for count", lineno + 1));
+                }
+                if count < 4 {
+                    return Err(format!("Line {}: invalid S2 count {}", lineno + 1, count));
                 }
                 let addr24 = u32::from_str_radix(&line[4..10], 16)
                     .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
@@ -149,6 +155,9 @@ pub fn load_srec(mem: &mut Memory, s: &str) -> Result<LoadedImage, String> {
                 if line.len() < 4 + count * 2 {
                     return Err(format!("Line {}: too short for count", lineno + 1));
                 }
+                if count < 3 {
+                    return Err(format!("Line {}: invalid S1 count {}", lineno + 1, count));
+                }
                 let addr = u16::from_str_radix(&line[4..8], 16)
                     .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
                 let data_end = 4 + count * 2;
@@ -174,6 +183,9 @@ pub fn load_srec(mem: &mut Memory, s: &str) -> Result<LoadedImage, String> {
                 // S2 cc aaaaaa dd.. cksum
                 if line.len() < 4 + count * 2 {
                     return Err(format!("Line {}: too short for count", lineno + 1));
+                }
+                if count < 4 {
+                    return Err(format!("Line {}: invalid S2 count {}", lineno + 1, count));
                 }
                 let addr24 = u32::from_str_radix(&line[4..10], 16)
                     .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
@@ -234,6 +246,9 @@ pub fn load_srec_bus<B: Bus + ?Sized>(bus: &mut B, s: &str) -> Result<LoadedImag
                 if line.len() < 4 + count * 2 {
                     return Err(format!("Line {}: too short for count", lineno + 1));
                 }
+                if count < 3 {
+                    return Err(format!("Line {}: invalid S1 count {}", lineno + 1, count));
+                }
                 let addr = u16::from_str_radix(&line[4..8], 16)
                     .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;
                 let data_bytes = count - 3;
@@ -253,6 +268,9 @@ pub fn load_srec_bus<B: Bus + ?Sized>(bus: &mut B, s: &str) -> Result<LoadedImag
             b'2' => {
                 if line.len() < 4 + count * 2 {
                     return Err(format!("Line {}: too short for count", lineno + 1));
+                }
+                if count < 4 {
+                    return Err(format!("Line {}: invalid S2 count {}", lineno + 1, count));
                 }
                 let addr24 = u32::from_str_radix(&line[4..10], 16)
                     .map_err(|_| format!("Line {}: bad addr", lineno + 1))?;

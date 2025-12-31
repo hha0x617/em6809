@@ -110,20 +110,20 @@ pub fn show_about_dialog(
                 ui.heading("em6809");
             });
             ui.separator();
-            ui.add(egui::Label::new(format!("Version: {}", version)).wrap(false));
+            ui.add(egui::Label::new(format!("Version: {}", version)).wrap());
             ui.add_space(8.0);
-            ui.add(egui::Label::new("Copyright (c) 2025 hha0x617").wrap(false));
+            ui.add(egui::Label::new("Copyright (c) 2025 hha0x617").wrap());
             ui.add_space(8.0);
-            ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0").wrap(false));
+            ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0").wrap());
             ui.add_space(8.0);
             ui.add(
                 egui::Label::new("See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)")
-                    .wrap(false),
+                    .wrap(),
             );
             ui.add_space(8.0);
             ui.add(
                 egui::Label::new("This software is provided \"AS IS\" without warranty.")
-                    .wrap(false),
+                    .wrap(),
             );
             ui.add_space(12.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

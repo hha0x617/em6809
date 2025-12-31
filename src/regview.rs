@@ -1268,6 +1268,8 @@ pub mod gui {
                         self.open_dialog_active = true;
                     }
                     Command::UiOpenImageDialog => {
+                        // Pause before opening modal dialog to prevent console buffer growth.
+                        self.paused.store(true, Ordering::SeqCst);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         let file = rfd::FileDialog::new()
                             .set_parent(frame_ref)
@@ -1304,6 +1306,8 @@ pub mod gui {
                         if let Ok(f) = std::fs::File::open(&path) {
                             if let Ok(m) = unsafe { Mmap::map(&f) } {
                                 self.lst_mmap = Some(Arc::new(m));
+                                self.lst_rev.fetch_add(1, Ordering::SeqCst);
+                                self.lst_cache = ListingCache::force_refresh();
                                 self.use_hex.store(false, Ordering::SeqCst);
                                 // Center listing around current PC after switching views
                                 self.scroll_to_pc_req.store(true, Ordering::SeqCst);
@@ -1397,12 +1401,12 @@ pub mod gui {
                     eframe::egui::menu::bar(ui, |ui| {
                         ui.menu_button("File", |ui| {
                             if ui.button("Open…").clicked() {
+                                self.paused.store(true, Ordering::SeqCst);
                                 let file = rfd::FileDialog::new()
                                     .set_parent(frame_ref)
                                     .add_filter("Images", &["s19", "srec", "bin"])
                                     .pick_file();
                                 if let Some(path) = file {
-                                    self.paused.store(true, Ordering::SeqCst);
                                     let ext = path
                                         .extension()
                                         .and_then(|s| s.to_str())
@@ -1456,12 +1460,12 @@ pub mod gui {
                     em6809::platform::linux::csd::show_header(ctx, &mut csd_max, |ui| {
                         ui.menu_button("File", |ui| {
                             if ui.button("Open…").clicked() {
+                                self.paused.store(true, Ordering::SeqCst);
                                 let file = rfd::FileDialog::new()
                                     .set_parent(frame_ref)
                                     .add_filter("Images", &["s19", "srec", "bin"])
                                     .pick_file();
                                 if let Some(path) = file {
-                                    self.paused.store(true, Ordering::SeqCst);
                                     let ext = path
                                         .extension()
                                         .and_then(|s| s.to_str())
@@ -1503,12 +1507,12 @@ pub mod gui {
                         eframe::egui::menu::bar(ui, |ui| {
                             ui.menu_button("File", |ui| {
                                 if ui.button("Open…").clicked() {
+                                    self.paused.store(true, Ordering::SeqCst);
                                     let file = rfd::FileDialog::new()
                                         .set_parent(frame_ref)
                                         .add_filter("Images", &["s19", "srec", "bin"])
                                         .pick_file();
                                     if let Some(path) = file {
-                                        self.paused.store(true, Ordering::SeqCst);
                                         let ext = path
                                             .extension()
                                             .and_then(|s| s.to_str())
