@@ -2,9 +2,23 @@
 
 This document summarizes implemented instructions/modes, disassembly conventions, flags/side effects, and practical verification steps.
 
+## Status (2026-04-19)
+
+**The standard MC6809 ISA is 100% implemented.**  All 223 legal opcodes on
+the main table plus the full `$10`/`$11` prefix subopcodes are decoded and
+executed; the remaining 33 slots of opcode space are ISA-reserved/illegal
+and are intentionally left as no-op fallbacks.
+
+Recent completion work (2026-04-19) finished a set of long-standing gaps
+and two correctness bugs (LEAS/LEAU swap, indexed PC-relative decode) —
+see [Implementation history](#implementation-history) at the bottom.
+
 ## Overview
 
-- The emulator covers major MC6809 instructions and addressing modes: short/long branches, A/B/D arithmetic, loads/stores for X/Y/U/S, memory shifts/clear/jump, and control ops.
+- The emulator covers the entire MC6809 instruction set and all standard
+  addressing modes: short/long branches, A/B/D arithmetic, loads/stores for
+  X/Y/U/S, memory shifts/rotates/clear/test/jump, stack operations, and
+  control ops (MUL, SEX, DAA, SYNC, CWAI, SWI/SWI2/SWI3, ABX, etc.).
 - The disassembler spans pages 0x00/0x10/0x11, with unified operand formatting across immediate/direct/indexed/extended and indirect forms; branches show both relative offset and absolute target.
 
 ## Disassembly conventions
@@ -88,3 +102,76 @@ Notes:
 - Load `samples/traces/trace_all.s19` in the GUI and observe markers/flags with tracing.
 - Start PC policy:
   - `--pc` > reset vector > SREC entry (if invalid) > first loaded range start
+
+## Implementation history
+
+### 2026-04-19 (later) — Indexed PC-relative decoding bug
+
+The extended-postbyte (bit7=1) path in `ea_indexed` mis-classified PC
+relative mode:
+
+```rust
+// Wrong: treated rsel==3 (S) + form=0x04/0x08/0x09/0x0B as PC-relative.
+let is_pc_rel = rsel == 3 && matches!(form, 0x04 | 0x08 | 0x09 | 0x0B);
+```
+
+On MC6809, PC-relative is encoded solely by form=0x0C (8-bit) / 0x0D
+(16-bit); rsel is don't-care for those forms.  Fixed to:
+
+```rust
+let is_pc_rel = matches!(form, 0x0C | 0x0D);
+```
+
+and added dedicated arms for 0x0C / 0x0D that compute their EA from PC.
+
+Symptom: `lda ,s` (which lwasm encodes as postbyte $E4 when the offset is
+zero) read bytes just past the instruction instead of the S stack.  Tiny
+Lisp Phase 3 arithmetic primitives (`+`, `-`, `<`) that rely on
+`addd ,s` / `cmpx ,s` were all returning garbage.
+
+### 2026-04-19 — ISA coverage completed
+
+Triggered by Tiny Forth (`emfe_plugins/mc6809/examples/forth/forth.asm`)
+development, which exposed the remaining gaps and one swapped-opcode bug.
+
+**Bug fix (critical):** `LEAS` ($32) and `LEAU` ($33) were swapped — the
+$32 arm updated `U` and the $33 arm updated `S`, the opposite of the ISA.
+The CC was also being updated; per ISA these two instructions leave CC
+unchanged (only `LEAX`/`LEAY` set Z).  Symptom: `leau 2,u` corrupted the
+return stack pointer, eventually leaking a random kernel address onto the
+data stack (observed in Tiny Forth as `10 3 - .` printing `1927  ok`).
+
+**Added instructions (33 total):**
+
+- Accumulator: `NEGA` ($40), `NEGB` ($50), `ASRA` ($47), `ASRB` ($57)
+- Arithmetic: `SEX` ($1D), `MUL` ($3D), `DAA` ($19)
+- `ABX` ($3A)
+- Memory R-M-W (dir / idx / ext for each):
+  - `NEG` ($00 / $60 / $70)
+  - `COM` ($03 / $63 / $73)
+  - `LSR` ($04 / $64 / $74)
+  - `ROR` ($06 / $66 / $76)
+  - `ASR` ($07 / $67 / $77)
+  - `ASL/LSL` ($08 / $68 / $78)
+  - `ROL` ($09 / $69 / $79)
+  - `DEC` ($0A / $6A / $7A)
+  - `INC` ($0C / $6C / $7C)
+  - `TST` ($0D / $6D / $7D)
+- Sync / interrupt: `SYNC` ($13), `CWAI` ($3C)
+  - Both approximate waiting behavior as a no-op fall-through; the frame
+    push in `CWAI` is performed per spec.
+
+### Remaining "gaps" (reserved / illegal)
+
+All 33 opcode slots below are **reserved or illegal** on the real MC6809
+(the immediate-store slots like `$87 STA #` have no meaning, and the rest
+are unassigned by Motorola).  They are intentionally unimplemented:
+
+```
+$01 $02 $05 $0B $14 $15 $18 $1B $38 $3E
+$41 $42 $45 $4B $4E
+$51 $52 $55 $5B $5E
+$61 $62 $65 $6B
+$71 $72 $75 $7B
+$87 $8F  $C7 $CD $CF
+```
