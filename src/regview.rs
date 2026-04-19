@@ -2617,6 +2617,23 @@ pub mod gui {
             !self.alive.load(Ordering::SeqCst)
         }
 
+        /// Block the caller until the GUI thread has had a chance to flip
+        /// `alive` to true, or until `timeout_ms` elapses.  Returns true if
+        /// the viewer became alive in time.  Needed so the run loop on the
+        /// main thread does not race the newly-spawned GUI thread and see
+        /// `is_closed() == true` before the window has a chance to open.
+        pub fn wait_until_ready(&self, timeout_ms: u64) -> bool {
+            use std::time::{Duration, Instant};
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            while !self.alive.load(Ordering::SeqCst) {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            true
+        }
+
         pub fn quit_requested(&self) -> bool {
             self.quit_flag.load(Ordering::SeqCst)
         }

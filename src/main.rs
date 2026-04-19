@@ -3083,6 +3083,14 @@ fn main() {
         } else {
             None
         };
+        // Wait briefly for the GUI thread to come up before entering the
+        // run loop — otherwise the first `is_closed()` check races with the
+        // spawned thread (which sets `alive=true` only after eframe starts
+        // running), and the main thread would exit before the window even
+        // appears.
+        if let Some(viewer) = &reg_viewer {
+            viewer.wait_until_ready(5000);
+        }
         // Event-driven updates based on write tracking
         'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
             process_settings_worker_queue(reg_viewer.as_ref(), bus.as_mut());
