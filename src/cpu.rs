@@ -137,10 +137,10 @@ impl Cpu {
         // value (otherwise `,R` indirect ($14) would not match `,R` direct ($04)).
         let form = pb & 0x0F;
         let indirect = (pb & 0x10) != 0; // indirect (bracketed) forms
+                                         // PC-relative in MC6809 is encoded by forms 0x0C (8-bit) and
+                                         // 0x0D (16-bit); rsel bits are don't-care for these forms.
                                          // Forms 0x04/0x08/0x09/0x0B always use the register selected
-                                         // by rsel (X/Y/U/S) — including S.  PC-relative is encoded
-                                         // by separate forms (0x0C/0x0D); arms for those are added in
-                                         // a follow-up commit.
+                                         // by rsel (X/Y/U/S) — including S.
         let base = self.get_idx_reg(rsel);
         let is_pc_rel = matches!(form, 0x0C | 0x0D);
         match form {
@@ -363,6 +363,40 @@ impl Cpu {
                     format!("D,{}", reg)
                 };
                 let add = 1 + if indirect { 3 } else { 0 };
+                (ea, add, desc)
+            }
+            0x0C => {
+                // n,PCR (8-bit PC-relative)
+                let off8 = self.fetch8(bus) as i8 as i16;
+                let mut ea = (self.r.pc as i16).wrapping_add(off8) as u16;
+                if indirect {
+                    let hi = bus.read8(ea) as u16;
+                    let lo = bus.read8(ea.wrapping_add(1)) as u16;
+                    ea = (hi << 8) | lo;
+                }
+                let desc = if indirect {
+                    format!("[PC+{}]", off8)
+                } else {
+                    format!("PC+{}", off8)
+                };
+                let add = 1 + if indirect { 3 } else { 0 };
+                (ea, add, desc)
+            }
+            0x0D => {
+                // n,PCR (16-bit PC-relative)
+                let off16 = self.fetch16(bus) as i16;
+                let mut ea = (self.r.pc as i32 + off16 as i32) as u16;
+                if indirect {
+                    let hi = bus.read8(ea) as u16;
+                    let lo = bus.read8(ea.wrapping_add(1)) as u16;
+                    ea = (hi << 8) | lo;
+                }
+                let desc = if indirect {
+                    format!("[PC+{}]", off16)
+                } else {
+                    format!("PC+{}", off16)
+                };
+                let add = 5 + if indirect { 3 } else { 0 };
                 (ea, add, desc)
             }
             0x0F | 0x1F => {
@@ -716,7 +750,24 @@ impl Cpu {
             0x10 => {
                 // prefix for long conditional branches / SWI2 / CMPD / Y-reg ops
                 let sub = self.fetch8(bus);
-                if sub == 0x3F {
+                if (0x21..=0x2F).contains(&sub) {
+                    // Long conditional branches: $10 $21..$2F  (LBRN..LBLE)
+                    let off = self.fetch16(bus) as i16;
+                    let take = self.cond_eval(sub).unwrap_or(false);
+                    if take {
+                        self.r.pc = (self.r.pc as i32 + off as i32) as u16;
+                        consumed = 6;
+                    } else {
+                        consumed = 5;
+                    }
+                    if trace {
+                        println!(
+                            "{:04X}: 10 {:02X} {:04X} LB{:02X} {}",
+                            pc0, sub, off as u16, sub,
+                            if take { "taken" } else { "not" }
+                        );
+                    }
+                } else if sub == 0x3F {
                     // SWI2 — vector at $FFF4/$FFF5
                     self.r.cc |= E;
                     self.push8(bus, self.r.cc);
@@ -743,6 +794,43 @@ impl Cpu {
                     consumed = 5;
                     if trace {
                         println!("{:04X}: 10 83 {:04X} CMPD #${:04X}", pc0, imm, imm);
+                    }
+                } else if sub == 0x93 {
+                    // CMPD <dir
+                    let zp = self.fetch8(bus);
+                    let addr = self.ea_direct(zp);
+                    let hi = bus.read8(addr) as u16;
+                    let lo = bus.read8(addr.wrapping_add(1)) as u16;
+                    let v = (hi << 8) | lo;
+                    let d = ((self.r.a as u16) << 8) | (self.r.b as u16);
+                    let _ = self.sub16_flags(d, v);
+                    consumed = 7;
+                    if trace {
+                        println!("{:04X}: 10 93 {:02X} CMPD <${:02X}", pc0, zp, zp);
+                    }
+                } else if sub == 0xA3 {
+                    // CMPD indexed
+                    let (ea, addcyc, desc) = self.ea_indexed(bus);
+                    let hi = bus.read8(ea) as u16;
+                    let lo = bus.read8(ea.wrapping_add(1)) as u16;
+                    let v = (hi << 8) | lo;
+                    let d = ((self.r.a as u16) << 8) | (self.r.b as u16);
+                    let _ = self.sub16_flags(d, v);
+                    consumed = 7 + addcyc;
+                    if trace {
+                        println!("{:04X}: 10 A3 ..    CMPD {}", pc0, desc);
+                    }
+                } else if sub == 0xB3 {
+                    // CMPD extended
+                    let addr = self.ea_extended(bus);
+                    let hi = bus.read8(addr) as u16;
+                    let lo = bus.read8(addr.wrapping_add(1)) as u16;
+                    let v = (hi << 8) | lo;
+                    let d = ((self.r.a as u16) << 8) | (self.r.b as u16);
+                    let _ = self.sub16_flags(d, v);
+                    consumed = 8;
+                    if trace {
+                        println!("{:04X}: 10 B3 {:04X} CMPD ${:04X}", pc0, addr, addr);
                     }
                 } else if sub == 0x8E {
                     // LDY #imm16
@@ -992,6 +1080,14 @@ impl Cpu {
                     println!("{:04X}: 33 ..    LEAU", pc0);
                 }
             }
+            0x3A => {
+                // ABX — X = X + (unsigned) B.  No flags affected.
+                self.r.x = self.r.x.wrapping_add(self.r.b as u16);
+                consumed = 3;
+                if trace {
+                    println!("{:04X}: 3A        ABX", pc0);
+                }
+            }
             0xCE => {
                 // LDU #imm16
                 let imm = self.fetch16(bus);
@@ -1078,6 +1174,153 @@ impl Cpu {
                 consumed = 6;
                 if trace {
                     println!("{:04X}: FF {:04X} STU ${:04X}", pc0, addr, addr);
+                }
+            }
+            // ----- LDD family ($CC/$DC/$EC/$FC) -------------------------------
+            0xCC => {
+                // LDD #imm16
+                let imm = self.fetch16(bus);
+                self.r.a = (imm >> 8) as u8;
+                self.r.b = (imm & 0xFF) as u8;
+                self.set_nz16(imm);
+                self.r.cc &= !V;
+                consumed = 3;
+                if trace {
+                    println!("{:04X}: CC {:04X} LDD #${:04X}", pc0, imm, imm);
+                }
+            }
+            0xDC => {
+                // LDD <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let hi = bus.read8(addr);
+                let lo = bus.read8(addr.wrapping_add(1));
+                self.r.a = hi;
+                self.r.b = lo;
+                self.set_nz16(((hi as u16) << 8) | (lo as u16));
+                self.r.cc &= !V;
+                consumed = 5;
+                if trace {
+                    println!("{:04X}: DC {:02X}   LDD <${:02X}", pc0, zp, zp);
+                }
+            }
+            0xEC => {
+                // LDD indexed
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let hi = bus.read8(ea);
+                let lo = bus.read8(ea.wrapping_add(1));
+                self.r.a = hi;
+                self.r.b = lo;
+                self.set_nz16(((hi as u16) << 8) | (lo as u16));
+                self.r.cc &= !V;
+                consumed = 5 + addcyc;
+                if trace {
+                    println!("{:04X}: EC ..    LDD {}", pc0, desc);
+                }
+            }
+            0xFC => {
+                // LDD extended
+                let addr = self.ea_extended(bus);
+                let hi = bus.read8(addr);
+                let lo = bus.read8(addr.wrapping_add(1));
+                self.r.a = hi;
+                self.r.b = lo;
+                self.set_nz16(((hi as u16) << 8) | (lo as u16));
+                self.r.cc &= !V;
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: FC {:04X} LDD ${:04X}", pc0, addr, addr);
+                }
+            }
+            // ----- STD family ($DD/$ED/$FD) -----------------------------------
+            0xDD => {
+                // STD <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                bus.write8(addr, self.r.a);
+                bus.write8(addr.wrapping_add(1), self.r.b);
+                self.set_nz16(((self.r.a as u16) << 8) | (self.r.b as u16));
+                self.r.cc &= !V;
+                consumed = 5;
+                if trace {
+                    println!("{:04X}: DD {:02X}   STD <${:02X}", pc0, zp, zp);
+                }
+            }
+            0xED => {
+                // STD indexed
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                bus.write8(ea, self.r.a);
+                bus.write8(ea.wrapping_add(1), self.r.b);
+                self.set_nz16(((self.r.a as u16) << 8) | (self.r.b as u16));
+                self.r.cc &= !V;
+                consumed = 5 + addcyc;
+                if trace {
+                    println!("{:04X}: ED ..    STD {}", pc0, desc);
+                }
+            }
+            0xFD => {
+                // STD extended
+                let addr = self.ea_extended(bus);
+                bus.write8(addr, self.r.a);
+                bus.write8(addr.wrapping_add(1), self.r.b);
+                self.set_nz16(((self.r.a as u16) << 8) | (self.r.b as u16));
+                self.r.cc &= !V;
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: FD {:04X} STD ${:04X}", pc0, addr, addr);
+                }
+            }
+            // ----- LDX family main-table forms ($9E/$BE) ----------------------
+            0x9E => {
+                // LDX <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let hi = bus.read8(addr) as u16;
+                let lo = bus.read8(addr.wrapping_add(1)) as u16;
+                self.r.x = (hi << 8) | lo;
+                self.set_nz16(self.r.x);
+                self.r.cc &= !V;
+                consumed = 5;
+                if trace {
+                    println!("{:04X}: 9E {:02X}   LDX <${:02X}", pc0, zp, zp);
+                }
+            }
+            0xBE => {
+                // LDX extended
+                let addr = self.ea_extended(bus);
+                let hi = bus.read8(addr) as u16;
+                let lo = bus.read8(addr.wrapping_add(1)) as u16;
+                self.r.x = (hi << 8) | lo;
+                self.set_nz16(self.r.x);
+                self.r.cc &= !V;
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: BE {:04X} LDX ${:04X}", pc0, addr, addr);
+                }
+            }
+            0x9F => {
+                // STX <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                bus.write8(addr, (self.r.x >> 8) as u8);
+                bus.write8(addr.wrapping_add(1), (self.r.x & 0xFF) as u8);
+                self.set_nz16(self.r.x);
+                self.r.cc &= !V;
+                consumed = 5;
+                if trace {
+                    println!("{:04X}: 9F {:02X}   STX <${:02X}", pc0, zp, zp);
+                }
+            }
+            0xBF => {
+                // STX extended
+                let addr = self.ea_extended(bus);
+                bus.write8(addr, (self.r.x >> 8) as u8);
+                bus.write8(addr.wrapping_add(1), (self.r.x & 0xFF) as u8);
+                self.set_nz16(self.r.x);
+                self.r.cc &= !V;
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: BF {:04X} STX ${:04X}", pc0, addr, addr);
                 }
             }
             0x11 => {
@@ -1404,6 +1647,54 @@ impl Cpu {
                 consumed = 3;
                 if trace {
                     println!("{:04X}: 7E {:04X} JMP ${:04X}", pc0, addr, addr);
+                }
+            }
+            0x0E => {
+                // JMP direct
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                self.r.pc = addr;
+                consumed = 3;
+                if trace {
+                    println!("{:04X}: 0E {:02X}   JMP <${:02X}", pc0, zp, zp);
+                }
+            }
+            0x6E => {
+                // JMP indexed (covers ,Y  [,Y]  n,X  etc.)
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                self.r.pc = ea;
+                consumed = 3 + addcyc;
+                if trace {
+                    println!("{:04X}: 6E ..    JMP {}", pc0, desc);
+                }
+            }
+            0x9D => {
+                // JSR direct
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let ret = self.r.pc;
+                self.r.s = self.r.s.wrapping_sub(1);
+                bus.write8(self.r.s, (ret & 0x00FF) as u8);
+                self.r.s = self.r.s.wrapping_sub(1);
+                bus.write8(self.r.s, (ret >> 8) as u8);
+                self.r.pc = addr;
+                consumed = 7;
+                if trace {
+                    println!("{:04X}: 9D {:02X}   JSR <${:02X}", pc0, zp, zp);
+                }
+            }
+            0xAD => {
+                // JSR indexed
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let ret = self.r.pc;
+                self.r.s = self.r.s.wrapping_sub(1);
+                bus.write8(self.r.s, (ret & 0x00FF) as u8);
+                self.r.s = self.r.s.wrapping_sub(1);
+                bus.write8(self.r.s, (ret >> 8) as u8);
+                self.r.pc = ea;
+                consumed = 7 + addcyc;
+                if trace {
+                    println!("{:04X}: AD ..    JSR {}", pc0, desc);
                 }
             }
             0x20 => {
@@ -1765,6 +2056,36 @@ impl Cpu {
                     println!("{:04X}: 3B        RTI", pc0);
                 }
             }
+            0x13 => {
+                // SYNC — halt until an interrupt is pending.  Without a full
+                // interrupt-aware scheduler we treat this as a NOP so code
+                // that uses SYNC as a timing hint still makes forward progress.
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 13        SYNC", pc0);
+                }
+            }
+            0x3C => {
+                // CWAI #imm — AND CC with imm, set E, push full frame, halt.
+                // Like SYNC, we fall through after setup instead of actually
+                // waiting for an interrupt to return via RTI.
+                let imm = self.fetch8(bus);
+                self.r.cc &= imm;
+                self.r.cc |= E;
+                // Push full frame on S (PC, U, Y, X, DP, B, A, CC)
+                self.push16(bus, self.r.pc);
+                self.push16(bus, self.r.u);
+                self.push16(bus, self.r.y);
+                self.push16(bus, self.r.x);
+                self.push8(bus, self.r.dp);
+                self.push8(bus, self.r.b);
+                self.push8(bus, self.r.a);
+                self.push8(bus, self.r.cc);
+                consumed = 20;
+                if trace {
+                    println!("{:04X}: 3C {:02X}    CWAI #${:02X}", pc0, imm, imm);
+                }
+            }
             0x3F => {
                 // SWI — vector at $FFFA/$FFFB
                 self.r.cc |= E;
@@ -2106,6 +2427,104 @@ impl Cpu {
                     println!("{:04X}: 4C        INCA", pc0);
                 }
             }
+            0x40 => {
+                // NEGA — A = -A.  C set iff A != 0, V set iff A was 0x80.
+                let prev = self.r.a;
+                let res = 0u8.wrapping_sub(prev);
+                self.r.a = res;
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(V | C))
+                    | (if prev != 0 { C } else { 0 })
+                    | (if prev == 0x80 { V } else { 0 });
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 40        NEGA", pc0);
+                }
+            }
+            0x47 => {
+                // ASRA — arithmetic shift right (preserves sign bit).
+                let c_out = (self.r.a & 0x01) != 0;
+                let res = ((self.r.a as i8) >> 1) as u8;
+                self.r.a = res;
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 47        ASRA", pc0);
+                }
+            }
+            0x50 => {
+                // NEGB
+                let prev = self.r.b;
+                let res = 0u8.wrapping_sub(prev);
+                self.r.b = res;
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(V | C))
+                    | (if prev != 0 { C } else { 0 })
+                    | (if prev == 0x80 { V } else { 0 });
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 50        NEGB", pc0);
+                }
+            }
+            0x57 => {
+                // ASRB
+                let c_out = (self.r.b & 0x01) != 0;
+                let res = ((self.r.b as i8) >> 1) as u8;
+                self.r.b = res;
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 57        ASRB", pc0);
+                }
+            }
+            0x1D => {
+                // SEX — sign-extend B into D (A = (B < 0) ? $FF : $00).
+                self.r.a = if (self.r.b & 0x80) != 0 { 0xFF } else { 0 };
+                let d = ((self.r.a as u16) << 8) | (self.r.b as u16);
+                self.set_nz16(d);
+                self.r.cc &= !V;
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 1D        SEX", pc0);
+                }
+            }
+            0x3D => {
+                // MUL — D = A * B (unsigned 8x8 → 16).  Z from D, C = bit 7 of B.
+                let d = (self.r.a as u16).wrapping_mul(self.r.b as u16);
+                self.r.a = (d >> 8) as u8;
+                self.r.b = (d & 0xFF) as u8;
+                self.r.cc = (self.r.cc & !(Z | C))
+                    | (if d == 0 { Z } else { 0 })
+                    | (if (self.r.b & 0x80) != 0 { C } else { 0 });
+                consumed = 11;
+                if trace {
+                    println!("{:04X}: 3D        MUL", pc0);
+                }
+            }
+            0x19 => {
+                // DAA — decimal adjust A after BCD add.  Per Motorola ref:
+                //   If H==1 or (lo nibble > 9), add $06 to low nibble.
+                //   If C==1 or (hi nibble > 9 after low fix), add $60 to high.
+                let mut a = self.r.a as u16;
+                let h = (self.r.cc & H) != 0;
+                let c = (self.r.cc & C) != 0;
+                let lo = a & 0x0F;
+                let hi = (a >> 4) & 0x0F;
+                let mut add: u16 = 0;
+                if h || lo > 9 { add |= 0x06; }
+                if c || hi > 9 || (hi >= 9 && lo > 9) { add |= 0x60; }
+                a = a.wrapping_add(add);
+                let carry_out = c || (a & 0x100) != 0;
+                self.r.a = a as u8;
+                self.set_nz8(self.r.a);
+                self.r.cc = (self.r.cc & !C) | (if carry_out { C } else { 0 });
+                consumed = 2;
+                if trace {
+                    println!("{:04X}: 19        DAA", pc0);
+                }
+            }
             // Accumulator shifts/rotates/bit ops (B)
             0x58 => {
                 let c_out = (self.r.b & 0x80) != 0;
@@ -2212,6 +2631,334 @@ impl Cpu {
                 consumed = 2;
                 if trace {
                     println!("{:04X}: 5C        INCB", pc0);
+                }
+            }
+
+            // Memory NEG variants.  res = -v; C = (v != 0); V = (v == 0x80).
+            0x00 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let res = 0u8.wrapping_sub(v);
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(V | C))
+                    | (if v != 0 { C } else { 0 })
+                    | (if v == 0x80 { V } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 00 {:02X}    NEG <${:02X}", pc0, zp, zp); }
+            }
+            0x60 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let res = 0u8.wrapping_sub(v);
+                bus.write8(ea, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(V | C))
+                    | (if v != 0 { C } else { 0 })
+                    | (if v == 0x80 { V } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 60 ..    NEG {}", pc0, desc); }
+            }
+            0x70 => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let res = 0u8.wrapping_sub(v);
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(V | C))
+                    | (if v != 0 { C } else { 0 })
+                    | (if v == 0x80 { V } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 70 {:04X} NEG ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory COM variants.  res = !v; V=0; C=1.
+            0x03 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let res = !bus.read8(addr);
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | C;
+                consumed = 6;
+                if trace { println!("{:04X}: 03 {:02X}    COM <${:02X}", pc0, zp, zp); }
+            }
+            0x63 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let res = !bus.read8(ea);
+                bus.write8(ea, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | C;
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 63 ..    COM {}", pc0, desc); }
+            }
+            0x73 => {
+                let addr = self.ea_extended(bus);
+                let res = !bus.read8(addr);
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | C;
+                consumed = 7;
+                if trace { println!("{:04X}: 73 {:04X} COM ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory LSR variants.  res = v >> 1; C = v bit0; N cleared.
+            0x04 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let c_out = (v & 0x01) != 0; let res = v >> 1;
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 04 {:02X}    LSR <${:02X}", pc0, zp, zp); }
+            }
+            0x64 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let c_out = (v & 0x01) != 0; let res = v >> 1;
+                bus.write8(ea, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 64 ..    LSR {}", pc0, desc); }
+            }
+            0x74 => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let c_out = (v & 0x01) != 0; let res = v >> 1;
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 74 {:04X} LSR ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory ROR variants.  res = (v >> 1) | (C_in << 7); C_out = v bit0.
+            0x06 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let c_out = (v & 0x01) != 0;
+                let res = (v >> 1) | (if c_in { 0x80 } else { 0 });
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(C | V)) | (if c_out { C } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 06 {:02X}    ROR <${:02X}", pc0, zp, zp); }
+            }
+            0x66 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let c_in = (self.r.cc & C) != 0;
+                let c_out = (v & 0x01) != 0;
+                let res = (v >> 1) | (if c_in { 0x80 } else { 0 });
+                bus.write8(ea, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(C | V)) | (if c_out { C } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 66 ..    ROR {}", pc0, desc); }
+            }
+            0x76 => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let c_out = (v & 0x01) != 0;
+                let res = (v >> 1) | (if c_in { 0x80 } else { 0 });
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !(C | V)) | (if c_out { C } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 76 {:04X} ROR ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory ASR variants.  Arithmetic shift right (preserves sign bit).
+            0x07 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let c_out = (v & 0x01) != 0;
+                let res = ((v as i8) >> 1) as u8;
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 07 {:02X}    ASR <${:02X}", pc0, zp, zp); }
+            }
+            0x67 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let c_out = (v & 0x01) != 0;
+                let res = ((v as i8) >> 1) as u8;
+                bus.write8(ea, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 67 ..    ASR {}", pc0, desc); }
+            }
+            0x77 => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let c_out = (v & 0x01) != 0;
+                let res = ((v as i8) >> 1) as u8;
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 77 {:04X} ASR ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory ASL/LSL variants.  res = v << 1; C = v bit7; V = N xor C.
+            0x08 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let c_out = (v & 0x80) != 0;
+                let res = v.wrapping_shl(1);
+                bus.write8(addr, res); self.set_nz8(res);
+                let n = (res & 0x80) != 0;
+                self.r.cc = (self.r.cc & !(C | V))
+                    | (if c_out { C } else { 0 })
+                    | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 08 {:02X}    ASL <${:02X}", pc0, zp, zp); }
+            }
+            0x68 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let c_out = (v & 0x80) != 0;
+                let res = v.wrapping_shl(1);
+                bus.write8(ea, res); self.set_nz8(res);
+                let n = (res & 0x80) != 0;
+                self.r.cc = (self.r.cc & !(C | V))
+                    | (if c_out { C } else { 0 })
+                    | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 68 ..    ASL {}", pc0, desc); }
+            }
+            0x78 => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let c_out = (v & 0x80) != 0;
+                let res = v.wrapping_shl(1);
+                bus.write8(addr, res); self.set_nz8(res);
+                let n = (res & 0x80) != 0;
+                self.r.cc = (self.r.cc & !(C | V))
+                    | (if c_out { C } else { 0 })
+                    | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 78 {:04X} ASL ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory ROL variants.  res = (v << 1) | C_in; C_out = v bit7; V = N xor C.
+            0x09 => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let c_out = (v & 0x80) != 0;
+                let res = (v << 1) | (if c_in { 1 } else { 0 });
+                bus.write8(addr, res); self.set_nz8(res);
+                let n = (res & 0x80) != 0;
+                self.r.cc = (self.r.cc & !(C | V))
+                    | (if c_out { C } else { 0 })
+                    | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 09 {:02X}    ROL <${:02X}", pc0, zp, zp); }
+            }
+            0x69 => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let c_in = (self.r.cc & C) != 0;
+                let c_out = (v & 0x80) != 0;
+                let res = (v << 1) | (if c_in { 1 } else { 0 });
+                bus.write8(ea, res); self.set_nz8(res);
+                let n = (res & 0x80) != 0;
+                self.r.cc = (self.r.cc & !(C | V))
+                    | (if c_out { C } else { 0 })
+                    | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 69 ..    ROL {}", pc0, desc); }
+            }
+            0x79 => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let c_out = (v & 0x80) != 0;
+                let res = (v << 1) | (if c_in { 1 } else { 0 });
+                bus.write8(addr, res); self.set_nz8(res);
+                let n = (res & 0x80) != 0;
+                self.r.cc = (self.r.cc & !(C | V))
+                    | (if c_out { C } else { 0 })
+                    | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 79 {:04X} ROL ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory DEC variants.  res = v - 1; V = (v == 0x80).
+            0x0A => {
+                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let v = bus.read8(addr); let res = v.wrapping_sub(1);
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | (if v == 0x80 { V } else { 0 });
+                consumed = 6;
+                if trace { println!("{:04X}: 0A {:02X}    DEC <${:02X}", pc0, zp, zp); }
+            }
+            0x6A => {
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea); let res = v.wrapping_sub(1);
+                bus.write8(ea, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | (if v == 0x80 { V } else { 0 });
+                consumed = 6 + addcyc;
+                if trace { println!("{:04X}: 6A ..    DEC {}", pc0, desc); }
+            }
+            0x7A => {
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr); let res = v.wrapping_sub(1);
+                bus.write8(addr, res); self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | (if v == 0x80 { V } else { 0 });
+                consumed = 7;
+                if trace { println!("{:04X}: 7A {:04X} DEC ${:04X}", pc0, addr, addr); }
+            }
+
+            // Memory TST variants — set N/Z from the byte at EA, clear V.
+            0x0D => {
+                // TST <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                self.set_nz8(v);
+                self.r.cc &= !V;
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: 0D {:02X}    TST <${:02X}", pc0, zp, zp);
+                }
+            }
+            0x6D => {
+                // TST indexed
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let v = bus.read8(ea);
+                self.set_nz8(v);
+                self.r.cc &= !V;
+                consumed = 6 + addcyc;
+                if trace {
+                    println!("{:04X}: 6D ..    TST {}", pc0, desc);
+                }
+            }
+            0x7D => {
+                // TST extended
+                let addr = self.ea_extended(bus);
+                let v = bus.read8(addr);
+                self.set_nz8(v);
+                self.r.cc &= !V;
+                consumed = 7;
+                if trace {
+                    println!("{:04X}: 7D {:04X} TST ${:04X}", pc0, addr, addr);
+                }
+            }
+
+            // Memory INC variants — increment the byte at EA; set N/Z; V set iff prev==0x7F.
+            0x0C => {
+                // INC <dir
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let prev = bus.read8(addr);
+                let res = prev.wrapping_add(1);
+                bus.write8(addr, res);
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | (if prev == 0x7F { V } else { 0 });
+                consumed = 6;
+                if trace {
+                    println!("{:04X}: 0C {:02X}    INC <${:02X}", pc0, zp, zp);
+                }
+            }
+            0x6C => {
+                // INC indexed
+                let (ea, addcyc, desc) = self.ea_indexed(bus);
+                let prev = bus.read8(ea);
+                let res = prev.wrapping_add(1);
+                bus.write8(ea, res);
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | (if prev == 0x7F { V } else { 0 });
+                consumed = 6 + addcyc;
+                if trace {
+                    println!("{:04X}: 6C ..    INC {}", pc0, desc);
+                }
+            }
+            0x7C => {
+                // INC extended
+                let addr = self.ea_extended(bus);
+                let prev = bus.read8(addr);
+                let res = prev.wrapping_add(1);
+                bus.write8(addr, res);
+                self.set_nz8(res);
+                self.r.cc = (self.r.cc & !V) | (if prev == 0x7F { V } else { 0 });
+                consumed = 7;
+                if trace {
+                    println!("{:04X}: 7C {:04X} INC ${:04X}", pc0, addr, addr);
                 }
             }
 
