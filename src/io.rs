@@ -265,11 +265,14 @@ impl Device for ConsoleDev {
             0 => {
                 // TXDATA: print ASCII
                 // Print and flush to ensure visibility in buffered consoles
-                if self.tee_stderr || CONSOLE_LOG.load(Ordering::SeqCst) {
+                if CONSOLE_LOG.load(Ordering::SeqCst) {
                     let _ = writeln!(
                         std::io::stderr(),
                         "[console-tx] addr={addr:04X} data={data:02X}"
                     );
+                }
+                if self.tee_stderr {
+                    let _ = std::io::stderr().write_all(&[data]);
                 }
                 self.push_stdout_byte(data);
             }
@@ -366,8 +369,13 @@ impl Mc6850Dev {
             rx_wm: 1,
             rdrf: false,
             rx_overrun: false,
-            tdre: false,
-            in_master_reset: true,
+            // Start in a "post-master-reset" ready state so hot-swap from
+            // ConsoleDev works even when the guest is already past its init
+            // sequence.  A guest that later issues a real Master Reset
+            // (CDS=11) will go through in_master_reset briefly and return
+            // to ready on the next control write — identical to bootstrap.
+            tdre: true,
+            in_master_reset: false,
             irq_hold_cycles: 0,
             irq_countdown: 0,
             out_file: None,
@@ -553,11 +561,14 @@ impl Device for Mc6850Dev {
             if self.in_master_reset {
                 return;
             }
-            if self.tee_stderr || CONSOLE_LOG.load(Ordering::SeqCst) {
+            if CONSOLE_LOG.load(Ordering::SeqCst) {
                 let _ = writeln!(
                     std::io::stderr(),
                     "[console-tx] addr={addr:04X} data={data:02X}"
                 );
+            }
+            if self.tee_stderr {
+                let _ = std::io::stderr().write_all(&[data]);
             }
             self.push_stdout_byte(data);
             self.tdre = true;
@@ -1237,30 +1248,82 @@ impl<B: Bus> IoBus<B> {
 
     // Dynamic device management helpers (used by Settings Apply)
     pub fn ensure_console(&mut self, enable: bool, base: u16) {
-        let mut has = false;
-        for d in self.devices.iter_mut() {
-            if d.as_any_mut().downcast_mut::<ConsoleDev>().is_some() {
-                has = true;
-            }
+        // Back-compat alias — defaults to the simple ConsoleDev layout.
+        self.ensure_console_type(enable, base, false);
+    }
+
+    /// Ensure exactly one console device exists (or none, if `enable` is
+    /// false).  `mc6850 == true` swaps in the MC6850 ACIA-compatible
+    /// device; `false` uses the simple ConsoleDev layout.  Any existing
+    /// console device of the wrong flavour is removed and replaced.
+    pub fn ensure_console_type(&mut self, enable: bool, base: u16, mc6850: bool) {
+        let has_console = self
+            .devices
+            .iter_mut()
+            .any(|d| d.as_any_mut().downcast_mut::<ConsoleDev>().is_some());
+        let has_mc6850 = self
+            .devices
+            .iter_mut()
+            .any(|d| d.as_any_mut().downcast_mut::<Mc6850Dev>().is_some());
+        if CONSOLE_LOG.load(Ordering::SeqCst) {
+            eprintln!(
+                "[console-swap] enable={enable} base=${base:04X} mc6850={mc6850} \
+                 has_console={has_console} has_mc6850={has_mc6850}"
+            );
         }
-        if enable {
-            if !has {
-                self.add_device(ConsoleDev::new(base));
-            }
-        } else if has {
-            let mut new_list = Vec::with_capacity(self.devices.len());
+
+        // Drop any device that is the wrong type (or all, when disabling).
+        let want_console = enable && !mc6850;
+        let want_mc6850 = enable && mc6850;
+        if has_console && !want_console {
+            let mut keep = Vec::with_capacity(self.devices.len());
             for mut dev in self.devices.drain(..) {
-                let is_console = dev.as_any_mut().downcast_mut::<ConsoleDev>().is_some();
-                if !is_console {
-                    new_list.push(dev);
+                if dev.as_any_mut().downcast_mut::<ConsoleDev>().is_none() {
+                    keep.push(dev);
                 }
             }
-            self.devices = new_list;
+            self.devices = keep;
+        }
+        if has_mc6850 && !want_mc6850 {
+            let mut keep = Vec::with_capacity(self.devices.len());
+            for mut dev in self.devices.drain(..) {
+                if dev.as_any_mut().downcast_mut::<Mc6850Dev>().is_none() {
+                    keep.push(dev);
+                }
+            }
+            self.devices = keep;
+        }
+
+        // Recompute "does it already have one of the wanted flavour?"
+        // after the drop, so we skip adding a duplicate when the base
+        // address hasn't changed and the flavour was already correct.
+        let has_console_now = self
+            .devices
+            .iter_mut()
+            .any(|d| d.as_any_mut().downcast_mut::<ConsoleDev>().is_some());
+        let has_mc6850_now = self
+            .devices
+            .iter_mut()
+            .any(|d| d.as_any_mut().downcast_mut::<Mc6850Dev>().is_some());
+
+        if want_console && !has_console_now {
+            self.add_device(ConsoleDev::new(base));
+        }
+        if want_mc6850 && !has_mc6850_now {
+            self.add_device(Mc6850Dev::new(base));
         }
     }
     pub fn with_console_mut_opt<F: FnOnce(&mut ConsoleDev)>(&mut self, f: F) {
         for d in self.devices.iter_mut() {
             if let Some(c) = d.as_any_mut().downcast_mut::<ConsoleDev>() {
+                f(c);
+                return;
+            }
+        }
+    }
+    pub fn with_mc6850_mut_opt<F: FnOnce(&mut Mc6850Dev)>(&mut self, f: F) {
+        for d in self.devices.iter_mut() {
+            if let Some(c) = d.as_any_mut().downcast_mut::<Mc6850Dev>() {
                 f(c);
                 return;
             }

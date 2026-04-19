@@ -174,6 +174,7 @@ pub fn persist_settings_snapshot(state: &SettingsState, gpio_on_color: u32) {
     p.console = Some(prefs::Console {
         enable: Some(state.use_console),
         base: parse_u16_any(&state.console_base_hex),
+        mc6850: Some(state.console_mc6850),
         stdin: Some(state.console_stdin),
         echo: Some(state.console_echo),
         out_path: if state.console_out_path.trim().is_empty() {

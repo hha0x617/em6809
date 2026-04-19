@@ -74,6 +74,38 @@ pub(super) fn render_settings_dialog(
                                 );
                                 draw_origin_badge(ui, &app.settings_origins, "console.base");
                             });
+                            ui.horizontal(|ui| {
+                                ui.label("Device:");
+                                let simple_on = !app.settings.console_mc6850;
+                                if ui
+                                    .radio(simple_on, "Simple (data@+0, status@+1)")
+                                    .on_hover_text(
+                                        "Custom register layout used by em6809's \
+                                        ConsoleDev.  Compatible with programs \
+                                        assembled for this emulator.",
+                                    )
+                                    .clicked()
+                                {
+                                    app.settings.console_mc6850 = false;
+                                }
+                                if ui
+                                    .radio(app.settings.console_mc6850, "MC6850 ACIA (status@+0, data@+1)")
+                                    .on_hover_text(
+                                        "Motorola MC6850 ACIA register layout \
+                                        (status register at base+0 with TDRE at \
+                                        bit 1; data at base+1).  Required for \
+                                        Hha Forth, Hha Lisp, MVME147 boot ROM, \
+                                        NetBSD, etc.\n\n\
+                                        Switching while the guest is running can \
+                                        glitch one I/O cycle — prefer to pause \
+                                        first, Apply, then Resume.",
+                                    )
+                                    .clicked()
+                                {
+                                    app.settings.console_mc6850 = true;
+                                }
+                                draw_origin_badge(ui, &app.settings_origins, "console.mc6850");
+                            });
                             ui.separator();
                             ui.horizontal(|ui| {
                                 ui.checkbox(
