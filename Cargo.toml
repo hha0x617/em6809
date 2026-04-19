@@ -9,26 +9,51 @@ repository = "https://github.com/hhagiwara/mc6809emu"
 homepage = "https://github.com/hhagiwara/mc6809emu"
 license = "MIT OR Apache-2.0"
 
-[dependencies.eframe]
-version = "0.29"
+# -----------------------------------------------------------------------------
+# Features
+#
+# `gui` (default)  - the full desktop application: egui viewer, localization,
+#                    settings persistence, platform-specific window code.
+#
+# With `default-features = false` only the CPU core (cpu/bus/disasm/mmu/loader/
+# io/timer/bootscript/debug/config) is compiled, which is what the emfe plugin
+# wrapper needs.
+# -----------------------------------------------------------------------------
+[features]
+default = ["gui"]
+gui = [
+    "dep:eframe", "dep:egui_extras", "dep:winit", "dep:rfd",
+    "dep:image", "dep:vte", "dep:memmap2",
+    "dep:i18n-embed", "dep:i18n-embed-fl", "dep:fluent-bundle",
+    "dep:unic-langid", "dep:rust-embed",
+    "dep:serde", "dep:toml",
+    # Target-specific deps (only active for their respective OS)
+    "dep:objc", "dep:windows-sys",
+]
 
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
 [dependencies]
-winit = { version = "0.30" }
-egui_extras = { version = "0.29" }
-memmap2 = { version = "0.9" }
-libc = "0.2"
-objc = { version = "0.2", optional = true }
-i18n-embed = { version = "0.16", features = ["fluent-system"] }
-i18n-embed-fl = "0.10"
-fluent-bundle = "0.16"
-unic-langid = "0.9"
-rust-embed = "8"
+# Always required (lightweight, used by the CPU core and friends)
 once_cell = "1"
-image = { version = "0.24" }
-rfd = "0.16"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-vte = "0.11"
+libc = "0.2"
+
+# GUI / CLI / localization / persistence — all optional and behind `gui`
+eframe = { version = "0.29", optional = true }
+egui_extras = { version = "0.29", optional = true }
+winit = { version = "0.30", optional = true }
+memmap2 = { version = "0.9", optional = true }
+i18n-embed = { version = "0.16", features = ["fluent-system"], optional = true }
+i18n-embed-fl = { version = "0.10", optional = true }
+fluent-bundle = { version = "0.16", optional = true }
+unic-langid = { version = "0.9", optional = true }
+rust-embed = { version = "8", optional = true }
+image = { version = "0.24", optional = true }
+rfd = { version = "0.16", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "0.8", optional = true }
+vte = { version = "0.11", optional = true }
 
 [lib]
 name = "em6809"
@@ -37,11 +62,12 @@ path = "src/lib.rs"
 [lints.rust]
 unexpected_cfgs = "allow"
 
+# Platform-specific deps used only by GUI code paths
 [target.'cfg(target_os = "macos")'.dependencies]
-objc = { version = "0.2" }
+objc = { version = "0.2", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = [
+windows-sys = { version = "0.60", optional = true, features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
