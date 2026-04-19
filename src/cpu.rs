@@ -132,15 +132,17 @@ impl Cpu {
             let desc = format!("{}+{}", reg, off5);
             return (ea, 0, desc); // base indexed cost will be applied by caller
         }
-        // bit7=1: extended forms (partial)
-        let form = pb & 0x1F;
+        // bit7=1: extended forms (partial). Mode lives in the low 4 bits —
+        // bit 4 is the indirect flag and must NOT be mixed into the match
+        // value (otherwise `,R` indirect ($14) would not match `,R` direct ($04)).
+        let form = pb & 0x0F;
         let indirect = (pb & 0x10) != 0; // indirect (bracketed) forms
-                                         // For extended forms, PC-relative when rsel==3 (S code) with certain forms
-        let mut base = self.get_idx_reg(rsel);
-        let is_pc_rel = rsel == 3 && matches!(form, 0x04 | 0x08 | 0x09 | 0x0B);
-        if is_pc_rel {
-            base = self.r.pc;
-        }
+                                         // Forms 0x04/0x08/0x09/0x0B always use the register selected
+                                         // by rsel (X/Y/U/S) — including S.  PC-relative is encoded
+                                         // by separate forms (0x0C/0x0D); arms for those are added in
+                                         // a follow-up commit.
+        let base = self.get_idx_reg(rsel);
+        let is_pc_rel = matches!(form, 0x0C | 0x0D);
         match form {
             0x04 => {
                 // ,R
@@ -468,7 +470,7 @@ impl Cpu {
     }
 
     fn service_nmi<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u32 {
-        // NMI: push entire state with CC at top, then jump to vector FFFA/FFFB
+        // NMI: push entire state with CC at top, then jump to vector FFFC/FFFD
         // Order (deepest -> top): PC, U, Y, X, DP, B, A, CC
         let pc_prev = self.r.pc;
         self.r.cc |= E; // ensure full-frame restore via RTI
@@ -481,8 +483,8 @@ impl Cpu {
         self.push8(bus, self.r.a);
         self.push8(bus, self.r.cc);
         self.r.cc |= I | F;
-        let hi = bus.read8(0xFFFA) as u16;
-        let lo = bus.read8(0xFFFB) as u16;
+        let hi = bus.read8(0xFFFC) as u16;
+        let lo = bus.read8(0xFFFD) as u16;
         let vec = (hi << 8) | lo;
         self.r.pc = vec;
         self.nmi_pending = false;
@@ -492,14 +494,15 @@ impl Cpu {
         19
     }
     fn service_firq<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u32 {
-        // FIRQ: push PC then CC (so CC is at top for RTI), mask FIRQ/IRQ
+        // FIRQ: push PC then CC (so CC is at top for RTI), mask FIRQ/IRQ.
+        // Vector at $FFF6/$FFF7.
         let pc_prev = self.r.pc;
         self.push16(bus, self.r.pc);
         self.push8(bus, self.r.cc);
         self.r.cc &= !E; // minimal frame
         self.r.cc |= I | F;
-        let hi = bus.read8(0xFFF4) as u16;
-        let lo = bus.read8(0xFFF5) as u16;
+        let hi = bus.read8(0xFFF6) as u16;
+        let lo = bus.read8(0xFFF7) as u16;
         let vec = (hi << 8) | lo;
         self.r.pc = vec;
         self.firq_pending = false;
@@ -509,7 +512,7 @@ impl Cpu {
         10
     }
     fn service_irq<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u32 {
-        // IRQ: push entire state with CC at top, then jump to IRQ vector FFF6/FFF7
+        // IRQ: push entire state with CC at top, then jump to IRQ vector FFF8/FFF9
         // Order (deepest -> top): PC, U, Y, X, DP, B, A, CC
         let pc_prev = self.r.pc;
         self.r.cc |= E; // ensure full-frame restore via RTI
@@ -522,8 +525,8 @@ impl Cpu {
         self.push8(bus, self.r.a);
         self.push8(bus, self.r.cc);
         self.r.cc |= I | F;
-        let hi = bus.read8(0xFFF6) as u16;
-        let lo = bus.read8(0xFFF7) as u16;
+        let hi = bus.read8(0xFFF8) as u16;
+        let lo = bus.read8(0xFFF9) as u16;
         let vec = (hi << 8) | lo;
         self.r.pc = vec;
         self.irq_pending = false;
@@ -646,11 +649,12 @@ impl Cpu {
         diff
     }
     fn sbc8_flags(&mut self, a: u8, b: u8) -> u8 {
-        let cin = if (self.r.cc & C) != 0 { 0 } else { 1 }; // borrow-in = !C
+        // 6809: C=1 indicates borrow.  SBCA/SBCB computes A - M - C (with
+        // C used directly as the borrow-in, not inverted).
+        let cin = if (self.r.cc & C) != 0 { 1 } else { 0 };
         let (t, b1) = a.overflowing_sub(b);
         let (diff, b2) = t.overflowing_sub(cin);
         let borrow = b1 || b2;
-        // 6809: C=1 indicates borrow occurred on subtract
         let cflag = borrow;
         let ovf = (((a ^ b) & (a ^ diff)) & 0x80) != 0;
         let half = ((a & 0x0F) as i16 - (b & 0x0F) as i16 - cin as i16) < 0;
@@ -713,7 +717,7 @@ impl Cpu {
                 // prefix for long conditional branches / SWI2 / CMPD / Y-reg ops
                 let sub = self.fetch8(bus);
                 if sub == 0x3F {
-                    // SWI2
+                    // SWI2 — vector at $FFF4/$FFF5
                     self.r.cc |= E;
                     self.push8(bus, self.r.cc);
                     self.push8(bus, self.r.a);
@@ -724,8 +728,8 @@ impl Cpu {
                     self.push16(bus, self.r.u);
                     self.push16(bus, self.r.pc);
                     self.r.cc |= I | F;
-                    let hi = bus.read8(0xFFF2) as u16;
-                    let lo = bus.read8(0xFFF3) as u16;
+                    let hi = bus.read8(0xFFF4) as u16;
+                    let lo = bus.read8(0xFFF5) as u16;
                     self.r.pc = (hi << 8) | lo;
                     consumed = 20;
                     if trace {
@@ -971,23 +975,21 @@ impl Cpu {
                 }
             }
             0x32 => {
-                // LEAU indexed
+                // LEAS indexed — does NOT update CC per 6809 ISA
                 let (ea, addcyc, _desc) = self.ea_indexed(bus);
-                self.r.u = ea;
-                self.r.cc = (self.r.cc & !Z) | (if self.r.u == 0 { Z } else { 0 });
+                self.r.s = ea;
                 consumed = 4 + addcyc;
                 if trace {
-                    println!("{:04X}: 32 ..    LEAU", pc0);
+                    println!("{:04X}: 32 ..    LEAS", pc0);
                 }
             }
             0x33 => {
-                // LEAS indexed
+                // LEAU indexed — does NOT update CC per 6809 ISA
                 let (ea, addcyc, _desc) = self.ea_indexed(bus);
-                self.r.s = ea;
-                self.r.cc = (self.r.cc & !Z) | (if self.r.s == 0 { Z } else { 0 });
+                self.r.u = ea;
                 consumed = 4 + addcyc;
                 if trace {
-                    println!("{:04X}: 33 ..    LEAS", pc0);
+                    println!("{:04X}: 33 ..    LEAU", pc0);
                 }
             }
             0xCE => {
@@ -1082,7 +1084,7 @@ impl Cpu {
                 // SWI3 or extended prefix
                 let sub = self.fetch8(bus);
                 if sub == 0x3F {
-                    // SWI3
+                    // SWI3 — vector at $FFF2/$FFF3
                     self.r.cc |= E;
                     self.push8(bus, self.r.cc);
                     self.push8(bus, self.r.a);
@@ -1093,8 +1095,8 @@ impl Cpu {
                     self.push16(bus, self.r.u);
                     self.push16(bus, self.r.pc);
                     self.r.cc |= I | F;
-                    let hi = bus.read8(0xFFF0) as u16;
-                    let lo = bus.read8(0xFFF1) as u16;
+                    let hi = bus.read8(0xFFF2) as u16;
+                    let lo = bus.read8(0xFFF3) as u16;
                     self.r.pc = (hi << 8) | lo;
                     consumed = 20;
                     if trace {
@@ -1764,7 +1766,7 @@ impl Cpu {
                 }
             }
             0x3F => {
-                // SWI
+                // SWI — vector at $FFFA/$FFFB
                 self.r.cc |= E;
                 self.push8(bus, self.r.cc);
                 self.push8(bus, self.r.a);
@@ -1775,8 +1777,8 @@ impl Cpu {
                 self.push16(bus, self.r.u);
                 self.push16(bus, self.r.pc);
                 self.r.cc |= I | F;
-                let hi = bus.read8(0xFFF8) as u16;
-                let lo = bus.read8(0xFFF9) as u16;
+                let hi = bus.read8(0xFFFA) as u16;
+                let lo = bus.read8(0xFFFB) as u16;
                 self.r.pc = (hi << 8) | lo;
                 consumed = 19;
                 if trace {
