@@ -1,8 +1,92 @@
 use em6809::bus::{self, Bus};
 use em6809::config::{apply_mmu_config_from_str, apply_preset};
-use em6809::io::{BlockDev, ConsoleDev, GpioDev, IoBus};
+use em6809::io::{BlockDev, ConsoleDev, GpioDev, IoBus, Mc6850Dev};
 use em6809::mmu::Mc6829;
 use em6809::timer::TimerDev;
+
+// Both ConsoleDev and Mc6850Dev expose the same setter API, so a single
+// macro configures either one from the same options.  Used at both the
+// MMU and the no-MMU IoBus attachment sites to pick the device flavour
+// at runtime from `opts.console_mc6850`.
+macro_rules! attach_console_device {
+    ($iobus:expr, $opts:expr, $base:expr) => {{
+        fn configure<D>(dev: &mut D, opts: &BusOptions)
+        where
+            D: ConsoleSetters,
+        {
+            if let Some(wm) = opts.console_rx_wm {
+                dev.set_rx_watermark(wm);
+            }
+            if let Some(h) = opts.console_irq_hold {
+                dev.set_irq_hold_cycles(h);
+            }
+            if let Some(s) = &opts.console_in {
+                let bytes = parse_escapes(s);
+                dev.feed_bytes(&bytes);
+            }
+            if let Some(p) = &opts.console_out_path {
+                dev.set_out_file(p);
+            }
+            if opts.console_tee_stderr {
+                dev.set_tee_stderr(true);
+            }
+            if let Some(n) = opts.console_flush_every {
+                dev.set_flush_every(n);
+            }
+            if opts.console_flush_newline {
+                dev.set_flush_on_newline(true);
+            }
+            if opts.console_local_echo {
+                dev.set_local_echo(true);
+            }
+        }
+        if $opts.console_mc6850 {
+            let mut con = Mc6850Dev::new($base);
+            configure(&mut con, $opts);
+            $iobus.add_device(con);
+        } else {
+            let mut con = ConsoleDev::new($base);
+            configure(&mut con, $opts);
+            $iobus.add_device(con);
+        }
+    }};
+}
+
+// Small setter trait satisfied by both ConsoleDev and Mc6850Dev.  Not
+// exposed as a public interface — it exists only so the macro above can
+// share one `configure` helper.
+trait ConsoleSetters {
+    fn set_rx_watermark(&mut self, wm: usize);
+    fn set_irq_hold_cycles(&mut self, n: u32);
+    fn feed_bytes(&mut self, bytes: &[u8]);
+    fn set_out_file(&mut self, path: &str);
+    fn set_tee_stderr(&mut self, on: bool);
+    fn set_flush_every(&mut self, n: usize);
+    fn set_flush_on_newline(&mut self, on: bool);
+    fn set_local_echo(&mut self, on: bool);
+}
+
+impl ConsoleSetters for ConsoleDev {
+    fn set_rx_watermark(&mut self, wm: usize) { ConsoleDev::set_rx_watermark(self, wm) }
+    fn set_irq_hold_cycles(&mut self, n: u32) { ConsoleDev::set_irq_hold_cycles(self, n) }
+    fn feed_bytes(&mut self, b: &[u8]) { ConsoleDev::feed_bytes(self, b) }
+    fn set_out_file(&mut self, p: &str) { ConsoleDev::set_out_file(self, p) }
+    fn set_tee_stderr(&mut self, on: bool) { ConsoleDev::set_tee_stderr(self, on) }
+    fn set_flush_every(&mut self, n: usize) { ConsoleDev::set_flush_every(self, n) }
+    fn set_flush_on_newline(&mut self, on: bool) { ConsoleDev::set_flush_on_newline(self, on) }
+    fn set_local_echo(&mut self, on: bool) { ConsoleDev::set_local_echo(self, on) }
+}
+
+impl ConsoleSetters for Mc6850Dev {
+    fn set_rx_watermark(&mut self, wm: usize) { Mc6850Dev::set_rx_watermark(self, wm) }
+    fn set_irq_hold_cycles(&mut self, n: u32) { Mc6850Dev::set_irq_hold_cycles(self, n) }
+    fn feed_bytes(&mut self, b: &[u8]) { Mc6850Dev::feed_bytes(self, b) }
+    fn set_out_file(&mut self, p: &str) { Mc6850Dev::set_out_file(self, p) }
+    fn set_tee_stderr(&mut self, on: bool) { Mc6850Dev::set_tee_stderr(self, on) }
+    fn set_flush_every(&mut self, n: usize) { Mc6850Dev::set_flush_every(self, n) }
+    fn set_flush_on_newline(&mut self, on: bool) { Mc6850Dev::set_flush_on_newline(self, on) }
+    fn set_local_echo(&mut self, on: bool) { Mc6850Dev::set_local_echo(self, on) }
+}
 
 pub struct BusOptions {
     pub use_mmu: bool,
@@ -21,6 +105,7 @@ pub struct BusOptions {
     pub mmu_attrs_user: Vec<(usize, u8)>,
     pub protect_vectors: bool,
     pub console_base: Option<u16>,
+    pub console_mc6850: bool,
     pub console_rx_wm: Option<usize>,
     pub console_irq_hold: Option<u32>,
     pub console_in: Option<String>,
@@ -152,33 +237,7 @@ pub fn build_bus(mut opts: BusOptions) -> Option<(Box<dyn Bus>, Option<u16>)> {
         if need_iobus {
             let mut iobus = IoBus::new(mmu);
             if let Some(base) = opts.console_base {
-                let mut con = ConsoleDev::new(base);
-                if let Some(wm) = opts.console_rx_wm {
-                    con.set_rx_watermark(wm);
-                }
-                if let Some(h) = opts.console_irq_hold {
-                    con.set_irq_hold_cycles(h);
-                }
-                if let Some(s) = &opts.console_in {
-                    let bytes = parse_escapes(s);
-                    con.feed_bytes(&bytes);
-                }
-                if let Some(p) = &opts.console_out_path {
-                    con.set_out_file(p);
-                }
-                if opts.console_tee_stderr {
-                    con.set_tee_stderr(true);
-                }
-                if let Some(n) = opts.console_flush_every {
-                    con.set_flush_every(n);
-                }
-                if opts.console_flush_newline {
-                    con.set_flush_on_newline(true);
-                }
-                if opts.console_local_echo {
-                    con.set_local_echo(true);
-                }
-                iobus.add_device(con);
+                attach_console_device!(iobus, &opts, base);
             }
             if let Some(base) = opts.block_base {
                 let mut blk = BlockDev::new(base);
@@ -234,33 +293,7 @@ pub fn build_bus(mut opts: BusOptions) -> Option<(Box<dyn Bus>, Option<u16>)> {
         if need_iobus {
             let mut iobus = IoBus::new(mem);
             if let Some(base) = opts.console_base {
-                let mut con = ConsoleDev::new(base);
-                if let Some(wm) = opts.console_rx_wm {
-                    con.set_rx_watermark(wm);
-                }
-                if let Some(h) = opts.console_irq_hold {
-                    con.set_irq_hold_cycles(h);
-                }
-                if let Some(s) = &opts.console_in {
-                    let bytes = parse_escapes(s);
-                    con.feed_bytes(&bytes);
-                }
-                if let Some(p) = &opts.console_out_path {
-                    con.set_out_file(p);
-                }
-                if opts.console_tee_stderr {
-                    con.set_tee_stderr(true);
-                }
-                if let Some(n) = opts.console_flush_every {
-                    con.set_flush_every(n);
-                }
-                if opts.console_flush_newline {
-                    con.set_flush_on_newline(true);
-                }
-                if opts.console_local_echo {
-                    con.set_local_echo(true);
-                }
-                iobus.add_device(con);
+                attach_console_device!(iobus, &opts, base);
             }
             if let Some(base) = opts.block_base {
                 let mut blk = BlockDev::new(base);

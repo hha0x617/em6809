@@ -19,6 +19,7 @@ pub fn print_usage() {
     // --run and --bp removed in GUI-only mode
     println!("\nConsole I/O:");
     println!("  --console 0xADDR          Attach console device at base (e.g., 0xFF00)");
+    println!("  --console-mc6850          Use MC6850 ACIA register layout (status@+0, data@+1)");
     println!("  --console-in STRING       Prefeed input (supports \\r, \\n, \\t, \\\\)");
     println!("  --console-stdin           Read from stdin (Ctrl+C to stop)");
     println!("  --console-out PATH        Mirror output to file");
@@ -90,6 +91,11 @@ pub struct CliOptions {
     pub console_base: Option<u16>,
     pub cli_console_enable: bool,
     pub cli_console_base: bool,
+    /// Console device flavour: `false` = simple ConsoleDev (data@+0, status@+1);
+    /// `true` = MC6850 ACIA (status@+0, data@+1).  Needed for programs
+    /// targeting the Motorola MC6850 register layout (Hha Forth / Lisp,
+    /// MVME147 boot, NetBSD, etc.).
+    pub console_mc6850: bool,
     pub block_base: Option<u16>,
     pub cli_block_enable: bool,
     pub cli_block_base: bool,
@@ -201,6 +207,7 @@ pub fn parse_args() -> Option<CliOptions> {
     let mut console_base: Option<u16> = None;
     let mut cli_console_enable = false;
     let mut cli_console_base = false;
+    let mut console_mc6850 = false;
     let mut block_base: Option<u16> = None;
     let mut cli_block_enable = false;
     let mut cli_block_base = false;
@@ -357,6 +364,9 @@ pub fn parse_args() -> Option<CliOptions> {
                     cli_console_enable = console_base.is_some();
                     cli_console_base = cli_console_enable;
                 }
+            }
+            "--console-mc6850" => {
+                console_mc6850 = true;
             }
             "--block" => {
                 if let Some(v) = args.next() {
@@ -617,6 +627,7 @@ pub fn parse_args() -> Option<CliOptions> {
         console_base,
         cli_console_enable,
         cli_console_base,
+        console_mc6850,
         block_base,
         cli_block_enable,
         cli_block_base,

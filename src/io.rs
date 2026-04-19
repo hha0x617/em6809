@@ -303,6 +303,284 @@ impl Device for ConsoleDev {
 }
 
 // ------------------------------------------------------------
+// MC6850 ACIA-compatible console device
+//
+// Register layout (base..base+1):
+//   +0: read = Status Register, write = Control Register
+//       SR bits: 0=RDRF, 1=TDRE, 2=DCD, 3=CTS, 4=FE, 5=OVR, 6=PE, 7=IRQ
+//       CR bits: 0-1=CDS, 2-4=WS, 5-6=TC, 7=RIE
+//   +1: read = Receive Data Register, write = Transmit Data Register
+//
+// Used by programs that follow the original Motorola MC6850 convention —
+// e.g. `Hha Forth`, `Hha Lisp`, and the NetBSD MVME147 boot rom.  The
+// plain `ConsoleDev` has a different map (data at +0, status at +1) and
+// is retained for programs that target that simpler layout.
+// ------------------------------------------------------------
+
+pub struct Mc6850Dev {
+    pub base: u16,
+
+    // Control register decoded fields.
+    cds: u8,
+    tx_irq_enable: bool,
+    rie: bool,
+
+    // Receive side.
+    rx: VecDeque<u8>,
+    rx_wm: usize,
+    rdrf: bool,
+    rx_overrun: bool,
+
+    // Transmit side.  Instant-transmit emulation keeps TDRE=1 after a
+    // write because the host side sees the byte go out immediately.
+    tdre: bool,
+
+    // Master-reset latch: TDRE stays 0 until the first non-reset CR write.
+    in_master_reset: bool,
+
+    // IRQ pacing (matches ConsoleDev so the GUI timing feels identical).
+    irq_hold_cycles: u32,
+    irq_countdown: u32,
+
+    // Output routing: byte-for-byte duplicate of ConsoleDev's sink so both
+    // device types work with the same `set_out_file` / `set_tee_stderr` /
+    // `set_flush_*` CLI and VT100-window wiring.
+    out_file: Option<File>,
+    tee_stderr: bool,
+    flush_every: Option<usize>,
+    flush_on_newline: bool,
+    flush_count: usize,
+    local_echo: bool,
+    utf8_buf: Vec<u8>,
+    utf8_need: usize,
+}
+
+impl Mc6850Dev {
+    pub fn new(base: u16) -> Self {
+        Self {
+            base,
+            cds: 0b11,
+            tx_irq_enable: false,
+            rie: false,
+            rx: VecDeque::new(),
+            rx_wm: 1,
+            rdrf: false,
+            rx_overrun: false,
+            tdre: false,
+            in_master_reset: true,
+            irq_hold_cycles: 0,
+            irq_countdown: 0,
+            out_file: None,
+            tee_stderr: false,
+            flush_every: Some(1),
+            flush_on_newline: false,
+            flush_count: 0,
+            local_echo: false,
+            utf8_buf: Vec::with_capacity(8),
+            utf8_need: 0,
+        }
+    }
+
+    // --- Public setters mirroring ConsoleDev so CLI wiring is symmetric. -----
+    pub fn feed_bytes(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.receive(b);
+            if CONSOLE_LOG.load(Ordering::SeqCst) {
+                eprintln!("[console-rx] queued ${:02X}", b);
+            }
+        }
+    }
+    pub fn set_rx_watermark(&mut self, wm: usize) {
+        self.rx_wm = wm.max(1);
+    }
+    pub fn set_irq_hold_cycles(&mut self, n: u32) {
+        self.irq_hold_cycles = n;
+    }
+    pub fn set_out_file(&mut self, path: &str) {
+        if let Ok(f) = OpenOptions::new().create(true).append(true).open(path) {
+            self.out_file = Some(f);
+        }
+    }
+    pub fn set_tee_stderr(&mut self, on: bool) {
+        self.tee_stderr = on;
+    }
+    pub fn set_flush_every(&mut self, n: usize) {
+        self.flush_every = if n == 0 { None } else { Some(n) };
+    }
+    pub fn set_flush_on_newline(&mut self, on: bool) {
+        self.flush_on_newline = on;
+    }
+    pub fn set_local_echo(&mut self, on: bool) {
+        self.local_echo = on;
+    }
+
+    /// Host deposits an RX byte (ACCEPT reads land here).
+    fn receive(&mut self, ch: u8) {
+        if self.in_master_reset {
+            return;
+        }
+        const RX_FIFO_MAX: usize = 16;
+        if self.rx.len() >= RX_FIFO_MAX {
+            self.rx_overrun = true;
+            return;
+        }
+        self.rx.push_back(ch);
+        self.rdrf = true;
+    }
+
+    fn irq_level(&self) -> bool {
+        (self.rdrf && self.rie) || (self.tdre && self.tx_irq_enable)
+    }
+
+    // --- Output sink (byte-for-byte duplicate of ConsoleDev::push_stdout_byte). --
+    fn push_stdout_byte(&mut self, b: u8) {
+        if let Some(f) = self.out_file.as_mut() {
+            let _ = f.write_all(&[b]);
+        }
+        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst)
+            && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst)
+        {
+            if let Some(m) = CONSOLE_GUI_BUF.get() {
+                if let Ok(mut g) = m.lock() {
+                    g.push(b);
+                }
+            } else {
+                let _ = CONSOLE_GUI_BUF.set(Mutex::new(vec![b]));
+            }
+            if let Some(cb) = CONSOLE_REPAINT_CB.get() {
+                if let Ok(cb) = cb.lock() {
+                    if let Some(cb) = cb.as_ref() {
+                        cb();
+                    }
+                }
+            }
+        }
+        let stdout_enabled = CONSOLE_STDOUT_ENABLED.load(Ordering::SeqCst)
+            || !CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst);
+        if stdout_enabled && b < 0x80 && self.utf8_need == 0 {
+            print!("{}", b as char);
+        } else if stdout_enabled {
+            if self.utf8_need == 0 {
+                self.utf8_need = match b {
+                    0xC0..=0xDF => 2,
+                    0xE0..=0xEF => 3,
+                    0xF0..=0xF7 => 4,
+                    _ => 1,
+                };
+            }
+            self.utf8_buf.push(b);
+            if self.utf8_buf.len() >= self.utf8_need.max(1) {
+                let s = String::from_utf8_lossy(&self.utf8_buf);
+                print!("{s}");
+                self.utf8_buf.clear();
+                self.utf8_need = 0;
+            }
+        }
+        let mut need_flush = self.flush_on_newline && b == b'\n';
+        if let Some(n) = self.flush_every {
+            self.flush_count = self.flush_count.wrapping_add(1);
+            if self.flush_count.is_multiple_of(n) {
+                need_flush = true;
+            }
+        }
+        if need_flush {
+            if stdout_enabled {
+                let _ = std::io::stdout().flush();
+            }
+            if let Some(f) = self.out_file.as_mut() {
+                let _ = f.flush();
+            }
+        }
+    }
+}
+
+impl Device for Mc6850Dev {
+    fn contains(&self, addr: u16) -> bool {
+        addr == self.base || addr == self.base.wrapping_add(1)
+    }
+    fn read8(&mut self, addr: u16) -> u8 {
+        if addr == self.base {
+            // Status Register
+            let mut s = 0u8;
+            if self.rdrf {
+                s |= 0x01;
+            }
+            if self.tdre {
+                s |= 0x02;
+            }
+            if self.rx_overrun {
+                s |= 0x20;
+            }
+            if self.irq_level() {
+                s |= 0x80;
+            }
+            s
+        } else {
+            // Receive Data Register
+            let v = self.rx.pop_front().unwrap_or(0);
+            self.rdrf = !self.rx.is_empty();
+            self.rx_overrun = false;
+            if self.local_echo {
+                self.push_stdout_byte(v);
+            }
+            v
+        }
+    }
+    fn write8(&mut self, addr: u16, data: u8) {
+        if addr == self.base {
+            // Control Register
+            let cds = data & 0b11;
+            let tc = (data >> 5) & 0b11;
+            let rie = (data & 0x80) != 0;
+            self.cds = cds;
+            self.tx_irq_enable = tc == 0b01;
+            self.rie = rie;
+            if cds == 0b11 {
+                // Master reset
+                self.in_master_reset = true;
+                self.tdre = false;
+                self.rdrf = false;
+                self.rx_overrun = false;
+                self.rx.clear();
+                return;
+            }
+            if self.in_master_reset {
+                self.in_master_reset = false;
+                self.tdre = true;
+            }
+        } else {
+            // Transmit Data Register — instant transmit.
+            if self.in_master_reset {
+                return;
+            }
+            if self.tee_stderr || CONSOLE_LOG.load(Ordering::SeqCst) {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "[console-tx] addr={addr:04X} data={data:02X}"
+                );
+            }
+            self.push_stdout_byte(data);
+            self.tdre = true;
+        }
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn irq_lines(&mut self) -> (bool, bool, bool) {
+        let level = self.irq_level();
+        let mut on = level;
+        if on {
+            self.irq_countdown = self.irq_hold_cycles;
+        } else if self.irq_countdown > 0 {
+            self.irq_countdown -= 1;
+            on = true;
+        }
+        // IRQ routing (always IRQ pin for MC6850; FIRQ not part of the chip).
+        (false, false, on)
+    }
+}
+
+// ------------------------------------------------------------
 // Simple Block (disk) device with 512-byte sectors
 // I/O map (base .. base+7):
 //   +0: DATA      (R/W) data port for a sector buffer
@@ -890,6 +1168,10 @@ impl<B: Bus> IoBus<B> {
     pub fn feed_console_input(&mut self, bytes: &[u8]) {
         for d in self.devices.iter_mut() {
             if let Some(c) = d.as_any_mut().downcast_mut::<ConsoleDev>() {
+                c.feed_bytes(bytes);
+                return;
+            }
+            if let Some(c) = d.as_any_mut().downcast_mut::<Mc6850Dev>() {
                 c.feed_bytes(bytes);
                 return;
             }
