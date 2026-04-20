@@ -242,14 +242,18 @@ pub mod gui {
                     if line.len() > cols {
                         line.truncate(cols);
                     } else if line.len() < cols {
-                        line.extend(std::iter::repeat_with(TermCell::default).take(cols - line.len()));
+                        line.extend(
+                            std::iter::repeat_with(TermCell::default).take(cols - line.len()),
+                        );
                     }
                 }
                 for line in &mut self.history {
                     if line.len() > cols {
                         line.truncate(cols);
                     } else if line.len() < cols {
-                        line.extend(std::iter::repeat_with(TermCell::default).take(cols - line.len()));
+                        line.extend(
+                            std::iter::repeat_with(TermCell::default).take(cols - line.len()),
+                        );
                     }
                 }
             }
@@ -487,8 +491,7 @@ pub mod gui {
             if last == 0 {
                 return;
             }
-            let lines: Vec<Vec<TermCell>> =
-                self.screen.iter().take(last).cloned().collect();
+            let lines: Vec<Vec<TermCell>> = self.screen.iter().take(last).cloned().collect();
             for line in lines {
                 self.push_history_line(line);
             }
@@ -617,7 +620,14 @@ pub mod gui {
         }
 
         fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
-        fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
+        fn hook(
+            &mut self,
+            _params: &vte::Params,
+            _intermediates: &[u8],
+            _ignore: bool,
+            _action: char,
+        ) {
+        }
         fn put(&mut self, _byte: u8) {}
         fn unhook(&mut self) {}
     }
@@ -772,9 +782,9 @@ pub mod gui {
             task: Option<u8>,
             prot: Option<u8>,
             log_maps: Option<bool>,
-            maps_sys: Vec<(usize, u16)>, // (page, frame)
+            maps_sys: Vec<(usize, u16)>,  // (page, frame)
             maps_user: Vec<(usize, u16)>, // (page, frame)
-            attrs_sys: Vec<(usize, u8)>, // (page, attr)
+            attrs_sys: Vec<(usize, u8)>,  // (page, attr)
             attrs_user: Vec<(usize, u8)>, // (page, attr)
         },
         MmuIdentityMap,
@@ -988,10 +998,12 @@ pub mod gui {
                     .to_lowercase();
                 let parsed = if lower == "s19" || lower == "srec" {
                     match std::fs::read(&path) {
-                        Ok(bytes) => match crate::loader::parse_srec(&String::from_utf8_lossy(&bytes)) {
-                            Ok(img) => Ok(img),
-                            Err(e) => Err(format!("Open failed (SREC): {e}")),
-                        },
+                        Ok(bytes) => {
+                            match crate::loader::parse_srec(&String::from_utf8_lossy(&bytes)) {
+                                Ok(img) => Ok(img),
+                                Err(e) => Err(format!("Open failed (SREC): {e}")),
+                            }
+                        }
                         Err(e) => Err(format!("Open failed (read): {e}")),
                     }
                 } else if lower == "bin" {
@@ -1662,21 +1674,16 @@ pub mod gui {
                 .parse::<f32>()
                 .unwrap_or(14.0)
                 .clamp(8.0, 32.0);
-            let console_cols = parse_num_usize_any_gui(
-                &self.settings_baseline.console_gui_cols,
-            )
-            .unwrap_or(80)
-            .clamp(20, 300) as u16;
-            let console_rows = parse_num_usize_any_gui(
-                &self.settings_baseline.console_gui_rows,
-            )
-            .unwrap_or(24)
-            .clamp(10, 120) as u16;
-            let console_scrollback = parse_num_usize_any_gui(
-                &self.settings_baseline.console_gui_scrollback,
-            )
-            .unwrap_or(1000)
-            .clamp(0, 20000);
+            let console_cols = parse_num_usize_any_gui(&self.settings_baseline.console_gui_cols)
+                .unwrap_or(80)
+                .clamp(20, 300) as u16;
+            let console_rows = parse_num_usize_any_gui(&self.settings_baseline.console_gui_rows)
+                .unwrap_or(24)
+                .clamp(10, 120) as u16;
+            let console_scrollback =
+                parse_num_usize_any_gui(&self.settings_baseline.console_gui_scrollback)
+                    .unwrap_or(1000)
+                    .clamp(0, 20000);
             let console_cfg = console_ui::ConsoleConfig {
                 enabled: self.settings_baseline.console_gui && self.console_gui_open,
                 title: console_title,
@@ -2363,11 +2370,7 @@ pub mod gui {
             self.run_blocking_with_init(title, None);
         }
 
-        pub fn run_blocking_with_init(
-            &self,
-            title: &str,
-            init: Option<Box<dyn FnOnce() + Send>>,
-        ) {
+        pub fn run_blocking_with_init(&self, title: &str, init: Option<Box<dyn FnOnce() + Send>>) {
             let snap_clone = Arc::clone(&self.snapshot);
             let paused_clone = Arc::clone(&self.paused);
             let step_requests_clone = Arc::clone(&self.step_requests);
@@ -2818,13 +2821,7 @@ pub mod gui {
                 q.push(Command::UiSetGpioOnColor(rgb));
             }
         }
-        pub fn sync_mmu(
-            &self,
-            sys_mode: bool,
-            task: u8,
-            map_sys: [u16; 16],
-            map_user: [u16; 16],
-        ) {
+        pub fn sync_mmu(&self, sys_mode: bool, task: u8, map_sys: [u16; 16], map_user: [u16; 16]) {
             if let Ok(mut q) = self.cmds.lock() {
                 q.push(Command::UiSetMmu(sys_mode, task, map_sys, map_user));
             }

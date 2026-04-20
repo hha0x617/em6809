@@ -763,7 +763,10 @@ impl Cpu {
                     if trace {
                         println!(
                             "{:04X}: 10 {:02X} {:04X} LB{:02X} {}",
-                            pc0, sub, off as u16, sub,
+                            pc0,
+                            sub,
+                            off as u16,
+                            sub,
                             if take { "taken" } else { "not" }
                         );
                     }
@@ -2513,8 +2516,12 @@ impl Cpu {
                 let lo = a & 0x0F;
                 let hi = (a >> 4) & 0x0F;
                 let mut add: u16 = 0;
-                if h || lo > 9 { add |= 0x06; }
-                if c || hi > 9 || (hi >= 9 && lo > 9) { add |= 0x60; }
+                if h || lo > 9 {
+                    add |= 0x06;
+                }
+                if c || hi > 9 || (hi >= 9 && lo > 9) {
+                    add |= 0x60;
+                }
                 a = a.wrapping_add(add);
                 let carry_out = c || (a & 0x100) != 0;
                 self.r.a = a as u8;
@@ -2636,252 +2643,356 @@ impl Cpu {
 
             // Memory NEG variants.  res = -v; C = (v != 0); V = (v == 0x80).
             0x00 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let res = 0u8.wrapping_sub(v);
-                bus.write8(addr, res); self.set_nz8(res);
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let res = 0u8.wrapping_sub(v);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(V | C))
                     | (if v != 0 { C } else { 0 })
                     | (if v == 0x80 { V } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 00 {:02X}    NEG <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 00 {:02X}    NEG <${:02X}", pc0, zp, zp);
+                }
             }
             0x60 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let res = 0u8.wrapping_sub(v);
-                bus.write8(ea, res); self.set_nz8(res);
+                let v = bus.read8(ea);
+                let res = 0u8.wrapping_sub(v);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(V | C))
                     | (if v != 0 { C } else { 0 })
                     | (if v == 0x80 { V } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 60 ..    NEG {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 60 ..    NEG {}", pc0, desc);
+                }
             }
             0x70 => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let res = 0u8.wrapping_sub(v);
-                bus.write8(addr, res); self.set_nz8(res);
+                let v = bus.read8(addr);
+                let res = 0u8.wrapping_sub(v);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(V | C))
                     | (if v != 0 { C } else { 0 })
                     | (if v == 0x80 { V } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 70 {:04X} NEG ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 70 {:04X} NEG ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory COM variants.  res = !v; V=0; C=1.
             0x03 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
                 let res = !bus.read8(addr);
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !V) | C;
                 consumed = 6;
-                if trace { println!("{:04X}: 03 {:02X}    COM <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 03 {:02X}    COM <${:02X}", pc0, zp, zp);
+                }
             }
             0x63 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
                 let res = !bus.read8(ea);
-                bus.write8(ea, res); self.set_nz8(res);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !V) | C;
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 63 ..    COM {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 63 ..    COM {}", pc0, desc);
+                }
             }
             0x73 => {
                 let addr = self.ea_extended(bus);
                 let res = !bus.read8(addr);
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !V) | C;
                 consumed = 7;
-                if trace { println!("{:04X}: 73 {:04X} COM ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 73 {:04X} COM ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory LSR variants.  res = v >> 1; C = v bit0; N cleared.
             0x04 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let c_out = (v & 0x01) != 0; let res = v >> 1;
-                bus.write8(addr, res); self.set_nz8(res);
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let c_out = (v & 0x01) != 0;
+                let res = v >> 1;
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 04 {:02X}    LSR <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 04 {:02X}    LSR <${:02X}", pc0, zp, zp);
+                }
             }
             0x64 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let c_out = (v & 0x01) != 0; let res = v >> 1;
-                bus.write8(ea, res); self.set_nz8(res);
+                let v = bus.read8(ea);
+                let c_out = (v & 0x01) != 0;
+                let res = v >> 1;
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 64 ..    LSR {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 64 ..    LSR {}", pc0, desc);
+                }
             }
             0x74 => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let c_out = (v & 0x01) != 0; let res = v >> 1;
-                bus.write8(addr, res); self.set_nz8(res);
+                let v = bus.read8(addr);
+                let c_out = (v & 0x01) != 0;
+                let res = v >> 1;
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(C | V | N)) | (if c_out { C } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 74 {:04X} LSR ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 74 {:04X} LSR ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory ROR variants.  res = (v >> 1) | (C_in << 7); C_out = v bit0.
             0x06 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let c_in = (self.r.cc & C) != 0;
                 let c_out = (v & 0x01) != 0;
                 let res = (v >> 1) | (if c_in { 0x80 } else { 0 });
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(C | V)) | (if c_out { C } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 06 {:02X}    ROR <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 06 {:02X}    ROR <${:02X}", pc0, zp, zp);
+                }
             }
             0x66 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let c_in = (self.r.cc & C) != 0;
+                let v = bus.read8(ea);
+                let c_in = (self.r.cc & C) != 0;
                 let c_out = (v & 0x01) != 0;
                 let res = (v >> 1) | (if c_in { 0x80 } else { 0 });
-                bus.write8(ea, res); self.set_nz8(res);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(C | V)) | (if c_out { C } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 66 ..    ROR {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 66 ..    ROR {}", pc0, desc);
+                }
             }
             0x76 => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let v = bus.read8(addr);
+                let c_in = (self.r.cc & C) != 0;
                 let c_out = (v & 0x01) != 0;
                 let res = (v >> 1) | (if c_in { 0x80 } else { 0 });
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !(C | V)) | (if c_out { C } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 76 {:04X} ROR ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 76 {:04X} ROR ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory ASR variants.  Arithmetic shift right (preserves sign bit).
             0x07 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let c_out = (v & 0x01) != 0;
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let c_out = (v & 0x01) != 0;
                 let res = ((v as i8) >> 1) as u8;
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 07 {:02X}    ASR <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 07 {:02X}    ASR <${:02X}", pc0, zp, zp);
+                }
             }
             0x67 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let c_out = (v & 0x01) != 0;
+                let v = bus.read8(ea);
+                let c_out = (v & 0x01) != 0;
                 let res = ((v as i8) >> 1) as u8;
-                bus.write8(ea, res); self.set_nz8(res);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 67 ..    ASR {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 67 ..    ASR {}", pc0, desc);
+                }
             }
             0x77 => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let c_out = (v & 0x01) != 0;
+                let v = bus.read8(addr);
+                let c_out = (v & 0x01) != 0;
                 let res = ((v as i8) >> 1) as u8;
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !C) | (if c_out { C } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 77 {:04X} ASR ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 77 {:04X} ASR ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory ASL/LSL variants.  res = v << 1; C = v bit7; V = N xor C.
             0x08 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let c_out = (v & 0x80) != 0;
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let c_out = (v & 0x80) != 0;
                 let res = v.wrapping_shl(1);
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 let n = (res & 0x80) != 0;
                 self.r.cc = (self.r.cc & !(C | V))
                     | (if c_out { C } else { 0 })
                     | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 08 {:02X}    ASL <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 08 {:02X}    ASL <${:02X}", pc0, zp, zp);
+                }
             }
             0x68 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let c_out = (v & 0x80) != 0;
+                let v = bus.read8(ea);
+                let c_out = (v & 0x80) != 0;
                 let res = v.wrapping_shl(1);
-                bus.write8(ea, res); self.set_nz8(res);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 let n = (res & 0x80) != 0;
                 self.r.cc = (self.r.cc & !(C | V))
                     | (if c_out { C } else { 0 })
                     | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 68 ..    ASL {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 68 ..    ASL {}", pc0, desc);
+                }
             }
             0x78 => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let c_out = (v & 0x80) != 0;
+                let v = bus.read8(addr);
+                let c_out = (v & 0x80) != 0;
                 let res = v.wrapping_shl(1);
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 let n = (res & 0x80) != 0;
                 self.r.cc = (self.r.cc & !(C | V))
                     | (if c_out { C } else { 0 })
                     | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 78 {:04X} ASL ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 78 {:04X} ASL ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory ROL variants.  res = (v << 1) | C_in; C_out = v bit7; V = N xor C.
             0x09 => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let c_in = (self.r.cc & C) != 0;
                 let c_out = (v & 0x80) != 0;
                 let res = (v << 1) | (if c_in { 1 } else { 0 });
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 let n = (res & 0x80) != 0;
                 self.r.cc = (self.r.cc & !(C | V))
                     | (if c_out { C } else { 0 })
                     | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 09 {:02X}    ROL <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 09 {:02X}    ROL <${:02X}", pc0, zp, zp);
+                }
             }
             0x69 => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let c_in = (self.r.cc & C) != 0;
+                let v = bus.read8(ea);
+                let c_in = (self.r.cc & C) != 0;
                 let c_out = (v & 0x80) != 0;
                 let res = (v << 1) | (if c_in { 1 } else { 0 });
-                bus.write8(ea, res); self.set_nz8(res);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 let n = (res & 0x80) != 0;
                 self.r.cc = (self.r.cc & !(C | V))
                     | (if c_out { C } else { 0 })
                     | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 69 ..    ROL {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 69 ..    ROL {}", pc0, desc);
+                }
             }
             0x79 => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let c_in = (self.r.cc & C) != 0;
+                let v = bus.read8(addr);
+                let c_in = (self.r.cc & C) != 0;
                 let c_out = (v & 0x80) != 0;
                 let res = (v << 1) | (if c_in { 1 } else { 0 });
-                bus.write8(addr, res); self.set_nz8(res);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 let n = (res & 0x80) != 0;
                 self.r.cc = (self.r.cc & !(C | V))
                     | (if c_out { C } else { 0 })
                     | (if (n as u8) ^ (c_out as u8) != 0 { V } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 79 {:04X} ROL ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 79 {:04X} ROL ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory DEC variants.  res = v - 1; V = (v == 0x80).
             0x0A => {
-                let zp = self.fetch8(bus); let addr = self.ea_direct(zp);
-                let v = bus.read8(addr); let res = v.wrapping_sub(1);
-                bus.write8(addr, res); self.set_nz8(res);
+                let zp = self.fetch8(bus);
+                let addr = self.ea_direct(zp);
+                let v = bus.read8(addr);
+                let res = v.wrapping_sub(1);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !V) | (if v == 0x80 { V } else { 0 });
                 consumed = 6;
-                if trace { println!("{:04X}: 0A {:02X}    DEC <${:02X}", pc0, zp, zp); }
+                if trace {
+                    println!("{:04X}: 0A {:02X}    DEC <${:02X}", pc0, zp, zp);
+                }
             }
             0x6A => {
                 let (ea, addcyc, desc) = self.ea_indexed(bus);
-                let v = bus.read8(ea); let res = v.wrapping_sub(1);
-                bus.write8(ea, res); self.set_nz8(res);
+                let v = bus.read8(ea);
+                let res = v.wrapping_sub(1);
+                bus.write8(ea, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !V) | (if v == 0x80 { V } else { 0 });
                 consumed = 6 + addcyc;
-                if trace { println!("{:04X}: 6A ..    DEC {}", pc0, desc); }
+                if trace {
+                    println!("{:04X}: 6A ..    DEC {}", pc0, desc);
+                }
             }
             0x7A => {
                 let addr = self.ea_extended(bus);
-                let v = bus.read8(addr); let res = v.wrapping_sub(1);
-                bus.write8(addr, res); self.set_nz8(res);
+                let v = bus.read8(addr);
+                let res = v.wrapping_sub(1);
+                bus.write8(addr, res);
+                self.set_nz8(res);
                 self.r.cc = (self.r.cc & !V) | (if v == 0x80 { V } else { 0 });
                 consumed = 7;
-                if trace { println!("{:04X}: 7A {:04X} DEC ${:04X}", pc0, addr, addr); }
+                if trace {
+                    println!("{:04X}: 7A {:04X} DEC ${:04X}", pc0, addr, addr);
+                }
             }
 
             // Memory TST variants — set N/Z from the byte at EA, clear V.

@@ -161,9 +161,7 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                     let mut lv: usize =
                         app.mem_window_len.load(std::sync::atomic::Ordering::SeqCst);
                     let old = lv;
-                    let resp = ui.add(
-                        egui::DragValue::new(&mut lv).range(16..=4096).speed(1.0),
-                    );
+                    let resp = ui.add(egui::DragValue::new(&mut lv).range(16..=4096).speed(1.0));
                     ui.label(fl!(LOADER, "bytes"));
                     if resp.changed() && lv != old {
                         let v = lv.clamp(16, 4096);

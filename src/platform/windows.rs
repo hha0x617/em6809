@@ -141,13 +141,13 @@ pub fn show_about_dialog(
             ui.add_space(8.0);
             ui.add(egui::Label::new("Dual-licensed: MIT OR Apache-2.0"));
             ui.add_space(8.0);
-            ui.add(
-                egui::Label::new("See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)"),
-            );
+            ui.add(egui::Label::new(
+                "See LICENSE-MIT, LICENSE-APACHE, and NOTICE (if present)",
+            ));
             ui.add_space(8.0);
-            ui.add(
-                egui::Label::new("This software is provided \"AS IS\" without warranty."),
-            );
+            ui.add(egui::Label::new(
+                "This software is provided \"AS IS\" without warranty.",
+            ));
             ui.add_space(12.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("OK").clicked() {

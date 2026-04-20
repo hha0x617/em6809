@@ -67,25 +67,57 @@ trait ConsoleSetters {
 }
 
 impl ConsoleSetters for ConsoleDev {
-    fn set_rx_watermark(&mut self, wm: usize) { ConsoleDev::set_rx_watermark(self, wm) }
-    fn set_irq_hold_cycles(&mut self, n: u32) { ConsoleDev::set_irq_hold_cycles(self, n) }
-    fn feed_bytes(&mut self, b: &[u8]) { ConsoleDev::feed_bytes(self, b) }
-    fn set_out_file(&mut self, p: &str) { ConsoleDev::set_out_file(self, p) }
-    fn set_tee_stderr(&mut self, on: bool) { ConsoleDev::set_tee_stderr(self, on) }
-    fn set_flush_every(&mut self, n: usize) { ConsoleDev::set_flush_every(self, n) }
-    fn set_flush_on_newline(&mut self, on: bool) { ConsoleDev::set_flush_on_newline(self, on) }
-    fn set_local_echo(&mut self, on: bool) { ConsoleDev::set_local_echo(self, on) }
+    fn set_rx_watermark(&mut self, wm: usize) {
+        ConsoleDev::set_rx_watermark(self, wm)
+    }
+    fn set_irq_hold_cycles(&mut self, n: u32) {
+        ConsoleDev::set_irq_hold_cycles(self, n)
+    }
+    fn feed_bytes(&mut self, b: &[u8]) {
+        ConsoleDev::feed_bytes(self, b)
+    }
+    fn set_out_file(&mut self, p: &str) {
+        ConsoleDev::set_out_file(self, p)
+    }
+    fn set_tee_stderr(&mut self, on: bool) {
+        ConsoleDev::set_tee_stderr(self, on)
+    }
+    fn set_flush_every(&mut self, n: usize) {
+        ConsoleDev::set_flush_every(self, n)
+    }
+    fn set_flush_on_newline(&mut self, on: bool) {
+        ConsoleDev::set_flush_on_newline(self, on)
+    }
+    fn set_local_echo(&mut self, on: bool) {
+        ConsoleDev::set_local_echo(self, on)
+    }
 }
 
 impl ConsoleSetters for Mc6850Dev {
-    fn set_rx_watermark(&mut self, wm: usize) { Mc6850Dev::set_rx_watermark(self, wm) }
-    fn set_irq_hold_cycles(&mut self, n: u32) { Mc6850Dev::set_irq_hold_cycles(self, n) }
-    fn feed_bytes(&mut self, b: &[u8]) { Mc6850Dev::feed_bytes(self, b) }
-    fn set_out_file(&mut self, p: &str) { Mc6850Dev::set_out_file(self, p) }
-    fn set_tee_stderr(&mut self, on: bool) { Mc6850Dev::set_tee_stderr(self, on) }
-    fn set_flush_every(&mut self, n: usize) { Mc6850Dev::set_flush_every(self, n) }
-    fn set_flush_on_newline(&mut self, on: bool) { Mc6850Dev::set_flush_on_newline(self, on) }
-    fn set_local_echo(&mut self, on: bool) { Mc6850Dev::set_local_echo(self, on) }
+    fn set_rx_watermark(&mut self, wm: usize) {
+        Mc6850Dev::set_rx_watermark(self, wm)
+    }
+    fn set_irq_hold_cycles(&mut self, n: u32) {
+        Mc6850Dev::set_irq_hold_cycles(self, n)
+    }
+    fn feed_bytes(&mut self, b: &[u8]) {
+        Mc6850Dev::feed_bytes(self, b)
+    }
+    fn set_out_file(&mut self, p: &str) {
+        Mc6850Dev::set_out_file(self, p)
+    }
+    fn set_tee_stderr(&mut self, on: bool) {
+        Mc6850Dev::set_tee_stderr(self, on)
+    }
+    fn set_flush_every(&mut self, n: usize) {
+        Mc6850Dev::set_flush_every(self, n)
+    }
+    fn set_flush_on_newline(&mut self, on: bool) {
+        Mc6850Dev::set_flush_on_newline(self, on)
+    }
+    fn set_local_echo(&mut self, on: bool) {
+        Mc6850Dev::set_local_echo(self, on)
+    }
 }
 
 pub struct BusOptions {

@@ -294,7 +294,11 @@ fn finalize_loaded_image(
         let lst_path = path.with_extension("lst");
         let lst_path_upper = path.with_extension("LST");
         if lst_path.exists() || lst_path_upper.exists() {
-            let p = if lst_path.exists() { lst_path } else { lst_path_upper };
+            let p = if lst_path.exists() {
+                lst_path
+            } else {
+                lst_path_upper
+            };
             viewer.request_load_lst(p);
         } else {
             viewer.force_hex_view();
@@ -1523,78 +1527,56 @@ fn main() {
             let print_cycles_flag = print_cycles;
             let spawn_cpu = move || {
                 thread::spawn(move || {
-                // Everything below mirrors the normal run loop path
-                // no remaining step counter in GUI-only mode
-                let mut run_until_target: Option<u16> = None;
-                // Track last seen Timer pending state to avoid spamming UI
-                let mut last_timer_pending: Option<bool> = None;
-                let prev_mode = if console_stdin_flag {
-                    console_mode::enter_raw()
-                } else {
-                    None
-                };
-                let rx = if console_stdin_flag {
-                    use std::io::Read;
-                    use std::sync::mpsc;
-                    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-                    thread::spawn(move || {
-                        let mut stdin = std::io::stdin();
-                        let mut buf = [0u8; 256];
-                        loop {
-                            match stdin.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    // Detect Ctrl+C (ETX=0x03) in raw mode and request shutdown
-                                    if buf[..n].iter().copied().any(|b| b == 0x03) {
-                                        STOP_REQUESTED.store(true, Ordering::SeqCst);
-                                        break;
-                                    }
-                                    let _ = tx.send(buf[..n].to_vec());
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                    });
-                    Some(rx)
-                } else {
-                    None
-                };
-
-                // Boot script
-                let mut boot_seq: Option<BootSequencer> = if let Some(p) = &boot_script_path_opt {
-                    match std::fs::read_to_string(p) {
-                        Ok(s) => parse_boot_script(&s).ok().map(BootSequencer::new),
-                        Err(_) => None,
-                    }
-                } else {
-                    None
-                };
-
-                if paused_start_flag {
-                    viewer_cpu.set_paused(true);
-                    let snap = regview::RegSnapshot {
-                        a: cpu_worker.r.a,
-                        b: cpu_worker.r.b,
-                        d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
-                        x: cpu_worker.r.x,
-                        y: cpu_worker.r.y,
-                        u: cpu_worker.r.u,
-                        s: cpu_worker.r.s,
-                        dp: cpu_worker.r.dp,
-                        pc: cpu_worker.r.pc,
-                        cc: cpu_worker.r.cc,
+                    // Everything below mirrors the normal run loop path
+                    // no remaining step counter in GUI-only mode
+                    let mut run_until_target: Option<u16> = None;
+                    // Track last seen Timer pending state to avoid spamming UI
+                    let mut last_timer_pending: Option<bool> = None;
+                    let prev_mode = if console_stdin_flag {
+                        console_mode::enter_raw()
+                    } else {
+                        None
                     };
-                    viewer_cpu.push(snap);
-                }
+                    let rx = if console_stdin_flag {
+                        use std::io::Read;
+                        use std::sync::mpsc;
+                        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+                        thread::spawn(move || {
+                            let mut stdin = std::io::stdin();
+                            let mut buf = [0u8; 256];
+                            loop {
+                                match stdin.read(&mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        // Detect Ctrl+C (ETX=0x03) in raw mode and request shutdown
+                                        if buf[..n].iter().copied().any(|b| b == 0x03) {
+                                            STOP_REQUESTED.store(true, Ordering::SeqCst);
+                                            break;
+                                        }
+                                        let _ = tx.send(buf[..n].to_vec());
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        });
+                        Some(rx)
+                    } else {
+                        None
+                    };
 
-                'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
-                    process_settings_worker_queue(Some(&viewer_cpu), bus_worker.as_mut());
-                    if STOP_REQUESTED.load(Ordering::SeqCst) {
-                        // Request GUI to close and break
-                        viewer_cpu.request_close();
-                        break 'run_loop;
-                    }
-                    if viewer_cpu.is_paused() {
+                    // Boot script
+                    let mut boot_seq: Option<BootSequencer> = if let Some(p) = &boot_script_path_opt
+                    {
+                        match std::fs::read_to_string(p) {
+                            Ok(s) => parse_boot_script(&s).ok().map(BootSequencer::new),
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    if paused_start_flag {
+                        viewer_cpu.set_paused(true);
                         let snap = regview::RegSnapshot {
                             a: cpu_worker.r.a,
                             b: cpu_worker.r.b,
@@ -1608,438 +1590,134 @@ fn main() {
                             cc: cpu_worker.r.cc,
                         };
                         viewer_cpu.push(snap);
-                        let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
-                        let eff_start: u16 = if mfollow {
-                            cpu_worker.r.pc & 0xFFF0
-                        } else {
-                            mstart
-                        };
-                        let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                        let mut a = eff_start;
-                        for _ in 0..mlen {
-                            buf.push(bus_worker.as_mut().read8(a));
-                            a = a.wrapping_add(1);
+                    }
+
+                    'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
+                        process_settings_worker_queue(Some(&viewer_cpu), bus_worker.as_mut());
+                        if STOP_REQUESTED.load(Ordering::SeqCst) {
+                            // Request GUI to close and break
+                            viewer_cpu.request_close();
+                            break 'run_loop;
                         }
-                        viewer_cpu.update_memory_window(eff_start, buf);
-                        let (consumed, _) =
-                            em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc);
-                        let clen = core::cmp::max(consumed as usize, 1);
-                        viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
-                        // While paused, keep UI responsive and update memory pane on setting changes
-                        let (mut mstart, mut mlen, mut mfollow) = viewer_cpu.get_memory_window();
-                        while viewer_cpu.should_pause() {
-                            if STOP_REQUESTED.load(Ordering::SeqCst) {
-                                break 'run_loop;
+                        if viewer_cpu.is_paused() {
+                            let snap = regview::RegSnapshot {
+                                a: cpu_worker.r.a,
+                                b: cpu_worker.r.b,
+                                d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
+                                x: cpu_worker.r.x,
+                                y: cpu_worker.r.y,
+                                u: cpu_worker.r.u,
+                                s: cpu_worker.r.s,
+                                dp: cpu_worker.r.dp,
+                                pc: cpu_worker.r.pc,
+                                cc: cpu_worker.r.cc,
+                            };
+                            viewer_cpu.push(snap);
+                            let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
+                            let eff_start: u16 = if mfollow {
+                                cpu_worker.r.pc & 0xFFF0
+                            } else {
+                                mstart
+                            };
+                            let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                            let mut a = eff_start;
+                            for _ in 0..mlen {
+                                buf.push(bus_worker.as_mut().read8(a));
+                                a = a.wrapping_add(1);
                             }
-                            // Avoid busy-waiting when the UI thread is blocked (e.g., file dialogs).
-                            std::thread::sleep(std::time::Duration::from_millis(2));
-                            // Detect Memory pane setting changes (Follow PC / Start / Len)
-                            let (ns, nl, nf) = viewer_cpu.get_memory_window();
-                            if ns != mstart || nl != mlen || nf != mfollow {
-                                mstart = ns;
-                                mlen = nl;
-                                mfollow = nf;
-                                let eff_start: u16 = if mfollow {
-                                    cpu_worker.r.pc & 0xFFF0
-                                } else {
-                                    mstart
-                                };
-                                let mut nbuf: Vec<u8> = Vec::with_capacity(mlen);
-                                let mut a = eff_start;
-                                for _ in 0..mlen {
-                                    nbuf.push(bus_worker.as_mut().read8(a));
-                                    a = a.wrapping_add(1);
+                            viewer_cpu.update_memory_window(eff_start, buf);
+                            let (consumed, _) = em6809::disasm::disasm_one_hex(
+                                bus_worker.as_mut(),
+                                cpu_worker.r.pc,
+                            );
+                            let clen = core::cmp::max(consumed as usize, 1);
+                            viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
+                            // While paused, keep UI responsive and update memory pane on setting changes
+                            let (mut mstart, mut mlen, mut mfollow) =
+                                viewer_cpu.get_memory_window();
+                            while viewer_cpu.should_pause() {
+                                if STOP_REQUESTED.load(Ordering::SeqCst) {
+                                    break 'run_loop;
                                 }
-                                viewer_cpu.update_memory_window(eff_start, nbuf);
-                                let (consumed, _) = em6809::disasm::disasm_one_hex(
-                                    bus_worker.as_mut(),
-                                    cpu_worker.r.pc,
-                                );
-                                let clen = core::cmp::max(consumed as usize, 1);
-                                viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
-                            }
-                            while let Some(cmd) = viewer_cpu.take_command_worker() {
-                                match cmd {
-                                    regview::Command::UiOpenSettings
-                                    | regview::Command::UiOpenSettingsExternal => {}
-                                    regview::Command::UiOpenImageDialog => {}
-                                    regview::Command::UiSetSettingsBaseline(_, _, _) => {}
-                                    regview::Command::UiAckSettings { .. } => {}
-                                    regview::Command::SetPc(a) => {
-                                        cpu_worker.set_pc(a);
-                                        viewer_cpu.set_memory_window(
-                                            cpu_worker.r.pc,
-                                            None,
-                                            Some(true),
-                                        );
-                                        let snap2 = regview::RegSnapshot {
-                                            a: cpu_worker.r.a,
-                                            b: cpu_worker.r.b,
-                                            d: ((cpu_worker.r.a as u16) << 8)
-                                                | (cpu_worker.r.b as u16),
-                                            x: cpu_worker.r.x,
-                                            y: cpu_worker.r.y,
-                                            u: cpu_worker.r.u,
-                                            s: cpu_worker.r.s,
-                                            dp: cpu_worker.r.dp,
-                                            pc: cpu_worker.r.pc,
-                                            cc: cpu_worker.r.cc,
-                                        };
-                                        viewer_cpu.push(snap2);
+                                // Avoid busy-waiting when the UI thread is blocked (e.g., file dialogs).
+                                std::thread::sleep(std::time::Duration::from_millis(2));
+                                // Detect Memory pane setting changes (Follow PC / Start / Len)
+                                let (ns, nl, nf) = viewer_cpu.get_memory_window();
+                                if ns != mstart || nl != mlen || nf != mfollow {
+                                    mstart = ns;
+                                    mlen = nl;
+                                    mfollow = nf;
+                                    let eff_start: u16 = if mfollow {
+                                        cpu_worker.r.pc & 0xFFF0
+                                    } else {
+                                        mstart
+                                    };
+                                    let mut nbuf: Vec<u8> = Vec::with_capacity(mlen);
+                                    let mut a = eff_start;
+                                    for _ in 0..mlen {
+                                        nbuf.push(bus_worker.as_mut().read8(a));
+                                        a = a.wrapping_add(1);
                                     }
-                                    regview::Command::RefreshHexListing => {
-                                        let spans = loader_util::coalesce_ranges(
-                                            loaded_ranges_worker.clone(),
-                                        );
-                                        let (policy, _win_len) = viewer_cpu.get_span_policy();
-                                        let span_for_pc = spans
-                                            .iter()
-                                            .find(|(s, e)| {
-                                                *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
-                                            })
-                                            .copied();
-                                        let (start, total_len) = if policy == 1 {
-                                            let (ws, wl, _) = viewer_cpu.get_memory_window();
-                                            (ws, std::cmp::max(wl, 256))
-                                        } else if let Some((s, e)) = span_for_pc {
-                                            (s, e.wrapping_sub(s) as usize)
-                                        } else {
-                                            let (ws, wl, _) = viewer_cpu.get_memory_window();
-                                            (ws, std::cmp::max(wl, 256))
-                                        };
-                                        let mut cur = start;
-                                        let mut out = String::new();
-                                        let mut processed: usize = 0;
-                                        while processed < total_len {
-                                            let (consumed, text) = em6809::disasm::disasm_one_hex(
-                                                bus_worker.as_mut(),
-                                                cur,
+                                    viewer_cpu.update_memory_window(eff_start, nbuf);
+                                    let (consumed, _) = em6809::disasm::disasm_one_hex(
+                                        bus_worker.as_mut(),
+                                        cpu_worker.r.pc,
+                                    );
+                                    let clen = core::cmp::max(consumed as usize, 1);
+                                    viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
+                                }
+                                while let Some(cmd) = viewer_cpu.take_command_worker() {
+                                    match cmd {
+                                        regview::Command::UiOpenSettings
+                                        | regview::Command::UiOpenSettingsExternal => {}
+                                        regview::Command::UiOpenImageDialog => {}
+                                        regview::Command::UiSetSettingsBaseline(_, _, _) => {}
+                                        regview::Command::UiAckSettings { .. } => {}
+                                        regview::Command::SetPc(a) => {
+                                            cpu_worker.set_pc(a);
+                                            viewer_cpu.set_memory_window(
+                                                cpu_worker.r.pc,
+                                                None,
+                                                Some(true),
                                             );
-                                            use core::fmt::Write as _;
-                                            let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                            let step = core::cmp::max(consumed as usize, 1);
-                                            processed += step;
-                                            cur = cur.wrapping_add(step as u16);
+                                            let snap2 = regview::RegSnapshot {
+                                                a: cpu_worker.r.a,
+                                                b: cpu_worker.r.b,
+                                                d: ((cpu_worker.r.a as u16) << 8)
+                                                    | (cpu_worker.r.b as u16),
+                                                x: cpu_worker.r.x,
+                                                y: cpu_worker.r.y,
+                                                u: cpu_worker.r.u,
+                                                s: cpu_worker.r.s,
+                                                dp: cpu_worker.r.dp,
+                                                pc: cpu_worker.r.pc,
+                                                cc: cpu_worker.r.cc,
+                                            };
+                                            viewer_cpu.push(snap2);
                                         }
-                                        viewer_cpu.update_hex_listing(out);
-                                    }
-                                    regview::Command::RunUntil(a) => {
-                                        run_until_target = Some(a);
-                                        viewer_cpu.set_paused(false);
-                                        break;
-                                    }
-                                    regview::Command::ApplyRegs(ns) => {
-                                        cpu_worker.r.a = ns.a;
-                                        cpu_worker.r.b = ns.b;
-                                        cpu_worker.r.x = ns.x;
-                                        cpu_worker.r.y = ns.y;
-                                        cpu_worker.r.u = ns.u;
-                                        cpu_worker.r.s = ns.s;
-                                        cpu_worker.r.dp = ns.dp;
-                                        cpu_worker.r.pc = ns.pc;
-                                        cpu_worker.r.cc = ns.cc;
-                                        let snap2 = regview::RegSnapshot {
-                                            a: cpu_worker.r.a,
-                                            b: cpu_worker.r.b,
-                                            d: ((cpu_worker.r.a as u16) << 8)
-                                                | (cpu_worker.r.b as u16),
-                                            x: cpu_worker.r.x,
-                                            y: cpu_worker.r.y,
-                                            u: cpu_worker.r.u,
-                                            s: cpu_worker.r.s,
-                                            dp: cpu_worker.r.dp,
-                                            pc: cpu_worker.r.pc,
-                                            cc: cpu_worker.r.cc,
-                                        };
-                                        viewer_cpu.push(snap2);
-                                    }
-                                    regview::Command::OpenImageParsed { path, parsed } => {
-                                        apply_parsed_image(
-                                            bus_worker.as_mut(),
-                                            &mut cpu_worker,
-                                            Some(&viewer_cpu),
-                                            &mut loaded,
-                                            &path,
-                                            parsed,
-                                        );
-                                        loaded_ranges_worker = loaded.loaded_ranges.clone();
-                                    }
-                                    regview::Command::OpenImage { path, base } => {
-                                        // Handle file load on worker side (macOS/Linux GUI-main-thread mode)
-                                        match std::fs::read(&path) {
-                                            Ok(bytes) => {
-                                                // Clear memory without clobbering MMU regs
-                                                clear_logical_memory(bus_worker.as_mut());
-                                                let mut new_loaded = LoadedImage {
-                                                    loaded_ranges: Vec::new(),
-                                                    entry: None,
-                                                };
-                                                let lower = path
-                                                    .extension()
-                                                    .and_then(|s| s.to_str())
-                                                    .unwrap_or("")
-                                                    .to_lowercase();
-                                                if lower == "s19" || lower == "srec" {
-                                                    let text = String::from_utf8_lossy(&bytes);
-                                                    match loader::load_srec_bus(
-                                                        bus_worker.as_mut(),
-                                                        &text,
-                                                    ) {
-                                                        Ok(li) => new_loaded = li,
-                                                        Err(e) => {
-                                                            eprintln!("Open failed (SREC): {e}");
-                                                        }
-                                                    }
-                                                } else if lower == "bin" {
-                                                    let base_addr = base.unwrap_or(0);
-                                                    new_loaded = loader::load_binary_bus(
-                                                        bus_worker.as_mut(),
-                                                        base_addr,
-                                                        &bytes,
-                                                    );
-                                                } else {
-                                                    eprintln!(
-                                                        "Unsupported extension for Open: {}",
-                                                        lower
-                                                    );
-                                                }
-                                                // PC init priority: reset vector if valid; else SREC entry; else first loaded range
-                                                let mut new_pc: Option<u16> = None;
-                                                let pch = bus_worker.as_mut().read8(0xFFFE) as u16;
-                                                let pcl = bus_worker.as_mut().read8(0xFFFF) as u16;
-                                                let vec_pc = (pch << 8) | pcl;
-                                                if vec_pc != 0x0000 {
-                                                    new_pc = Some(vec_pc);
-                                                }
-                                                if new_pc.is_none() {
-                                                    new_pc = new_loaded.entry.and_then(|e| {
-                                                        if e == 0x0000
-                                                            && !new_loaded.loaded_ranges.iter().any(
-                                                                |(s, e2)| *s <= e && e < *e2,
-                                                            )
-                                                        {
-                                                            None
-                                                        } else {
-                                                            Some(e)
-                                                        }
-                                                    });
-                                                }
-                                                if new_pc.is_none() {
-                                                    if let Some((s, _e)) =
-                                                        new_loaded.loaded_ranges.first().copied()
-                                                    {
-                                                        new_pc = Some(s);
-                                                    }
-                                                }
-                                                if let Some(pc) = new_pc {
-                                                    cpu_worker.r.pc = pc;
-                                                    // Align memory pane to program start without changing follow state.
-                                                    viewer_cpu.set_memory_window(pc, None, None);
-                                                }
-                                                loader_util::log_program_info(
-                                                    &new_loaded,
-                                                    cpu_worker.r.pc,
-                                                );
-                                                let snap = regview::RegSnapshot {
-                                                    a: cpu_worker.r.a,
-                                                    b: cpu_worker.r.b,
-                                                    d: ((cpu_worker.r.a as u16) << 8)
-                                                        | (cpu_worker.r.b as u16),
-                                                    x: cpu_worker.r.x,
-                                                    y: cpu_worker.r.y,
-                                                    u: cpu_worker.r.u,
-                                                    s: cpu_worker.r.s,
-                                                    dp: cpu_worker.r.dp,
-                                                    pc: cpu_worker.r.pc,
-                                                    cc: cpu_worker.r.cc,
-                                                };
-                                                viewer_cpu.push(snap);
-                                                // Update worker's span tracking to new image
-                                                loaded_ranges_worker =
-                                                    new_loaded.loaded_ranges.clone();
-                                                viewer_cpu.force_hex_view();
-                                                // Pause after load as requested
-                                                viewer_cpu.set_paused(true);
-                                                // refresh memory window and listing for new content
-                                                let (mstart_w, mlen_w, mfollow_w) =
-                                                    viewer_cpu.get_memory_window();
-                                                let eff_start_w: u16 = if mfollow_w {
-                                                    cpu_worker.r.pc & 0xFFF0
-                                                } else {
-                                                    mstart_w
-                                                };
-                                                if mfollow_w {
-                                                    viewer_cpu.set_memory_window_start(
-                                                        (cpu_worker.r.pc & 0xFFF0) as usize,
-                                                    );
-                                                }
-                                                let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
-                                                let mut a = eff_start_w;
-                                                for _ in 0..mlen_w {
-                                                    nbuf.push(bus_worker.as_mut().read8(a));
-                                                    a = a.wrapping_add(1);
-                                                }
-                                                viewer_cpu.update_memory_window(eff_start_w, nbuf);
-                                                let (consumed, _) = em6809::disasm::disasm_one_hex(
-                                                    bus_worker.as_mut(),
-                                                    cpu_worker.r.pc,
-                                                );
-                                                let clen = core::cmp::max(consumed as usize, 1);
-                                                viewer_cpu
-                                                    .set_memory_highlight(cpu_worker.r.pc, clen);
-                                                // Update Hex view: always rebuild from current memory so Hex shows disassembly
-                                                let spans = loader_util::coalesce_ranges(
-                                                    loaded.loaded_ranges.clone(),
-                                                );
-                                                if let Some((start, end)) = spans
-                                                    .iter()
-                                                    .find(|(s, e)| {
-                                                        *s <= cpu_worker.r.pc
-                                                            && cpu_worker.r.pc < *e
-                                                    })
-                                                    .copied()
-                                                {
-                                                    let mut cur = start;
-                                                    let mut out = String::new();
-                                                    let mut processed: usize = 0;
-                                                    let total_len: usize =
-                                                        end.wrapping_sub(start) as usize;
-                                                    while processed < total_len {
-                                                        let (consumed, text) =
-                                                            em6809::disasm::disasm_one_hex(
-                                                                bus_worker.as_mut(),
-                                                                cur,
-                                                            );
-                                                        use core::fmt::Write as _;
-                                                        let _ =
-                                                            writeln!(&mut out, "{cur:04X}: {text}");
-                                                        let step =
-                                                            core::cmp::max(consumed as usize, 1);
-                                                        processed += step;
-                                                        cur = cur.wrapping_add(step as u16);
-                                                    }
-                                                    viewer_cpu.update_hex_listing(out);
-                                                }
-                                                settings_runtime::sync_gpio_from_bus(
-                                                    bus_worker.as_mut(),
-                                                    &viewer_cpu,
-                                                );
-                                                settings_runtime::sync_block_from_bus(
-                                                    bus_worker.as_mut(),
-                                                    &viewer_cpu,
-                                                );
-                                                request_reapply_settings_from_baseline();
-                                                // If an adjacent .lst exists (case-insensitive), map and show it; else prefer Hex
-                                                let lst_path = path.with_extension("lst");
-                                                let lst_path_upper = path.with_extension("LST");
-                                                if lst_path.exists() || lst_path_upper.exists() {
-                                                    let p = if lst_path.exists() {
-                                                        lst_path
-                                                    } else {
-                                                        lst_path_upper
-                                                    };
-                                                    viewer_cpu.request_load_lst(p);
-                                                } else {
-                                                    viewer_cpu.force_hex_view();
-                                                }
-                                            }
-                                            Err(e) => eprintln!("Open failed: {e}"),
-                                        }
-                                    }
-                                    regview::Command::UiPromptBinBase(_) => {
-                                        // UI-only; handled by GUI thread
-                                    }
-                                    regview::Command::MemWrite(items) => {
-                                        for (addr, val) in items {
-                                            bus_worker.as_mut().write8(addr, val);
-                                        }
-                                        // Sync GPIO state immediately after edits
-                                        {
-                                            let mut pushed = false;
-                                            if let Some(io_mem) = bus_worker
-                                                .as_mut()
-                                                .as_any_mut()
-                                                .downcast_mut::<IoBus<Memory>>()
-                                            {
-                                                if io_mem.take_gpio_dirty() {
-                                                    io_mem.with_gpio_mut(|g| {
-                                                        let (o, d, b) = g.get_state();
-                                                        viewer_cpu.sync_gpio(true, b, o, d);
-                                                        pushed = true;
-                                                    });
-                                                }
-                                            } else if let Some(io_mmu) = bus_worker
-                                                .as_mut()
-                                                .as_any_mut()
-                                                .downcast_mut::<IoBus<Mc6829>>()
-                                            {
-                                                if io_mmu.take_gpio_dirty() {
-                                                    io_mmu.with_gpio_mut(|g| {
-                                                        let (o, d, b) = g.get_state();
-                                                        viewer_cpu.sync_gpio(true, b, o, d);
-                                                        pushed = true;
-                                                    });
-                                                }
-                                            } else if let Some(wt) = bus_worker
-                                                .as_mut()
-                                                .as_any_mut()
-                                                .downcast_mut::<bus::WriteTrack>()
-                                            {
-                                                let inner_any = wt.inner_any_mut();
-                                                if let Some(io_mem) =
-                                                    inner_any.downcast_mut::<IoBus<Memory>>()
-                                                {
-                                                    if io_mem.take_gpio_dirty() {
-                                                        io_mem.with_gpio_mut(|g| {
-                                                            let (o, d, b) = g.get_state();
-                                                            viewer_cpu.sync_gpio(true, b, o, d);
-                                                            pushed = true;
-                                                        });
-                                                    }
-                                                } else if let Some(io_mmu) =
-                                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
-                                                {
-                                                    if io_mmu.take_gpio_dirty() {
-                                                        io_mmu.with_gpio_mut(|g| {
-                                                            let (o, d, b) = g.get_state();
-                                                            viewer_cpu.sync_gpio(true, b, o, d);
-                                                            pushed = true;
-                                                        });
-                                                    }
-                                                }
-                                            }
-                                            let _ = pushed;
-                                        }
-                                        // After applying edits, refresh memory pane immediately
-                                        let (mstart_w, mlen_w, mfollow_w) =
-                                            viewer_cpu.get_memory_window();
-                                        let eff_start_w: u16 = if mfollow_w {
-                                            cpu_worker.r.pc & 0xFFF0
-                                        } else {
-                                            mstart_w
-                                        };
-                                        let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
-                                        let mut a = eff_start_w;
-                                        for _ in 0..mlen_w {
-                                            nbuf.push(bus_worker.as_mut().read8(a));
-                                            a = a.wrapping_add(1);
-                                        }
-                                        viewer_cpu.update_memory_window(eff_start_w, nbuf);
-                                        // Also refresh listing pane (full span) immediately
-                                        let spans = loader_util::coalesce_ranges(
-                                            loaded_ranges_worker.clone(),
-                                        );
-                                        if let Some((start, end)) = spans
-                                            .iter()
-                                            .find(|(s, e)| {
-                                                *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
-                                            })
-                                            .copied()
-                                        {
+                                        regview::Command::RefreshHexListing => {
+                                            let spans = loader_util::coalesce_ranges(
+                                                loaded_ranges_worker.clone(),
+                                            );
+                                            let (policy, _win_len) = viewer_cpu.get_span_policy();
+                                            let span_for_pc = spans
+                                                .iter()
+                                                .find(|(s, e)| {
+                                                    *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
+                                                })
+                                                .copied();
+                                            let (start, total_len) = if policy == 1 {
+                                                let (ws, wl, _) = viewer_cpu.get_memory_window();
+                                                (ws, std::cmp::max(wl, 256))
+                                            } else if let Some((s, e)) = span_for_pc {
+                                                (s, e.wrapping_sub(s) as usize)
+                                            } else {
+                                                let (ws, wl, _) = viewer_cpu.get_memory_window();
+                                                (ws, std::cmp::max(wl, 256))
+                                            };
                                             let mut cur = start;
                                             let mut out = String::new();
                                             let mut processed: usize = 0;
-                                            let total_len: usize = end.wrapping_sub(start) as usize;
                                             while processed < total_len {
                                                 let (consumed, text) =
                                                     em6809::disasm::disasm_one_hex(
@@ -2053,46 +1731,398 @@ fn main() {
                                                 cur = cur.wrapping_add(step as u16);
                                             }
                                             viewer_cpu.update_hex_listing(out);
-                                            if viewer_cpu.auto_hex_on_edit() {
-                                                viewer_cpu.force_hex_view();
+                                        }
+                                        regview::Command::RunUntil(a) => {
+                                            run_until_target = Some(a);
+                                            viewer_cpu.set_paused(false);
+                                            break;
+                                        }
+                                        regview::Command::ApplyRegs(ns) => {
+                                            cpu_worker.r.a = ns.a;
+                                            cpu_worker.r.b = ns.b;
+                                            cpu_worker.r.x = ns.x;
+                                            cpu_worker.r.y = ns.y;
+                                            cpu_worker.r.u = ns.u;
+                                            cpu_worker.r.s = ns.s;
+                                            cpu_worker.r.dp = ns.dp;
+                                            cpu_worker.r.pc = ns.pc;
+                                            cpu_worker.r.cc = ns.cc;
+                                            let snap2 = regview::RegSnapshot {
+                                                a: cpu_worker.r.a,
+                                                b: cpu_worker.r.b,
+                                                d: ((cpu_worker.r.a as u16) << 8)
+                                                    | (cpu_worker.r.b as u16),
+                                                x: cpu_worker.r.x,
+                                                y: cpu_worker.r.y,
+                                                u: cpu_worker.r.u,
+                                                s: cpu_worker.r.s,
+                                                dp: cpu_worker.r.dp,
+                                                pc: cpu_worker.r.pc,
+                                                cc: cpu_worker.r.cc,
+                                            };
+                                            viewer_cpu.push(snap2);
+                                        }
+                                        regview::Command::OpenImageParsed { path, parsed } => {
+                                            apply_parsed_image(
+                                                bus_worker.as_mut(),
+                                                &mut cpu_worker,
+                                                Some(&viewer_cpu),
+                                                &mut loaded,
+                                                &path,
+                                                parsed,
+                                            );
+                                            loaded_ranges_worker = loaded.loaded_ranges.clone();
+                                        }
+                                        regview::Command::OpenImage { path, base } => {
+                                            // Handle file load on worker side (macOS/Linux GUI-main-thread mode)
+                                            match std::fs::read(&path) {
+                                                Ok(bytes) => {
+                                                    // Clear memory without clobbering MMU regs
+                                                    clear_logical_memory(bus_worker.as_mut());
+                                                    let mut new_loaded = LoadedImage {
+                                                        loaded_ranges: Vec::new(),
+                                                        entry: None,
+                                                    };
+                                                    let lower = path
+                                                        .extension()
+                                                        .and_then(|s| s.to_str())
+                                                        .unwrap_or("")
+                                                        .to_lowercase();
+                                                    if lower == "s19" || lower == "srec" {
+                                                        let text = String::from_utf8_lossy(&bytes);
+                                                        match loader::load_srec_bus(
+                                                            bus_worker.as_mut(),
+                                                            &text,
+                                                        ) {
+                                                            Ok(li) => new_loaded = li,
+                                                            Err(e) => {
+                                                                eprintln!(
+                                                                    "Open failed (SREC): {e}"
+                                                                );
+                                                            }
+                                                        }
+                                                    } else if lower == "bin" {
+                                                        let base_addr = base.unwrap_or(0);
+                                                        new_loaded = loader::load_binary_bus(
+                                                            bus_worker.as_mut(),
+                                                            base_addr,
+                                                            &bytes,
+                                                        );
+                                                    } else {
+                                                        eprintln!(
+                                                            "Unsupported extension for Open: {}",
+                                                            lower
+                                                        );
+                                                    }
+                                                    // PC init priority: reset vector if valid; else SREC entry; else first loaded range
+                                                    let mut new_pc: Option<u16> = None;
+                                                    let pch =
+                                                        bus_worker.as_mut().read8(0xFFFE) as u16;
+                                                    let pcl =
+                                                        bus_worker.as_mut().read8(0xFFFF) as u16;
+                                                    let vec_pc = (pch << 8) | pcl;
+                                                    if vec_pc != 0x0000 {
+                                                        new_pc = Some(vec_pc);
+                                                    }
+                                                    if new_pc.is_none() {
+                                                        new_pc = new_loaded.entry.and_then(|e| {
+                                                            if e == 0x0000
+                                                                && !new_loaded
+                                                                    .loaded_ranges
+                                                                    .iter()
+                                                                    .any(|(s, e2)| {
+                                                                        *s <= e && e < *e2
+                                                                    })
+                                                            {
+                                                                None
+                                                            } else {
+                                                                Some(e)
+                                                            }
+                                                        });
+                                                    }
+                                                    if new_pc.is_none() {
+                                                        if let Some((s, _e)) = new_loaded
+                                                            .loaded_ranges
+                                                            .first()
+                                                            .copied()
+                                                        {
+                                                            new_pc = Some(s);
+                                                        }
+                                                    }
+                                                    if let Some(pc) = new_pc {
+                                                        cpu_worker.r.pc = pc;
+                                                        // Align memory pane to program start without changing follow state.
+                                                        viewer_cpu
+                                                            .set_memory_window(pc, None, None);
+                                                    }
+                                                    loader_util::log_program_info(
+                                                        &new_loaded,
+                                                        cpu_worker.r.pc,
+                                                    );
+                                                    let snap = regview::RegSnapshot {
+                                                        a: cpu_worker.r.a,
+                                                        b: cpu_worker.r.b,
+                                                        d: ((cpu_worker.r.a as u16) << 8)
+                                                            | (cpu_worker.r.b as u16),
+                                                        x: cpu_worker.r.x,
+                                                        y: cpu_worker.r.y,
+                                                        u: cpu_worker.r.u,
+                                                        s: cpu_worker.r.s,
+                                                        dp: cpu_worker.r.dp,
+                                                        pc: cpu_worker.r.pc,
+                                                        cc: cpu_worker.r.cc,
+                                                    };
+                                                    viewer_cpu.push(snap);
+                                                    // Update worker's span tracking to new image
+                                                    loaded_ranges_worker =
+                                                        new_loaded.loaded_ranges.clone();
+                                                    viewer_cpu.force_hex_view();
+                                                    // Pause after load as requested
+                                                    viewer_cpu.set_paused(true);
+                                                    // refresh memory window and listing for new content
+                                                    let (mstart_w, mlen_w, mfollow_w) =
+                                                        viewer_cpu.get_memory_window();
+                                                    let eff_start_w: u16 = if mfollow_w {
+                                                        cpu_worker.r.pc & 0xFFF0
+                                                    } else {
+                                                        mstart_w
+                                                    };
+                                                    if mfollow_w {
+                                                        viewer_cpu.set_memory_window_start(
+                                                            (cpu_worker.r.pc & 0xFFF0) as usize,
+                                                        );
+                                                    }
+                                                    let mut nbuf: Vec<u8> =
+                                                        Vec::with_capacity(mlen_w);
+                                                    let mut a = eff_start_w;
+                                                    for _ in 0..mlen_w {
+                                                        nbuf.push(bus_worker.as_mut().read8(a));
+                                                        a = a.wrapping_add(1);
+                                                    }
+                                                    viewer_cpu
+                                                        .update_memory_window(eff_start_w, nbuf);
+                                                    let (consumed, _) =
+                                                        em6809::disasm::disasm_one_hex(
+                                                            bus_worker.as_mut(),
+                                                            cpu_worker.r.pc,
+                                                        );
+                                                    let clen = core::cmp::max(consumed as usize, 1);
+                                                    viewer_cpu.set_memory_highlight(
+                                                        cpu_worker.r.pc,
+                                                        clen,
+                                                    );
+                                                    // Update Hex view: always rebuild from current memory so Hex shows disassembly
+                                                    let spans = loader_util::coalesce_ranges(
+                                                        loaded.loaded_ranges.clone(),
+                                                    );
+                                                    if let Some((start, end)) = spans
+                                                        .iter()
+                                                        .find(|(s, e)| {
+                                                            *s <= cpu_worker.r.pc
+                                                                && cpu_worker.r.pc < *e
+                                                        })
+                                                        .copied()
+                                                    {
+                                                        let mut cur = start;
+                                                        let mut out = String::new();
+                                                        let mut processed: usize = 0;
+                                                        let total_len: usize =
+                                                            end.wrapping_sub(start) as usize;
+                                                        while processed < total_len {
+                                                            let (consumed, text) =
+                                                                em6809::disasm::disasm_one_hex(
+                                                                    bus_worker.as_mut(),
+                                                                    cur,
+                                                                );
+                                                            use core::fmt::Write as _;
+                                                            let _ = writeln!(
+                                                                &mut out,
+                                                                "{cur:04X}: {text}"
+                                                            );
+                                                            let step = core::cmp::max(
+                                                                consumed as usize,
+                                                                1,
+                                                            );
+                                                            processed += step;
+                                                            cur = cur.wrapping_add(step as u16);
+                                                        }
+                                                        viewer_cpu.update_hex_listing(out);
+                                                    }
+                                                    settings_runtime::sync_gpio_from_bus(
+                                                        bus_worker.as_mut(),
+                                                        &viewer_cpu,
+                                                    );
+                                                    settings_runtime::sync_block_from_bus(
+                                                        bus_worker.as_mut(),
+                                                        &viewer_cpu,
+                                                    );
+                                                    request_reapply_settings_from_baseline();
+                                                    // If an adjacent .lst exists (case-insensitive), map and show it; else prefer Hex
+                                                    let lst_path = path.with_extension("lst");
+                                                    let lst_path_upper = path.with_extension("LST");
+                                                    if lst_path.exists() || lst_path_upper.exists()
+                                                    {
+                                                        let p = if lst_path.exists() {
+                                                            lst_path
+                                                        } else {
+                                                            lst_path_upper
+                                                        };
+                                                        viewer_cpu.request_load_lst(p);
+                                                    } else {
+                                                        viewer_cpu.force_hex_view();
+                                                    }
+                                                }
+                                                Err(e) => eprintln!("Open failed: {e}"),
                                             }
                                         }
-                                    }
-                                    regview::Command::GpioSetOut(mask) => {
-                                        if let Some(io_mem) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Memory>>()
-                                        {
-                                            io_mem.with_gpio_mut(|g| g.set_out(mask));
-                                        } else if let Some(io_mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            io_mmu.with_gpio_mut(|g| g.set_out(mask));
-                                        } else if let Some(wt) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<bus::WriteTrack>()
-                                        {
-                                            let inner_any = wt.inner_any_mut();
-                                            if let Some(io_mem) =
-                                                inner_any.downcast_mut::<IoBus<Memory>>()
+                                        regview::Command::UiPromptBinBase(_) => {
+                                            // UI-only; handled by GUI thread
+                                        }
+                                        regview::Command::MemWrite(items) => {
+                                            for (addr, val) in items {
+                                                bus_worker.as_mut().write8(addr, val);
+                                            }
+                                            // Sync GPIO state immediately after edits
+                                            {
+                                                let mut pushed = false;
+                                                if let Some(io_mem) = bus_worker
+                                                    .as_mut()
+                                                    .as_any_mut()
+                                                    .downcast_mut::<IoBus<Memory>>()
+                                                {
+                                                    if io_mem.take_gpio_dirty() {
+                                                        io_mem.with_gpio_mut(|g| {
+                                                            let (o, d, b) = g.get_state();
+                                                            viewer_cpu.sync_gpio(true, b, o, d);
+                                                            pushed = true;
+                                                        });
+                                                    }
+                                                } else if let Some(io_mmu) = bus_worker
+                                                    .as_mut()
+                                                    .as_any_mut()
+                                                    .downcast_mut::<IoBus<Mc6829>>()
+                                                {
+                                                    if io_mmu.take_gpio_dirty() {
+                                                        io_mmu.with_gpio_mut(|g| {
+                                                            let (o, d, b) = g.get_state();
+                                                            viewer_cpu.sync_gpio(true, b, o, d);
+                                                            pushed = true;
+                                                        });
+                                                    }
+                                                } else if let Some(wt) = bus_worker
+                                                    .as_mut()
+                                                    .as_any_mut()
+                                                    .downcast_mut::<bus::WriteTrack>()
+                                                {
+                                                    let inner_any = wt.inner_any_mut();
+                                                    if let Some(io_mem) =
+                                                        inner_any.downcast_mut::<IoBus<Memory>>()
+                                                    {
+                                                        if io_mem.take_gpio_dirty() {
+                                                            io_mem.with_gpio_mut(|g| {
+                                                                let (o, d, b) = g.get_state();
+                                                                viewer_cpu.sync_gpio(true, b, o, d);
+                                                                pushed = true;
+                                                            });
+                                                        }
+                                                    } else if let Some(io_mmu) =
+                                                        inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                                    {
+                                                        if io_mmu.take_gpio_dirty() {
+                                                            io_mmu.with_gpio_mut(|g| {
+                                                                let (o, d, b) = g.get_state();
+                                                                viewer_cpu.sync_gpio(true, b, o, d);
+                                                                pushed = true;
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                                let _ = pushed;
+                                            }
+                                            // After applying edits, refresh memory pane immediately
+                                            let (mstart_w, mlen_w, mfollow_w) =
+                                                viewer_cpu.get_memory_window();
+                                            let eff_start_w: u16 = if mfollow_w {
+                                                cpu_worker.r.pc & 0xFFF0
+                                            } else {
+                                                mstart_w
+                                            };
+                                            let mut nbuf: Vec<u8> = Vec::with_capacity(mlen_w);
+                                            let mut a = eff_start_w;
+                                            for _ in 0..mlen_w {
+                                                nbuf.push(bus_worker.as_mut().read8(a));
+                                                a = a.wrapping_add(1);
+                                            }
+                                            viewer_cpu.update_memory_window(eff_start_w, nbuf);
+                                            // Also refresh listing pane (full span) immediately
+                                            let spans = loader_util::coalesce_ranges(
+                                                loaded_ranges_worker.clone(),
+                                            );
+                                            if let Some((start, end)) = spans
+                                                .iter()
+                                                .find(|(s, e)| {
+                                                    *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
+                                                })
+                                                .copied()
+                                            {
+                                                let mut cur = start;
+                                                let mut out = String::new();
+                                                let mut processed: usize = 0;
+                                                let total_len: usize =
+                                                    end.wrapping_sub(start) as usize;
+                                                while processed < total_len {
+                                                    let (consumed, text) =
+                                                        em6809::disasm::disasm_one_hex(
+                                                            bus_worker.as_mut(),
+                                                            cur,
+                                                        );
+                                                    use core::fmt::Write as _;
+                                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                                    let step = core::cmp::max(consumed as usize, 1);
+                                                    processed += step;
+                                                    cur = cur.wrapping_add(step as u16);
+                                                }
+                                                viewer_cpu.update_hex_listing(out);
+                                                if viewer_cpu.auto_hex_on_edit() {
+                                                    viewer_cpu.force_hex_view();
+                                                }
+                                            }
+                                        }
+                                        regview::Command::GpioSetOut(mask) => {
+                                            if let Some(io_mem) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Memory>>()
                                             {
                                                 io_mem.with_gpio_mut(|g| g.set_out(mask));
-                                            } else if let Some(io_mmu) =
-                                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                            } else if let Some(io_mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
                                             {
                                                 io_mmu.with_gpio_mut(|g| g.set_out(mask));
+                                            } else if let Some(wt) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<bus::WriteTrack>()
+                                            {
+                                                let inner_any = wt.inner_any_mut();
+                                                if let Some(io_mem) =
+                                                    inner_any.downcast_mut::<IoBus<Memory>>()
+                                                {
+                                                    io_mem.with_gpio_mut(|g| g.set_out(mask));
+                                                } else if let Some(io_mmu) =
+                                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                                {
+                                                    io_mmu.with_gpio_mut(|g| g.set_out(mask));
+                                                }
                                             }
                                         }
-                                    }
-                                    regview::Command::UiSetGpio(..) => {}
-                                    regview::Command::UiSetMmu(..) => {}
-                                    regview::Command::UiSetTimer(..) => {}
-                                    regview::Command::ApplyMmuPreset { name } => {
-                                        let apply =
+                                        regview::Command::UiSetGpio(..) => {}
+                                        regview::Command::UiSetMmu(..) => {}
+                                        regview::Command::UiSetTimer(..) => {}
+                                        regview::Command::ApplyMmuPreset { name } => {
+                                            let apply =
                                             |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                                 let _ = em6809::config::apply_preset(mmu, &name);
                                                 let (map_sys, map_user, sys, task) =
@@ -2135,43 +2165,45 @@ fn main() {
                                                     );
                                                 }
                                             };
-                                        if let Some(io_mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            let inner = io_mmu.inner_any_mut();
-                                            if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                                apply(mmu, Some(&viewer_cpu));
-                                            }
-                                        } else if let Some(mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<Mc6829>()
-                                        {
-                                            apply(mmu, Some(&viewer_cpu));
-                                        } else if let Some(wt) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<bus::WriteTrack>()
-                                        {
-                                            let inner_any = wt.inner_any_mut();
-                                            if let Some(io_mmu) =
-                                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                            if let Some(io_mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
                                             {
-                                                let inner2 = io_mmu.inner_any_mut();
-                                                if let Some(mmu) = inner2.downcast_mut::<Mc6829>() {
+                                                let inner = io_mmu.inner_any_mut();
+                                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
                                                     apply(mmu, Some(&viewer_cpu));
                                                 }
-                                            } else if let Some(mmu) =
-                                                inner_any.downcast_mut::<Mc6829>()
+                                            } else if let Some(mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<Mc6829>()
                                             {
                                                 apply(mmu, Some(&viewer_cpu));
+                                            } else if let Some(wt) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<bus::WriteTrack>()
+                                            {
+                                                let inner_any = wt.inner_any_mut();
+                                                if let Some(io_mmu) =
+                                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                                {
+                                                    let inner2 = io_mmu.inner_any_mut();
+                                                    if let Some(mmu) =
+                                                        inner2.downcast_mut::<Mc6829>()
+                                                    {
+                                                        apply(mmu, Some(&viewer_cpu));
+                                                    }
+                                                } else if let Some(mmu) =
+                                                    inner_any.downcast_mut::<Mc6829>()
+                                                {
+                                                    apply(mmu, Some(&viewer_cpu));
+                                                }
                                             }
                                         }
-                                    }
-                                    regview::Command::ApplyMmuMapFileText { text } => {
-                                        let apply_text =
+                                        regview::Command::ApplyMmuMapFileText { text } => {
+                                            let apply_text =
                                             |mmu: &mut Mc6829, viewer: Option<&regview::Viewer>| {
                                                 let _ = em6809::config::apply_mmu_config_from_str(
                                                     mmu, &text,
@@ -2216,386 +2248,424 @@ fn main() {
                                                     );
                                                 }
                                             };
-                                        if let Some(io_mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            let inner = io_mmu.inner_any_mut();
-                                            if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                                apply_text(mmu, Some(&viewer_cpu));
-                                            }
-                                        } else if let Some(mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<Mc6829>()
-                                        {
-                                            apply_text(mmu, Some(&viewer_cpu));
-                                        } else if let Some(wt) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<bus::WriteTrack>()
-                                        {
-                                            let inner_any = wt.inner_any_mut();
-                                            if let Some(io_mmu) =
-                                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                            if let Some(io_mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
                                             {
-                                                let inner2 = io_mmu.inner_any_mut();
-                                                if let Some(mmu) = inner2.downcast_mut::<Mc6829>() {
+                                                let inner = io_mmu.inner_any_mut();
+                                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
                                                     apply_text(mmu, Some(&viewer_cpu));
                                                 }
-                                            } else if let Some(mmu) =
-                                                inner_any.downcast_mut::<Mc6829>()
+                                            } else if let Some(mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<Mc6829>()
                                             {
                                                 apply_text(mmu, Some(&viewer_cpu));
+                                            } else if let Some(wt) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<bus::WriteTrack>()
+                                            {
+                                                let inner_any = wt.inner_any_mut();
+                                                if let Some(io_mmu) =
+                                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                                {
+                                                    let inner2 = io_mmu.inner_any_mut();
+                                                    if let Some(mmu) =
+                                                        inner2.downcast_mut::<Mc6829>()
+                                                    {
+                                                        apply_text(mmu, Some(&viewer_cpu));
+                                                    }
+                                                } else if let Some(mmu) =
+                                                    inner_any.downcast_mut::<Mc6829>()
+                                                {
+                                                    apply_text(mmu, Some(&viewer_cpu));
+                                                }
                                             }
                                         }
-                                    }
-                                    regview::Command::ApplyMmu {
-                                        sys_mode,
-                                        task,
-                                        prot,
-                                        log_maps,
-                                        maps_sys,
-                                        maps_user,
-                                        attrs_sys,
-                                        attrs_user,
-                                    } => {
-                                        // Apply settings to whichever MMU backend is active
-                                        let apply = |mmu: &mut Mc6829| {
-                                            let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
-                                            if let Some(on) = log_maps {
-                                                mmu.set_log_maps(on);
-                                            }
-                                            if let Some(t) = task {
-                                                mmu.write8(mmu.regs_base + 0x10, t & 0x07);
-                                            }
-                                            if let Some(p) = prot {
-                                                mmu.write8(mmu.regs_base + 0x12, p);
-                                            }
-                                            mmu.write8(mmu.regs_base + 0x11, 0x01);
-                                            for (pg, fr) in &maps_sys {
-                                                mmu.set_map_entry(*pg, *fr);
-                                            }
-                                            for (pg, at) in &attrs_sys {
-                                                let off = 0x18u16 + (*pg as u16);
-                                                mmu.write8(mmu.regs_base + off, *at);
-                                            }
-                                            mmu.write8(mmu.regs_base + 0x11, 0x00);
-                                            for (pg, fr) in &maps_user {
-                                                mmu.set_map_entry(*pg, *fr);
-                                            }
-                                            for (pg, at) in &attrs_user {
-                                                let off = 0x18u16 + (*pg as u16);
-                                                mmu.write8(mmu.regs_base + off, *at);
-                                            }
-                                            if let Some(sys) = sys_mode {
-                                                mmu.write8(
-                                                    mmu.regs_base + 0x11,
-                                                    if sys { 1 } else { 0 },
-                                                );
-                                            } else {
-                                                mmu.write8(mmu.regs_base + 0x11, prev_mode);
-                                            }
-                                        };
-                                        if let Some(io_mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            let inner = io_mmu.inner_any_mut();
-                                            if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                                apply(mmu);
-                                            }
-                                        } else if let Some(mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<Mc6829>()
-                                        {
-                                            apply(mmu);
-                                        } else if let Some(wt) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<bus::WriteTrack>()
-                                        {
-                                            let inner_any = wt.inner_any_mut();
-                                            if let Some(io_mmu) =
-                                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                        regview::Command::ApplyMmu {
+                                            sys_mode,
+                                            task,
+                                            prot,
+                                            log_maps,
+                                            maps_sys,
+                                            maps_user,
+                                            attrs_sys,
+                                            attrs_user,
+                                        } => {
+                                            // Apply settings to whichever MMU backend is active
+                                            let apply = |mmu: &mut Mc6829| {
+                                                let prev_mode =
+                                                    mmu.read8(mmu.regs_base + 0x11) & 0x01;
+                                                if let Some(on) = log_maps {
+                                                    mmu.set_log_maps(on);
+                                                }
+                                                if let Some(t) = task {
+                                                    mmu.write8(mmu.regs_base + 0x10, t & 0x07);
+                                                }
+                                                if let Some(p) = prot {
+                                                    mmu.write8(mmu.regs_base + 0x12, p);
+                                                }
+                                                mmu.write8(mmu.regs_base + 0x11, 0x01);
+                                                for (pg, fr) in &maps_sys {
+                                                    mmu.set_map_entry(*pg, *fr);
+                                                }
+                                                for (pg, at) in &attrs_sys {
+                                                    let off = 0x18u16 + (*pg as u16);
+                                                    mmu.write8(mmu.regs_base + off, *at);
+                                                }
+                                                mmu.write8(mmu.regs_base + 0x11, 0x00);
+                                                for (pg, fr) in &maps_user {
+                                                    mmu.set_map_entry(*pg, *fr);
+                                                }
+                                                for (pg, at) in &attrs_user {
+                                                    let off = 0x18u16 + (*pg as u16);
+                                                    mmu.write8(mmu.regs_base + off, *at);
+                                                }
+                                                if let Some(sys) = sys_mode {
+                                                    mmu.write8(
+                                                        mmu.regs_base + 0x11,
+                                                        if sys { 1 } else { 0 },
+                                                    );
+                                                } else {
+                                                    mmu.write8(mmu.regs_base + 0x11, prev_mode);
+                                                }
+                                            };
+                                            if let Some(io_mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
                                             {
-                                                let inner2 = io_mmu.inner_any_mut();
-                                                if let Some(mmu) = inner2.downcast_mut::<Mc6829>() {
+                                                let inner = io_mmu.inner_any_mut();
+                                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
                                                     apply(mmu);
                                                 }
-                                            } else if let Some(mmu) =
-                                                inner_any.downcast_mut::<Mc6829>()
+                                            } else if let Some(mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<Mc6829>()
                                             {
                                                 apply(mmu);
+                                            } else if let Some(wt) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<bus::WriteTrack>()
+                                            {
+                                                let inner_any = wt.inner_any_mut();
+                                                if let Some(io_mmu) =
+                                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                                {
+                                                    let inner2 = io_mmu.inner_any_mut();
+                                                    if let Some(mmu) =
+                                                        inner2.downcast_mut::<Mc6829>()
+                                                    {
+                                                        apply(mmu);
+                                                    }
+                                                } else if let Some(mmu) =
+                                                    inner_any.downcast_mut::<Mc6829>()
+                                                {
+                                                    apply(mmu);
+                                                }
                                             }
                                         }
-                                    }
-                                    regview::Command::MmuIdentityMap => {
-                                        let ident = |mmu: &mut Mc6829| {
-                                            mmu.identity_map_current();
-                                        };
-                                        if let Some(io_mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            let inner = io_mmu.inner_any_mut();
-                                            if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                                ident(mmu);
-                                            }
-                                        } else if let Some(mmu) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<Mc6829>()
-                                        {
-                                            ident(mmu);
-                                        } else if let Some(wt) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<bus::WriteTrack>()
-                                        {
-                                            let inner_any = wt.inner_any_mut();
-                                            if let Some(io_mmu) =
-                                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                        regview::Command::MmuIdentityMap => {
+                                            let ident = |mmu: &mut Mc6829| {
+                                                mmu.identity_map_current();
+                                            };
+                                            if let Some(io_mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
                                             {
-                                                let inner2 = io_mmu.inner_any_mut();
-                                                if let Some(mmu) = inner2.downcast_mut::<Mc6829>() {
+                                                let inner = io_mmu.inner_any_mut();
+                                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
                                                     ident(mmu);
                                                 }
-                                            } else if let Some(mmu) =
-                                                inner_any.downcast_mut::<Mc6829>()
+                                            } else if let Some(mmu) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<Mc6829>()
                                             {
                                                 ident(mmu);
+                                            } else if let Some(wt) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<bus::WriteTrack>()
+                                            {
+                                                let inner_any = wt.inner_any_mut();
+                                                if let Some(io_mmu) =
+                                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                                {
+                                                    let inner2 = io_mmu.inner_any_mut();
+                                                    if let Some(mmu) =
+                                                        inner2.downcast_mut::<Mc6829>()
+                                                    {
+                                                        ident(mmu);
+                                                    }
+                                                } else if let Some(mmu) =
+                                                    inner_any.downcast_mut::<Mc6829>()
+                                                {
+                                                    ident(mmu);
+                                                }
                                             }
                                         }
-                                    }
-                                    regview::Command::ApplyConsole {
-                                        enable,
-                                        base,
-                                        out_path,
-                                        stdin: _stdin,
-                                        echo,
-                                        flush_every,
-                                        flush_newline: _,
-                                        rx_watermark: _,
-                                        irq_hold: _,
-                                        tee_stderr: _,
-                                        ..
-                                    } => {
-                                        if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Memory>>()
-                                        {
-                                            let b = base.unwrap_or(0xFF00);
-                                            iobus.ensure_console(enable, b);
-                                            iobus.with_console_mut_opt(|c| {
-                                                if let Some(p) = &out_path {
-                                                    c.set_out_file(p);
-                                                }
-                                                c.set_local_echo(echo);
-                                                if let Some(n) = flush_every {
-                                                    c.set_flush_every(n);
-                                                }
-                                            });
-                                        } else if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            let b = base.unwrap_or(0xFF00);
-                                            iobus.ensure_console(enable, b);
-                                            iobus.with_console_mut_opt(|c| {
-                                                if let Some(p) = &out_path {
-                                                    c.set_out_file(p);
-                                                }
-                                                c.set_local_echo(echo);
-                                                if let Some(n) = flush_every {
-                                                    c.set_flush_every(n);
-                                                }
-                                            });
-                                        }
-                                    }
-                                    regview::Command::ApplyBlock {
-                                        enable,
-                                        base,
-                                        file_path,
-                                        ..
-                                    } => {
-                                        if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Memory>>()
-                                        {
-                                            let b = base.unwrap_or(0xFF20);
-                                            iobus.ensure_block(enable, b);
-                                            if let Some(p) = file_path {
-                                                iobus.with_block_mut_opt(|blk| {
-                                                    blk.set_backing_file(&p)
+                                        regview::Command::ApplyConsole {
+                                            enable,
+                                            base,
+                                            out_path,
+                                            stdin: _stdin,
+                                            echo,
+                                            flush_every,
+                                            flush_newline: _,
+                                            rx_watermark: _,
+                                            irq_hold: _,
+                                            tee_stderr: _,
+                                            ..
+                                        } => {
+                                            if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Memory>>()
+                                            {
+                                                let b = base.unwrap_or(0xFF00);
+                                                iobus.ensure_console(enable, b);
+                                                iobus.with_console_mut_opt(|c| {
+                                                    if let Some(p) = &out_path {
+                                                        c.set_out_file(p);
+                                                    }
+                                                    c.set_local_echo(echo);
+                                                    if let Some(n) = flush_every {
+                                                        c.set_flush_every(n);
+                                                    }
                                                 });
-                                            }
-                                        } else if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            let b = base.unwrap_or(0xFF20);
-                                            iobus.ensure_block(enable, b);
-                                            if let Some(p) = file_path {
-                                                iobus.with_block_mut_opt(|blk| {
-                                                    blk.set_backing_file(&p)
+                                            } else if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
+                                            {
+                                                let b = base.unwrap_or(0xFF00);
+                                                iobus.ensure_console(enable, b);
+                                                iobus.with_console_mut_opt(|c| {
+                                                    if let Some(p) = &out_path {
+                                                        c.set_out_file(p);
+                                                    }
+                                                    c.set_local_echo(echo);
+                                                    if let Some(n) = flush_every {
+                                                        c.set_flush_every(n);
+                                                    }
                                                 });
                                             }
                                         }
-                                        settings_runtime::sync_block_from_bus(
-                                            bus_worker.as_mut(),
-                                            &viewer_cpu,
-                                        );
-                                    }
-                                    regview::Command::ApplyGpio { enable, base, bits } => {
-                                        let b = base.unwrap_or(0xFF40);
-                                        let k = bits.unwrap_or(8);
-                                        if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Memory>>()
-                                        {
-                                            iobus.ensure_gpio(enable, b, k);
-                                            if enable {
-                                                iobus.with_gpio_mut_opt(|g| {
-                                                    let (out, dir, bits) = g.get_state();
-                                                    viewer_cpu.sync_gpio(true, bits, out, dir);
-                                                });
-                                            } else {
-                                                viewer_cpu.sync_gpio(false, 0, 0, 0);
+                                        regview::Command::ApplyBlock {
+                                            enable,
+                                            base,
+                                            file_path,
+                                            ..
+                                        } => {
+                                            if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Memory>>()
+                                            {
+                                                let b = base.unwrap_or(0xFF20);
+                                                iobus.ensure_block(enable, b);
+                                                if let Some(p) = file_path {
+                                                    iobus.with_block_mut_opt(|blk| {
+                                                        blk.set_backing_file(&p)
+                                                    });
+                                                }
+                                            } else if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
+                                            {
+                                                let b = base.unwrap_or(0xFF20);
+                                                iobus.ensure_block(enable, b);
+                                                if let Some(p) = file_path {
+                                                    iobus.with_block_mut_opt(|blk| {
+                                                        blk.set_backing_file(&p)
+                                                    });
+                                                }
                                             }
-                                        } else if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            iobus.ensure_gpio(enable, b, k);
-                                            if enable {
-                                                iobus.with_gpio_mut_opt(|g| {
-                                                    let (out, dir, bits) = g.get_state();
-                                                    viewer_cpu.sync_gpio(true, bits, out, dir);
-                                                });
-                                            } else {
-                                                viewer_cpu.sync_gpio(false, 0, 0, 0);
-                                            }
+                                            settings_runtime::sync_block_from_bus(
+                                                bus_worker.as_mut(),
+                                                &viewer_cpu,
+                                            );
                                         }
-                                    }
-                                    regview::Command::ApplyTimer {
-                                        enable,
-                                        base,
-                                        reload,
-                                        irq_enable,
-                                        firq,
-                                        start,
-                                    } => {
-                                        let b = base.unwrap_or(0xFF10);
-                                        if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Memory>>()
-                                        {
-                                            iobus.ensure_timer(enable, b);
-                                            if let Some(r) = reload {
-                                                iobus.with_timer_mut_opt(|t| t.set_reload(r));
-                                            }
-                                            iobus.with_timer_mut_opt(|t| {
-                                                t.set_irq_enable(irq_enable);
-                                                t.set_firq(firq);
-                                                if start {
-                                                    t.start();
+                                        regview::Command::ApplyGpio { enable, base, bits } => {
+                                            let b = base.unwrap_or(0xFF40);
+                                            let k = bits.unwrap_or(8);
+                                            if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Memory>>()
+                                            {
+                                                iobus.ensure_gpio(enable, b, k);
+                                                if enable {
+                                                    iobus.with_gpio_mut_opt(|g| {
+                                                        let (out, dir, bits) = g.get_state();
+                                                        viewer_cpu.sync_gpio(true, bits, out, dir);
+                                                    });
                                                 } else {
-                                                    t.stop();
+                                                    viewer_cpu.sync_gpio(false, 0, 0, 0);
                                                 }
-                                            });
-                                            if enable {
-                                                iobus.with_timer_mut_opt(|t| {
-                                                    let (run, _irq_en, _firq, pending) =
-                                                        t.get_state();
-                                                    viewer_cpu.sync_timer(true, pending, run);
-                                                });
-                                            } else {
-                                                viewer_cpu.sync_timer(false, false, false);
-                                            }
-                                        } else if let Some(iobus) = bus_worker
-                                            .as_mut()
-                                            .as_any_mut()
-                                            .downcast_mut::<IoBus<Mc6829>>()
-                                        {
-                                            iobus.ensure_timer(enable, b);
-                                            if let Some(r) = reload {
-                                                iobus.with_timer_mut_opt(|t| t.set_reload(r));
-                                            }
-                                            if enable {
-                                                iobus.with_timer_mut_opt(|t| {
-                                                    let (run, _irq_en, _firq, pending) =
-                                                        t.get_state();
-                                                    viewer_cpu.sync_timer(true, pending, run);
-                                                });
-                                            } else {
-                                                viewer_cpu.sync_timer(false, false, false);
+                                            } else if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
+                                            {
+                                                iobus.ensure_gpio(enable, b, k);
+                                                if enable {
+                                                    iobus.with_gpio_mut_opt(|g| {
+                                                        let (out, dir, bits) = g.get_state();
+                                                        viewer_cpu.sync_gpio(true, bits, out, dir);
+                                                    });
+                                                } else {
+                                                    viewer_cpu.sync_gpio(false, 0, 0, 0);
+                                                }
                                             }
                                         }
-                                    }
-                                    regview::Command::SavePrefs {
-                                        settings,
-                                        gpio_on_color,
-                                        instance_id,
-                                    } => {
-                                        let payload = settings_worker::SettingsPayload {
+                                        regview::Command::ApplyTimer {
+                                            enable,
+                                            base,
+                                            reload,
+                                            irq_enable,
+                                            firq,
+                                            start,
+                                        } => {
+                                            let b = base.unwrap_or(0xFF10);
+                                            if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Memory>>()
+                                            {
+                                                iobus.ensure_timer(enable, b);
+                                                if let Some(r) = reload {
+                                                    iobus.with_timer_mut_opt(|t| t.set_reload(r));
+                                                }
+                                                iobus.with_timer_mut_opt(|t| {
+                                                    t.set_irq_enable(irq_enable);
+                                                    t.set_firq(firq);
+                                                    if start {
+                                                        t.start();
+                                                    } else {
+                                                        t.stop();
+                                                    }
+                                                });
+                                                if enable {
+                                                    iobus.with_timer_mut_opt(|t| {
+                                                        let (run, _irq_en, _firq, pending) =
+                                                            t.get_state();
+                                                        viewer_cpu.sync_timer(true, pending, run);
+                                                    });
+                                                } else {
+                                                    viewer_cpu.sync_timer(false, false, false);
+                                                }
+                                            } else if let Some(iobus) = bus_worker
+                                                .as_mut()
+                                                .as_any_mut()
+                                                .downcast_mut::<IoBus<Mc6829>>()
+                                            {
+                                                iobus.ensure_timer(enable, b);
+                                                if let Some(r) = reload {
+                                                    iobus.with_timer_mut_opt(|t| t.set_reload(r));
+                                                }
+                                                if enable {
+                                                    iobus.with_timer_mut_opt(|t| {
+                                                        let (run, _irq_en, _firq, pending) =
+                                                            t.get_state();
+                                                        viewer_cpu.sync_timer(true, pending, run);
+                                                    });
+                                                } else {
+                                                    viewer_cpu.sync_timer(false, false, false);
+                                                }
+                                            }
+                                        }
+                                        regview::Command::SavePrefs {
                                             settings,
                                             gpio_on_color,
                                             instance_id,
-                                        };
-                                        if settings_runtime::apply_settings_runtime(
-                                            Some(&viewer_cpu),
-                                            bus_worker.as_mut(),
-                                            &payload,
-                                        ) {
-                                            settings_runtime::persist_settings_snapshot(
-                                                &payload.settings,
-                                                payload.gpio_on_color,
-                                            );
-                                            settings_runtime::publish_settings_baseline(
-                                                &payload.settings,
-                                                payload.gpio_on_color,
-                                            );
-                                            settings_runtime::send_settings_ack(
-                                                payload.instance_id,
-                                            );
+                                        } => {
+                                            let payload = settings_worker::SettingsPayload {
+                                                settings,
+                                                gpio_on_color,
+                                                instance_id,
+                                            };
+                                            if settings_runtime::apply_settings_runtime(
+                                                Some(&viewer_cpu),
+                                                bus_worker.as_mut(),
+                                                &payload,
+                                            ) {
+                                                settings_runtime::persist_settings_snapshot(
+                                                    &payload.settings,
+                                                    payload.gpio_on_color,
+                                                );
+                                                settings_runtime::publish_settings_baseline(
+                                                    &payload.settings,
+                                                    payload.gpio_on_color,
+                                                );
+                                                settings_runtime::send_settings_ack(
+                                                    payload.instance_id,
+                                                );
+                                            }
                                         }
-                                    }
 
-                                    regview::Command::UiLoadLst(_) => {}
-                                    regview::Command::UiSetGpioOnColor(_) => {}
-                                    regview::Command::UiSetBlockStatus { .. } => {}
+                                        regview::Command::UiLoadLst(_) => {}
+                                        regview::Command::UiSetGpioOnColor(_) => {}
+                                        regview::Command::UiSetBlockStatus { .. } => {}
+                                    }
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                        }
+
+                        if let Some(ref rxch) = rx {
+                            if let Ok(v) = rxch.try_recv() {
+                                if let Some(io_mem) = bus_worker
+                                    .as_mut()
+                                    .as_any_mut()
+                                    .downcast_mut::<IoBus<Memory>>()
+                                {
+                                    io_mem.feed_console_input(&v);
+                                } else if let Some(io_mmu) = bus_worker
+                                    .as_mut()
+                                    .as_any_mut()
+                                    .downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu.feed_console_input(&v);
+                                } else if let Some(wt) = bus_worker
+                                    .as_mut()
+                                    .as_any_mut()
+                                    .downcast_mut::<bus::WriteTrack>()
+                                {
+                                    let inner_any = wt.inner_any_mut();
+                                    if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>()
+                                    {
+                                        io_mem.feed_console_input(&v);
+                                    } else if let Some(io_mmu) =
+                                        inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                    {
+                                        io_mmu.feed_console_input(&v);
+                                    }
                                 }
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(10));
                         }
-                    }
-
-                    if let Some(ref rxch) = rx {
-                        if let Ok(v) = rxch.try_recv() {
+                        let gui_input = viewer_cpu.take_console_input();
+                        if !gui_input.is_empty() {
                             if let Some(io_mem) = bus_worker
                                 .as_mut()
                                 .as_any_mut()
                                 .downcast_mut::<IoBus<Memory>>()
                             {
-                                io_mem.feed_console_input(&v);
+                                io_mem.feed_console_input(&gui_input);
                             } else if let Some(io_mmu) = bus_worker
                                 .as_mut()
                                 .as_any_mut()
                                 .downcast_mut::<IoBus<Mc6829>>()
                             {
-                                io_mmu.feed_console_input(&v);
+                                io_mmu.feed_console_input(&gui_input);
                             } else if let Some(wt) = bus_worker
                                 .as_mut()
                                 .as_any_mut()
@@ -2603,92 +2673,34 @@ fn main() {
                             {
                                 let inner_any = wt.inner_any_mut();
                                 if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
-                                    io_mem.feed_console_input(&v);
+                                    io_mem.feed_console_input(&gui_input);
                                 } else if let Some(io_mmu) =
                                     inner_any.downcast_mut::<IoBus<Mc6829>>()
                                 {
-                                    io_mmu.feed_console_input(&v);
+                                    io_mmu.feed_console_input(&gui_input);
                                 }
                             }
                         }
-                    }
-                    let gui_input = viewer_cpu.take_console_input();
-                    if !gui_input.is_empty() {
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
-                        {
-                            io_mem.feed_console_input(&gui_input);
-                        } else if let Some(io_mmu) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            io_mmu.feed_console_input(&gui_input);
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) =
-                                inner_any.downcast_mut::<IoBus<Memory>>()
-                            {
-                                io_mem.feed_console_input(&gui_input);
-                            } else if let Some(io_mmu) =
-                                inner_any.downcast_mut::<IoBus<Mc6829>>()
-                            {
-                                io_mmu.feed_console_input(&gui_input);
-                            }
+                        if let Some(ref mut seq) = boot_seq {
+                            seq.on_pre_step(
+                                bus_worker.as_mut(),
+                                mmu_regs_base_copy,
+                                cpu_worker.r.pc,
+                                &mut cpu_worker,
+                            );
                         }
-                    }
-                    if let Some(ref mut seq) = boot_seq {
-                        seq.on_pre_step(
-                            bus_worker.as_mut(),
-                            mmu_regs_base_copy,
-                            cpu_worker.r.pc,
-                            &mut cpu_worker,
-                        );
-                    }
-                    // Push GPIO/MMU snapshots for GUI while paused
-                    if viewer_cpu.is_paused() {
-                        // GPIO
-                        let mut present = false;
-                        let mut out = 0u32;
-                        let mut dir = 0xFFFF_FFFFu32;
-                        let mut bits = 8u8;
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
-                        {
-                            io_mem.with_gpio_mut(|g| {
-                                let (o, d, b) = g.get_state();
-                                out = o;
-                                dir = d;
-                                bits = b;
-                                present = true;
-                            });
-                        } else if let Some(io_mmu_io) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            io_mmu_io.with_gpio_mut(|g| {
-                                let (o, d, b) = g.get_state();
-                                out = o;
-                                dir = d;
-                                bits = b;
-                                present = true;
-                            });
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                        // Push GPIO/MMU snapshots for GUI while paused
+                        if viewer_cpu.is_paused() {
+                            // GPIO
+                            let mut present = false;
+                            let mut out = 0u32;
+                            let mut dir = 0xFFFF_FFFFu32;
+                            let mut bits = 8u8;
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
                                 io_mem.with_gpio_mut(|g| {
                                     let (o, d, b) = g.get_state();
                                     out = o;
@@ -2696,8 +2708,10 @@ fn main() {
                                     bits = b;
                                     present = true;
                                 });
-                            } else if let Some(io_mmu_io) =
-                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                            } else if let Some(io_mmu_io) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
                             {
                                 io_mmu_io.with_gpio_mut(|g| {
                                     let (o, d, b) = g.get_state();
@@ -2706,69 +2720,71 @@ fn main() {
                                     bits = b;
                                     present = true;
                                 });
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.with_gpio_mut(|g| {
+                                        let (o, d, b) = g.get_state();
+                                        out = o;
+                                        dir = d;
+                                        bits = b;
+                                        present = true;
+                                    });
+                                } else if let Some(io_mmu_io) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu_io.with_gpio_mut(|g| {
+                                        let (o, d, b) = g.get_state();
+                                        out = o;
+                                        dir = d;
+                                        bits = b;
+                                        present = true;
+                                    });
+                                }
                             }
-                        }
-                        if present {
-                            viewer_cpu.sync_gpio(true, bits, out, dir);
-                        }
-                        // MMU current map
-                        if let Some(io_mmu_io) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            let inner = io_mmu_io.inner_any_mut();
-                            if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                            if present {
+                                viewer_cpu.sync_gpio(true, bits, out, dir);
+                            }
+                            // MMU current map
+                            if let Some(io_mmu_io) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
+                            {
+                                let inner = io_mmu_io.inner_any_mut();
+                                if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
+                                    let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
+                                    viewer_cpu.sync_mmu(sys, task, map_sys, map_user);
+                                }
+                            } else if let Some(mmu) =
+                                bus_worker.as_mut().as_any_mut().downcast_mut::<Mc6829>()
+                            {
                                 let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
                                 viewer_cpu.sync_mmu(sys, task, map_sys, map_user);
                             }
-                        } else if let Some(mmu) =
-                            bus_worker.as_mut().as_any_mut().downcast_mut::<Mc6829>()
-                        {
-                            let (map_sys, map_user, sys, task) = mmu.snapshot_maps();
-                            viewer_cpu.sync_mmu(sys, task, map_sys, map_user);
-                        }
-                        // Timer state
-                        let mut t_present = false;
-                        let mut t_pending = false;
-                        let mut t_running = false;
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
-                        {
-                            io_mem.with_timer_mut(|t| {
-                                let (run, _irq, _firq, p) = t.get_state();
-                                t_present = true;
-                                t_pending = p;
-                                t_running = run;
-                            });
-                        } else if let Some(io_mmu_io) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            io_mmu_io.with_timer_mut(|t| {
-                                let (run, _irq, _firq, p) = t.get_state();
-                                t_present = true;
-                                t_pending = p;
-                                t_running = run;
-                            });
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                            // Timer state
+                            let mut t_present = false;
+                            let mut t_pending = false;
+                            let mut t_running = false;
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
                                 io_mem.with_timer_mut(|t| {
                                     let (run, _irq, _firq, p) = t.get_state();
                                     t_present = true;
                                     t_pending = p;
                                     t_running = run;
                                 });
-                            } else if let Some(io_mmu_io) =
-                                inner_any.downcast_mut::<IoBus<Mc6829>>()
+                            } else if let Some(io_mmu_io) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
                             {
                                 io_mmu_io.with_timer_mut(|t| {
                                     let (run, _irq, _firq, p) = t.get_state();
@@ -2776,239 +2792,274 @@ fn main() {
                                     t_pending = p;
                                     t_running = run;
                                 });
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.with_timer_mut(|t| {
+                                        let (run, _irq, _firq, p) = t.get_state();
+                                        t_present = true;
+                                        t_pending = p;
+                                        t_running = run;
+                                    });
+                                } else if let Some(io_mmu_io) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu_io.with_timer_mut(|t| {
+                                        let (run, _irq, _firq, p) = t.get_state();
+                                        t_present = true;
+                                        t_pending = p;
+                                        t_running = run;
+                                    });
+                                }
+                            }
+                            if t_present {
+                                viewer_cpu.sync_timer(true, t_pending, t_running);
                             }
                         }
-                        if t_present {
-                            viewer_cpu.sync_timer(true, t_pending, t_running);
-                        }
-                    }
-                    // trace printing removed in GUI-only mode
-                    cpu_worker.step(bus_worker.as_mut(), false);
-                    // Dirty-driven memory window refresh while running
-                    {
-                        let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
-                        let eff_start: u16 = if mfollow {
-                            cpu_worker.r.pc & 0xFFF0
-                        } else {
-                            mstart
-                        };
-                        let mut need_reload = false;
-                        if mfollow && eff_start != mstart {
-                            viewer_cpu.set_memory_window_start(eff_start as usize);
-                            need_reload = true;
-                        }
-                        // Program IoBus to watch this window and refresh if dirty
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
+                        // trace printing removed in GUI-only mode
+                        cpu_worker.step(bus_worker.as_mut(), false);
+                        // Dirty-driven memory window refresh while running
                         {
-                            io_mem.set_mem_watch(eff_start, mlen);
-                            if io_mem.take_mem_dirty() {
+                            let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
+                            let eff_start: u16 = if mfollow {
+                                cpu_worker.r.pc & 0xFFF0
+                            } else {
+                                mstart
+                            };
+                            let mut need_reload = false;
+                            if mfollow && eff_start != mstart {
+                                viewer_cpu.set_memory_window_start(eff_start as usize);
                                 need_reload = true;
                             }
-                        } else if let Some(io_mmu) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            io_mmu.set_mem_watch(eff_start, mlen);
-                            if io_mmu.take_mem_dirty() {
-                                need_reload = true;
-                            }
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                            // Program IoBus to watch this window and refresh if dirty
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
                                 io_mem.set_mem_watch(eff_start, mlen);
                                 if io_mem.take_mem_dirty() {
                                     need_reload = true;
                                 }
-                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                            } else if let Some(io_mmu) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
+                            {
                                 io_mmu.set_mem_watch(eff_start, mlen);
                                 if io_mmu.take_mem_dirty() {
                                     need_reload = true;
                                 }
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.set_mem_watch(eff_start, mlen);
+                                    if io_mem.take_mem_dirty() {
+                                        need_reload = true;
+                                    }
+                                } else if let Some(io_mmu) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu.set_mem_watch(eff_start, mlen);
+                                    if io_mmu.take_mem_dirty() {
+                                        need_reload = true;
+                                    }
+                                }
                             }
-                        }
-                        if need_reload {
-                            let mut buf: Vec<u8> = Vec::with_capacity(mlen);
-                            let mut a = eff_start;
-                            for _ in 0..mlen {
-                                buf.push(bus_worker.as_mut().read8(a));
-                                a = a.wrapping_add(1);
+                            if need_reload {
+                                let mut buf: Vec<u8> = Vec::with_capacity(mlen);
+                                let mut a = eff_start;
+                                for _ in 0..mlen {
+                                    buf.push(bus_worker.as_mut().read8(a));
+                                    a = a.wrapping_add(1);
+                                }
+                                viewer_cpu.update_memory_window(eff_start, buf);
                             }
-                            viewer_cpu.update_memory_window(eff_start, buf);
+                            let (consumed, _) = em6809::disasm::disasm_one_hex(
+                                bus_worker.as_mut(),
+                                cpu_worker.r.pc,
+                            );
+                            let clen = core::cmp::max(consumed as usize, 1);
+                            viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
                         }
-                        let (consumed, _) =
-                            em6809::disasm::disasm_one_hex(bus_worker.as_mut(), cpu_worker.r.pc);
-                        let clen = core::cmp::max(consumed as usize, 1);
-                        viewer_cpu.set_memory_highlight(cpu_worker.r.pc, clen);
-                    }
-                    // While running, push GPIO changes (poll every frame)
-                    {
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
+                        // While running, push GPIO changes (poll every frame)
                         {
-                            io_mem.with_gpio_mut(|g| {
-                                let (o, d, b) = g.get_state();
-                                viewer_cpu.sync_gpio(true, b, o, d);
-                            });
-                        } else if let Some(io_mmu) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            io_mmu.with_gpio_mut(|g| {
-                                let (o, d, b) = g.get_state();
-                                viewer_cpu.sync_gpio(true, b, o, d);
-                            });
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
                                 io_mem.with_gpio_mut(|g| {
                                     let (o, d, b) = g.get_state();
                                     viewer_cpu.sync_gpio(true, b, o, d);
                                 });
-                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                            } else if let Some(io_mmu) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
+                            {
                                 io_mmu.with_gpio_mut(|g| {
                                     let (o, d, b) = g.get_state();
                                     viewer_cpu.sync_gpio(true, b, o, d);
                                 });
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.with_gpio_mut(|g| {
+                                        let (o, d, b) = g.get_state();
+                                        viewer_cpu.sync_gpio(true, b, o, d);
+                                    });
+                                } else if let Some(io_mmu) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu.with_gpio_mut(|g| {
+                                        let (o, d, b) = g.get_state();
+                                        viewer_cpu.sync_gpio(true, b, o, d);
+                                    });
+                                }
                             }
                         }
-                    }
-                    // Poll to keep GPIO LEDs in sync even if dirty is missed
-                    settings_runtime::sync_gpio_from_bus(bus_worker.as_mut(), &viewer_cpu);
-                    {
-                        let mut block_dirty = false;
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
+                        // Poll to keep GPIO LEDs in sync even if dirty is missed
+                        settings_runtime::sync_gpio_from_bus(bus_worker.as_mut(), &viewer_cpu);
                         {
-                            if io_mem.take_block_dirty() {
-                                block_dirty = true;
-                            }
-                        } else if let Some(io_mmu) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            if io_mmu.take_block_dirty() {
-                                block_dirty = true;
-                            }
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                            let mut block_dirty = false;
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
                                 if io_mem.take_block_dirty() {
                                     block_dirty = true;
                                 }
-                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                            } else if let Some(io_mmu) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
+                            {
                                 if io_mmu.take_block_dirty() {
                                     block_dirty = true;
                                 }
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    if io_mem.take_block_dirty() {
+                                        block_dirty = true;
+                                    }
+                                } else if let Some(io_mmu) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    if io_mmu.take_block_dirty() {
+                                        block_dirty = true;
+                                    }
+                                }
+                            }
+                            if block_dirty {
+                                settings_runtime::sync_block_from_bus(
+                                    bus_worker.as_mut(),
+                                    &viewer_cpu,
+                                );
                             }
                         }
-                        if block_dirty {
-                            settings_runtime::sync_block_from_bus(bus_worker.as_mut(), &viewer_cpu);
-                        }
-                    }
-                    // While running, update Timer indicator on change (avoid flooding)
-                    if let Some(viewer) = Some(&viewer_cpu) {
-                        let mut present = false;
-                        let mut pending = false;
-                        if let Some(io_mem) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Memory>>()
-                        {
-                            io_mem.with_timer_mut(|t| {
-                                let (_r, _i, _f, p) = t.get_state();
-                                present = true;
-                                pending = p;
-                            });
-                        } else if let Some(io_mmu) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<IoBus<Mc6829>>()
-                        {
-                            io_mmu.with_timer_mut(|t| {
-                                let (_r, _i, _f, p) = t.get_state();
-                                present = true;
-                                pending = p;
-                            });
-                        } else if let Some(wt) = bus_worker
-                            .as_mut()
-                            .as_any_mut()
-                            .downcast_mut::<bus::WriteTrack>()
-                        {
-                            let inner_any = wt.inner_any_mut();
-                            if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                        // While running, update Timer indicator on change (avoid flooding)
+                        if let Some(viewer) = Some(&viewer_cpu) {
+                            let mut present = false;
+                            let mut pending = false;
+                            if let Some(io_mem) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Memory>>()
+                            {
                                 io_mem.with_timer_mut(|t| {
                                     let (_r, _i, _f, p) = t.get_state();
                                     present = true;
                                     pending = p;
                                 });
-                            } else if let Some(io_mmu) = inner_any.downcast_mut::<IoBus<Mc6829>>() {
+                            } else if let Some(io_mmu) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<IoBus<Mc6829>>()
+                            {
                                 io_mmu.with_timer_mut(|t| {
                                     let (_r, _i, _f, p) = t.get_state();
                                     present = true;
                                     pending = p;
                                 });
+                            } else if let Some(wt) = bus_worker
+                                .as_mut()
+                                .as_any_mut()
+                                .downcast_mut::<bus::WriteTrack>()
+                            {
+                                let inner_any = wt.inner_any_mut();
+                                if let Some(io_mem) = inner_any.downcast_mut::<IoBus<Memory>>() {
+                                    io_mem.with_timer_mut(|t| {
+                                        let (_r, _i, _f, p) = t.get_state();
+                                        present = true;
+                                        pending = p;
+                                    });
+                                } else if let Some(io_mmu) =
+                                    inner_any.downcast_mut::<IoBus<Mc6829>>()
+                                {
+                                    io_mmu.with_timer_mut(|t| {
+                                        let (_r, _i, _f, p) = t.get_state();
+                                        present = true;
+                                        pending = p;
+                                    });
+                                }
+                            }
+                            if present && last_timer_pending.map(|v| v != pending).unwrap_or(true) {
+                                viewer.sync_timer(true, pending, /*running*/ true);
+                                last_timer_pending = Some(pending);
                             }
                         }
-                        if present && last_timer_pending.map(|v| v != pending).unwrap_or(true) {
-                            viewer.sync_timer(true, pending, /*running*/ true);
-                            last_timer_pending = Some(pending);
+                        if !viewer_cpu.is_paused() {
+                            let snap = regview::RegSnapshot {
+                                a: cpu_worker.r.a,
+                                b: cpu_worker.r.b,
+                                d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
+                                x: cpu_worker.r.x,
+                                y: cpu_worker.r.y,
+                                u: cpu_worker.r.u,
+                                s: cpu_worker.r.s,
+                                dp: cpu_worker.r.dp,
+                                pc: cpu_worker.r.pc,
+                                cc: cpu_worker.r.cc,
+                            };
+                            viewer_cpu.push(snap);
                         }
-                    }
-                    if !viewer_cpu.is_paused() {
-                        let snap = regview::RegSnapshot {
-                            a: cpu_worker.r.a,
-                            b: cpu_worker.r.b,
-                            d: ((cpu_worker.r.a as u16) << 8) | (cpu_worker.r.b as u16),
-                            x: cpu_worker.r.x,
-                            y: cpu_worker.r.y,
-                            u: cpu_worker.r.u,
-                            s: cpu_worker.r.s,
-                            dp: cpu_worker.r.dp,
-                            pc: cpu_worker.r.pc,
-                            cc: cpu_worker.r.cc,
-                        };
-                        viewer_cpu.push(snap);
-                    }
-                    if let Some(ref mut seq) = boot_seq {
-                        seq.on_post_step(bus_worker.as_mut(), mmu_regs_base_copy);
-                    }
-                    if let Some(tgt) = run_until_target {
-                        if cpu_worker.r.pc == tgt {
-                            viewer_cpu.set_paused(true);
-                            run_until_target = None;
+                        if let Some(ref mut seq) = boot_seq {
+                            seq.on_post_step(bus_worker.as_mut(), mmu_regs_base_copy);
                         }
+                        if let Some(tgt) = run_until_target {
+                            if cpu_worker.r.pc == tgt {
+                                viewer_cpu.set_paused(true);
+                                run_until_target = None;
+                            }
+                        }
+                        // no step counter; no CLI breakpoints in GUI-only mode
                     }
-                    // no step counter; no CLI breakpoints in GUI-only mode
-                }
-                if let Some(prev) = prev_mode {
-                    console_mode::restore_stdin_mode(prev);
-                }
-                // print cycles
-                if print_cycles_flag {
-                    println!("cycles: {}", cpu_worker.cycles);
-                }
+                    if let Some(prev) = prev_mode {
+                        console_mode::restore_stdin_mode(prev);
+                    }
+                    // print cycles
+                    if print_cycles_flag {
+                        println!("cycles: {}", cpu_worker.cycles);
+                    }
                 })
             };
 
@@ -3022,9 +3073,8 @@ fn main() {
             });
             #[cfg(target_os = "macos")]
             {
-                let cpu_handle_cell = std::sync::Arc::new(std::sync::Mutex::new(
-                    None::<std::thread::JoinHandle<()>>,
-                ));
+                let cpu_handle_cell =
+                    std::sync::Arc::new(std::sync::Mutex::new(None::<std::thread::JoinHandle<()>>));
                 let cpu_handle_cell_init = cpu_handle_cell.clone();
                 let init = Box::new(move || {
                     let handle = spawn_cpu();
@@ -3033,10 +3083,7 @@ fn main() {
                     }
                 });
                 // Run GUI on main thread (blocks until closed)
-                viewer_main.run_blocking_with_init(
-                    "em6809 - MC6809 Software Emulator",
-                    Some(init),
-                );
+                viewer_main.run_blocking_with_init("em6809 - MC6809 Software Emulator", Some(init));
                 STOP_REQUESTED.store(true, Ordering::SeqCst);
                 if let Ok(mut guard) = cpu_handle_cell.lock() {
                     if let Some(handle) = guard.take() {
@@ -3621,8 +3668,7 @@ fn main() {
                                     {
                                         let inner = io_mmu.inner_any_mut();
                                         if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                            let prev_mode =
-                                                mmu.read8(mmu.regs_base + 0x11) & 0x01;
+                                            let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                             if let Some(on) = log_maps {
                                                 mmu.set_log_maps(on);
                                             }
@@ -4046,8 +4092,7 @@ fn main() {
             if let Some(viewer) = &reg_viewer {
                 let gui_input = viewer.take_console_input();
                 if !gui_input.is_empty() {
-                    if let Some(io_mem) =
-                        bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
+                    if let Some(io_mem) = bus.as_mut().as_any_mut().downcast_mut::<IoBus<Memory>>()
                     {
                         io_mem.feed_console_input(&gui_input);
                     } else if let Some(io_mmu) =
@@ -4323,8 +4368,7 @@ fn main() {
                                 {
                                     let inner = io_mmu.inner_any_mut();
                                     if let Some(mmu) = inner.downcast_mut::<Mc6829>() {
-                                        let prev_mode =
-                                            mmu.read8(mmu.regs_base + 0x11) & 0x01;
+                                        let prev_mode = mmu.read8(mmu.regs_base + 0x11) & 0x01;
                                         if let Some(on) = log_maps {
                                             mmu.set_log_maps(on);
                                         }
@@ -4419,17 +4463,17 @@ fn main() {
                                     s.mmu_edit_sys = sys;
                                     s.mmu_task = format!("{}", task & 0x07);
                                     s.mmu_preset_name = name.clone();
-                                        let prot = mmu.read8(mmu.regs_base + 0x12);
-                                        s.mmu_prot_hex = format!("{:02X}", prot);
-                                        let map_view = if sys { &map_sys } else { &map_user };
-                                        let map_target = if sys {
-                                            &mut s.mmu_map_frames_sys
-                                        } else {
-                                            &mut s.mmu_map_frames_user
-                                        };
-                                        for (i, f) in map_view.iter().enumerate() {
-                                            map_target[i] = format!("{:02X}", f & 0x00FF);
-                                        }
+                                    let prot = mmu.read8(mmu.regs_base + 0x12);
+                                    s.mmu_prot_hex = format!("{:02X}", prot);
+                                    let map_view = if sys { &map_sys } else { &map_user };
+                                    let map_target = if sys {
+                                        &mut s.mmu_map_frames_sys
+                                    } else {
+                                        &mut s.mmu_map_frames_user
+                                    };
+                                    for (i, f) in map_view.iter().enumerate() {
+                                        map_target[i] = format!("{:02X}", f & 0x00FF);
+                                    }
                                     let attr_target = if sys {
                                         &mut s.mmu_attr_bytes_sys
                                     } else {

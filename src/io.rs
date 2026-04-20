@@ -165,9 +165,7 @@ impl ConsoleDev {
             let _ = f.write_all(&[b]);
         }
         // Route to GUI console if enabled
-        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst)
-            && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst)
-        {
+        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst) && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst) {
             if let Some(m) = CONSOLE_GUI_BUF.get() {
                 if let Ok(mut g) = m.lock() {
                     g.push(b);
@@ -186,10 +184,7 @@ impl ConsoleDev {
         let stdout_enabled = CONSOLE_STDOUT_ENABLED.load(Ordering::SeqCst)
             || !CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst);
         // ASCII fast path
-        if stdout_enabled
-            && b < 0x80
-            && self.utf8_need == 0
-        {
+        if stdout_enabled && b < 0x80 && self.utf8_need == 0 {
             let ch = b as char;
             print!("{ch}");
         } else if stdout_enabled {
@@ -445,9 +440,7 @@ impl Mc6850Dev {
         if let Some(f) = self.out_file.as_mut() {
             let _ = f.write_all(&[b]);
         }
-        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst)
-            && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst)
-        {
+        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst) && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst) {
             if let Some(m) = CONSOLE_GUI_BUF.get() {
                 if let Ok(mut g) = m.lock() {
                     g.push(b);

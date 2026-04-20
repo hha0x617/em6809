@@ -8,11 +8,7 @@ use super::{
     console_ui, draw_origin_badge, format_color_hex, parse_color_hex, parse_u8_hex, Command, RegApp,
 };
 
-pub(super) fn render_settings_dialog(
-    app: &mut RegApp,
-    ctx: &egui::Context,
-    frame: &eframe::Frame,
-) {
+pub(super) fn render_settings_dialog(app: &mut RegApp, ctx: &egui::Context, frame: &eframe::Frame) {
     if !app.settings_open {
         return;
     }
@@ -89,7 +85,10 @@ pub(super) fn render_settings_dialog(
                                     app.settings.console_mc6850 = false;
                                 }
                                 if ui
-                                    .radio(app.settings.console_mc6850, "MC6850 ACIA (status@+0, data@+1)")
+                                    .radio(
+                                        app.settings.console_mc6850,
+                                        "MC6850 ACIA (status@+0, data@+1)",
+                                    )
                                     .on_hover_text(
                                         "Motorola MC6850 ACIA register layout \
                                         (status register at base+0 with TDRE at \
@@ -200,26 +199,16 @@ pub(super) fn render_settings_dialog(
                                     &mut app.settings.console_gui,
                                     fl!(LOADER, "console-gui-enable"),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &app.settings_origins,
-                                    "console.gui_enable",
-                                );
+                                draw_origin_badge(ui, &app.settings_origins, "console.gui_enable");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-title"));
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut app.settings.console_gui_title,
-                                    )
-                                    .hint_text("em6809 Console")
-                                    .desired_width(220.0),
+                                    egui::TextEdit::singleline(&mut app.settings.console_gui_title)
+                                        .hint_text("em6809 Console")
+                                        .desired_width(220.0),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &app.settings_origins,
-                                    "console.gui_title",
-                                );
+                                draw_origin_badge(ui, &app.settings_origins, "console.gui_title");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-font-size"));
@@ -239,32 +228,20 @@ pub(super) fn render_settings_dialog(
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-cols"));
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut app.settings.console_gui_cols,
-                                    )
-                                    .hint_text("80")
-                                    .desired_width(80.0),
+                                    egui::TextEdit::singleline(&mut app.settings.console_gui_cols)
+                                        .hint_text("80")
+                                        .desired_width(80.0),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &app.settings_origins,
-                                    "console.gui_cols",
-                                );
+                                draw_origin_badge(ui, &app.settings_origins, "console.gui_cols");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-rows"));
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut app.settings.console_gui_rows,
-                                    )
-                                    .hint_text("24")
-                                    .desired_width(80.0),
+                                    egui::TextEdit::singleline(&mut app.settings.console_gui_rows)
+                                        .hint_text("24")
+                                        .desired_width(80.0),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &app.settings_origins,
-                                    "console.gui_rows",
-                                );
+                                draw_origin_badge(ui, &app.settings_origins, "console.gui_rows");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-scrollback"));
@@ -554,11 +531,9 @@ pub(super) fn render_settings_dialog(
                                                     .text_style_height(&egui::TextStyle::Monospace);
                                                 let resp = ui.add_sized(
                                                     (map_width, h + 6.0),
-                                                    egui::TextEdit::singleline(
-                                                        &mut map_frames[p],
-                                                    )
-                                                    .hint_text("0x00")
-                                                    .char_limit(4),
+                                                    egui::TextEdit::singleline(&mut map_frames[p])
+                                                        .hint_text("0x00")
+                                                        .char_limit(4),
                                                 );
                                                 resp
                                             });
@@ -599,10 +574,8 @@ pub(super) fn render_settings_dialog(
                                                     .text_style_height(&egui::TextStyle::Monospace);
                                                 ui.add_sized(
                                                     (attr_width, h + 6.0),
-                                                    egui::TextEdit::singleline(
-                                                        &mut attr_bytes[p],
-                                                    )
-                                                    .hint_text("0x00"),
+                                                    egui::TextEdit::singleline(&mut attr_bytes[p])
+                                                        .hint_text("0x00"),
                                                 );
                                             });
                                         }

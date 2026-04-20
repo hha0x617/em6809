@@ -38,12 +38,17 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             .color(egui::Color32::BLACK);
                         ui.add(egui::Label::new(pill));
                         ui.separator();
-                        if ui.checkbox(&mut follow_pc, fl!(LOADER, "follow-pc")).clicked() {
+                        if ui
+                            .checkbox(&mut follow_pc, fl!(LOADER, "follow-pc"))
+                            .clicked()
+                        {
                             app.follow_pc_flag.store(follow_pc, Ordering::SeqCst);
                         }
                         if have_lst
                             && have_hex
-                            && ui.checkbox(&mut use_hex_view, fl!(LOADER, "hex-view")).clicked()
+                            && ui
+                                .checkbox(&mut use_hex_view, fl!(LOADER, "hex-view"))
+                                .clicked()
                         {
                             app.use_hex.store(use_hex_view, Ordering::SeqCst);
                             if follow_pc {
@@ -88,8 +93,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                 || (cur_pc != app.last_pc_for_scroll);
                             let text_style = egui::TextStyle::Monospace;
                             let row_height = ui.text_style_height(&text_style);
-                            let row_height_with_spacing =
-                                row_height + ui.spacing().item_spacing.y;
+                            let row_height_with_spacing = row_height + ui.spacing().item_spacing.y;
 
                             let mut pc_line_index: Option<usize> = None;
                             let mut highlight_rect: Option<egui::Rect> = None;
@@ -101,7 +105,8 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         let rev = app.hex_rev.load(Ordering::SeqCst);
                                         if app.hex_cache.rev != rev {
                                             app.hex_cache.line_offsets = build_line_offsets(&s);
-                                            app.hex_cache.line_count = app.hex_cache.line_offsets.len();
+                                            app.hex_cache.line_count =
+                                                app.hex_cache.line_offsets.len();
                                             app.hex_cache.lossy_text = None;
                                             app.hex_cache.rev = rev;
                                         }
@@ -132,7 +137,8 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     Ok(s) => {
                                         if app.lst_cache.rev != rev {
                                             app.lst_cache.line_offsets = build_line_offsets(s);
-                                            app.lst_cache.line_count = app.lst_cache.line_offsets.len();
+                                            app.lst_cache.line_count =
+                                                app.lst_cache.line_offsets.len();
                                             app.lst_cache.lossy_text = None;
                                             app.lst_cache.rev = rev;
                                         }
@@ -142,9 +148,12 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         if app.lst_cache.rev != rev {
                                             let cow = String::from_utf8_lossy(&m[..]);
                                             app.lst_cache.lossy_text = Some(cow.to_string());
-                                            if let Some(text) = app.lst_cache.lossy_text.as_deref() {
-                                                app.lst_cache.line_offsets = build_line_offsets(text);
-                                                app.lst_cache.line_count = app.lst_cache.line_offsets.len();
+                                            if let Some(text) = app.lst_cache.lossy_text.as_deref()
+                                            {
+                                                app.lst_cache.line_offsets =
+                                                    build_line_offsets(text);
+                                                app.lst_cache.line_count =
+                                                    app.lst_cache.line_offsets.len();
                                             }
                                             app.lst_cache.rev = rev;
                                         }
@@ -177,8 +186,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             if follow_pc && need_scroll {
                                 if let Some(idx) = pc_line_index {
                                     if let Some(inner) = inner_rect {
-                                        let y = inner.top()
-                                            + idx as f32 * row_height_with_spacing;
+                                        let y = inner.top() + idx as f32 * row_height_with_spacing;
                                         let rect = egui::Rect::from_min_size(
                                             egui::pos2(inner.left(), y),
                                             egui::vec2(inner.width(), row_height),
@@ -254,11 +262,15 @@ fn render_listing_lines(
                 if token.ends_with(':') {
                     token = &token[..token.len() - 1];
                 }
-                let addr_for_line: Option<u16> =
-                    if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
+                let addr_for_line: Option<u16> = if token.len() == 4 {
+                    u16::from_str_radix(token, 16).ok()
+                } else {
+                    None
+                };
                 let upper = ltrim.to_ascii_uppercase();
-                let is_macro_line =
-                    upper.contains(" MACRO") || upper.contains(" ENDM") || upper.starts_with("MACRO ");
+                let is_macro_line = upper.contains(" MACRO")
+                    || upper.contains(" ENDM")
+                    || upper.starts_with("MACRO ");
                 let is_pc_addr_token = addr_for_line == Some(cur_pc) && !is_macro_line;
                 let (label_run_until, label_set_pc, label_cancel) = (
                     fl!(LOADER, "run-to-here"),
@@ -318,11 +330,8 @@ fn render_listing_lines(
                     if resp.hovered() {
                         let fill = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 40);
                         let stroke_col = ui.visuals().widgets.hovered.fg_stroke.color;
-                        ui.painter().rect_filled(
-                            resp.rect,
-                            egui::Rounding::same(0.0),
-                            fill,
-                        );
+                        ui.painter()
+                            .rect_filled(resp.rect, egui::Rounding::same(0.0), fill);
                         ui.painter().rect_stroke(
                             resp.rect,
                             egui::Rounding::same(0.0),
@@ -343,8 +352,11 @@ fn find_pc_line_index(text: &str, offsets: &[usize], pc: u16) -> Option<usize> {
         if token.ends_with(':') {
             token = &token[..token.len() - 1];
         }
-        let addr_for_line: Option<u16> =
-            if token.len() == 4 { u16::from_str_radix(token, 16).ok() } else { None };
+        let addr_for_line: Option<u16> = if token.len() == 4 {
+            u16::from_str_radix(token, 16).ok()
+        } else {
+            None
+        };
         if addr_for_line != Some(pc) {
             continue;
         }

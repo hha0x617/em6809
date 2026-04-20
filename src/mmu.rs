@@ -13,7 +13,7 @@ pub struct Mc6829 {
     map_sys: [[u16; NUM_LOG_PAGES]; NUM_TASKS],  // system map
     attr_user: [[u8; NUM_LOG_PAGES]; NUM_TASKS], // per-page attributes: bit0=WPROT, bit1=RPROT, bit2=NX
     attr_sys: [[u8; NUM_LOG_PAGES]; NUM_TASKS],
-    sys_mode: bool,                         // false=user, true=system
+    sys_mode: bool,     // false=user, true=system
     prot_ctrl: u8, // bit0=WPROT_EN, bit1=IRQ on fault, bit2=RPROT_EN, bit3=NX_EN, bit4=FIRQ on fault
     fault_status: u8, // bit0=WPROT, bit1=RPROT, bit2=NX
     pub regs_base: u16, // register window base address (logical)

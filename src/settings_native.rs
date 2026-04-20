@@ -4,11 +4,11 @@ use eframe::egui;
 use std::collections::HashMap;
 
 use crate::i18n::LOADER;
+use crate::regview::gui::console_ui;
 use crate::regview::{
     draw_origin_badge, format_color_hex, get_latest_settings_baseline, parse_color_hex,
     push_global_command, Command as UiCommand, SettingsState,
 };
-use crate::regview::gui::console_ui;
 use crate::settings_worker::{self, CloseReason, SettingsPayload, WorkerCommand};
 #[cfg(windows)]
 use em6809::platform::windows::native_settings as win_settings;
@@ -168,7 +168,10 @@ impl SettingsNativeApp {
                                     self.settings.console_mc6850 = false;
                                 }
                                 if ui
-                                    .radio(self.settings.console_mc6850, "MC6850 ACIA (status@+0, data@+1)")
+                                    .radio(
+                                        self.settings.console_mc6850,
+                                        "MC6850 ACIA (status@+0, data@+1)",
+                                    )
                                     .on_hover_text(
                                         "Motorola MC6850 ACIA register layout \
                                         (status register at base+0 with TDRE at \
@@ -280,11 +283,7 @@ impl SettingsNativeApp {
                                     &mut self.settings.console_gui,
                                     fl!(LOADER, "console-gui-enable"),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &self.settings_origins,
-                                    "console.gui_enable",
-                                );
+                                draw_origin_badge(ui, &self.settings_origins, "console.gui_enable");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-title"));
@@ -295,11 +294,7 @@ impl SettingsNativeApp {
                                     .hint_text("em6809 Console")
                                     .desired_width(220.0),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &self.settings_origins,
-                                    "console.gui_title",
-                                );
+                                draw_origin_badge(ui, &self.settings_origins, "console.gui_title");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-font-size"));
@@ -319,32 +314,20 @@ impl SettingsNativeApp {
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-cols"));
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.settings.console_gui_cols,
-                                    )
-                                    .hint_text("80")
-                                    .desired_width(80.0),
+                                    egui::TextEdit::singleline(&mut self.settings.console_gui_cols)
+                                        .hint_text("80")
+                                        .desired_width(80.0),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &self.settings_origins,
-                                    "console.gui_cols",
-                                );
+                                draw_origin_badge(ui, &self.settings_origins, "console.gui_cols");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-rows"));
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.settings.console_gui_rows,
-                                    )
-                                    .hint_text("24")
-                                    .desired_width(80.0),
+                                    egui::TextEdit::singleline(&mut self.settings.console_gui_rows)
+                                        .hint_text("24")
+                                        .desired_width(80.0),
                                 );
-                                draw_origin_badge(
-                                    ui,
-                                    &self.settings_origins,
-                                    "console.gui_rows",
-                                );
+                                draw_origin_badge(ui, &self.settings_origins, "console.gui_rows");
                             });
                             ui.horizontal(|ui| {
                                 ui.label(fl!(LOADER, "console-gui-scrollback"));
@@ -627,8 +610,8 @@ impl SettingsNativeApp {
                                             ui.monospace(format!("P{:X}", p));
                                             ui.add(
                                                 egui::TextEdit::singleline(&mut map_frames[p])
-                                                .desired_width(60.0)
-                                                .hint_text("0x00"),
+                                                    .desired_width(60.0)
+                                                    .hint_text("0x00"),
                                             );
                                         }
                                         ui.end_row();
@@ -650,8 +633,8 @@ impl SettingsNativeApp {
                                             ui.monospace(format!("P{:X}", p));
                                             ui.add(
                                                 egui::TextEdit::singleline(&mut attr_bytes[p])
-                                                .desired_width(60.0)
-                                                .hint_text("0x00"),
+                                                    .desired_width(60.0)
+                                                    .hint_text("0x00"),
                                             );
                                         }
                                         ui.end_row();

@@ -1,7 +1,7 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use once_cell::sync::OnceCell;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use eframe::egui;
 
@@ -97,7 +97,10 @@ pub(crate) fn console_viewport_size() -> Option<egui::Vec2> {
 
 pub(crate) fn poke_console_viewport(ctx: &egui::Context) {
     if let Some(size) = console_viewport_size() {
-        ctx.send_viewport_cmd_to(console_viewport_id(), egui::ViewportCommand::InnerSize(size));
+        ctx.send_viewport_cmd_to(
+            console_viewport_id(),
+            egui::ViewportCommand::InnerSize(size),
+        );
     }
 }
 
@@ -253,8 +256,7 @@ fn render_console(
         .frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)))
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-            ui.painter()
-                .rect_filled(ui.max_rect(), 0.0, default_bg);
+            ui.painter().rect_filled(ui.max_rect(), 0.0, default_bg);
             let cols = cfg.cols.max(1);
             let rows = cfg.rows.max(1);
             if let Ok(mut st) = state.lock() {
@@ -276,8 +278,7 @@ fn render_console(
                     .map(|p| ui.max_rect().contains(p))
                     .unwrap_or(false);
                 let user_scrolling_now = ctx.input(|i| {
-                    i.raw_scroll_delta.y != 0.0
-                        || (hover_in_console && i.pointer.primary_down())
+                    i.raw_scroll_delta.y != 0.0 || (hover_in_console && i.pointer.primary_down())
                 });
                 let output = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -294,12 +295,10 @@ fn render_console(
                         let origin = content_rect.min;
                         let painter = ui.painter().clone();
                         let clip_rect = ui.clip_rect();
-                        let start_row = ((clip_rect.min.y - origin.y) / row_height)
-                            .floor()
-                            .max(0.0) as usize;
-                        let end_row = ((clip_rect.max.y - origin.y) / row_height)
-                            .ceil()
-                            .max(0.0) as usize;
+                        let start_row =
+                            ((clip_rect.min.y - origin.y) / row_height).floor().max(0.0) as usize;
+                        let end_row =
+                            ((clip_rect.max.y - origin.y) / row_height).ceil().max(0.0) as usize;
                         let start_row = start_row.min(total_rows);
                         let end_row = end_row.min(total_rows);
                         let last_row_rect = if total_rows == 0 {
@@ -342,8 +341,7 @@ fn render_console(
                                         format.font_id.size = cfg.font_size + 1.0;
                                     }
                                     if cell.underline {
-                                        format.underline =
-                                            egui::Stroke::new(1.0, format.color);
+                                        format.underline = egui::Stroke::new(1.0, format.color);
                                     }
                                     let mut buf = [0u8; 4];
                                     job.append(text.encode_utf8(&mut buf), 0.0, format);
