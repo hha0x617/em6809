@@ -176,7 +176,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
  "x11rb",
 ]
 
@@ -1090,7 +1090,7 @@ dependencies = [
  "toml 0.8.23",
  "unic-langid",
  "vte",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
