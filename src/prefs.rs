@@ -171,6 +171,7 @@ mod tests {
         p.console = Some(Console {
             enable: Some(true),
             base: Some(0xFF00),
+            mc6850: Some(false),
             stdin: Some(false),
             echo: Some(true),
             out_path: Some("/tmp/out.txt".into()),
@@ -179,6 +180,13 @@ mod tests {
             rx_watermark: Some(2),
             irq_hold: Some(0),
             tee_stderr: Some(false),
+            gui_enable: Some(false),
+            gui_title: None,
+            gui_font_size: None,
+            gui_cols: None,
+            gui_rows: None,
+            gui_scrollback: None,
+            gui_ctrl_keys: Some(true),
         });
         p.block = Some(Block {
             enable: Some(true),
