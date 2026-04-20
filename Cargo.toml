@@ -5,8 +5,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["hha0x617 <hha0x617@gmail.com>"]
 description = "MC6809 software emulator (cycle-counted core)"
-repository = "https://github.com/hhagiwara/mc6809emu"
-homepage = "https://github.com/hhagiwara/mc6809emu"
+repository = "https://github.com/hha0x617/em6809"
+homepage = "https://github.com/hha0x617/em6809"
 license = "MIT OR Apache-2.0"
 
 # -----------------------------------------------------------------------------
