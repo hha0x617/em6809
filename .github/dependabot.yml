@@ -10,3 +10,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # eframe / egui_extras: stay on 0.29.x.  0.x minor bumps are
+      # breaking changes (e.g. ColorImage::source_size was added in
+      # 0.33) and the GUI is considered complete — we don't need to
+      # chase the egui release train.  Patch-level updates still flow.
+      - dependency-name: "eframe"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "egui_extras"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
