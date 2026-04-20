@@ -49,7 +49,7 @@ i18n-embed-fl = { version = "0.10", optional = true }
 fluent-bundle = { version = "0.16", optional = true }
 unic-langid = { version = "0.9", optional = true }
 rust-embed = { version = "8", optional = true }
-image = { version = "0.24", optional = true }
+image = { version = "0.25", optional = true }
 rfd = { version = "0.16", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 toml = { version = "0.9", optional = true }
