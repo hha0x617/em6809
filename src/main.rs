@@ -391,6 +391,7 @@ fn main() {
         mut console_base,
         mut cli_console_enable,
         mut cli_console_base,
+        mut console_mc6850,
         mut block_base,
         mut cli_block_enable,
         mut cli_block_base,
@@ -549,6 +550,10 @@ fn main() {
             }
             if !console_tee_stderr {
                 console_tee_stderr = c.tee_stderr.unwrap_or(false);
+            }
+            // MC6850 mode: CLI wins only if it explicitly said --console-mc6850.
+            if !console_mc6850 {
+                console_mc6850 = c.mc6850.unwrap_or(false);
             }
         }
     }
@@ -779,6 +784,7 @@ fn main() {
         mmu_attrs_user: mmu_attrs_user.clone(),
         protect_vectors,
         console_base,
+        console_mc6850,
         console_rx_wm,
         console_irq_hold,
         console_in: console_in.clone(),
@@ -1040,6 +1046,7 @@ fn main() {
         };
         s.use_console = console_base.is_some();
         s.console_base_hex = format!("0x{:04X}", console_base.unwrap_or(0xFF00));
+        s.console_mc6850 = console_mc6850;
         s.console_stdin = console_stdin;
         s.console_echo = console_local_echo;
         s.console_out_path = console_out_path.clone().unwrap_or_default();
@@ -3083,6 +3090,14 @@ fn main() {
         } else {
             None
         };
+        // Wait briefly for the GUI thread to come up before entering the
+        // run loop — otherwise the first `is_closed()` check races with the
+        // spawned thread (which sets `alive=true` only after eframe starts
+        // running), and the main thread would exit before the window even
+        // appears.
+        if let Some(viewer) = &reg_viewer {
+            viewer.wait_until_ready(5000);
+        }
         // Event-driven updates based on write tracking
         'run_loop: while !STOP_REQUESTED.load(Ordering::SeqCst) {
             process_settings_worker_queue(reg_viewer.as_ref(), bus.as_mut());
