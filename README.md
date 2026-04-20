@@ -1,6 +1,9 @@
-This application was generated with the assistance of AI tools: Codex CLI as part of the vibe coding workflow.
-
 # em6809
+
+[![Build and Test](https://github.com/hha0x617/em6809/actions/workflows/build.yml/badge.svg)](https://github.com/hha0x617/em6809/actions/workflows/build.yml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-APACHE)
+
+*This application was generated with the assistance of AI tools: Codex CLI as part of the vibe coding workflow.*
 
 ## Overview
 
