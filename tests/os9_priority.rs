@@ -67,10 +67,12 @@ fn cmpx_and_cmpy_immediate_cycles_and_flags() {
     let c0 = cpu.cycles;
     cpu.step(&mut mem, false); // CMPX #$1234
     assert_ne!(cpu.r.cc & 0x04, 0, "Z should be set when equal");
+    // MC6809 convention: C = 1 on borrow (source > destination), else 0.
+    // Equal operands produce no borrow, so C = 0.
     assert_eq!(
         cpu.r.cc & 0x01,
-        0x01,
-        "C should indicate no borrow when equal"
+        0x00,
+        "C should be clear (no borrow) when equal"
     );
     assert_eq!(cpu.cycles - c0, 4, "CMPX # should be 4 cycles");
 
@@ -78,10 +80,11 @@ fn cmpx_and_cmpy_immediate_cycles_and_flags() {
     let c1 = cpu.cycles;
     cpu.step(&mut mem, false); // CMPY #$1234
     assert_eq!(cpu.r.cc & 0x04, 0x00, "Z should clear when not equal");
+    // MC6809: Y($1233) - imm($1234) requires a borrow, so C = 1.
     assert_eq!(
         cpu.r.cc & 0x01,
-        0x00,
-        "C should clear when borrow occurs (Y < imm)"
+        0x01,
+        "C should be set when borrow occurs (Y < imm)"
     );
     assert_eq!(
         cpu.cycles - c1,
