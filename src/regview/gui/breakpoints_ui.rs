@@ -8,6 +8,7 @@
 // (other platforms) is what gives this its own resizable, draggable
 // OS window instead of being trapped inside the eframe main viewport.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -18,6 +19,16 @@ use super::{BpInfo, Command};
 
 static BP_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static BP_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
+/// Per-BP draft of the condition expression while it's being typed.
+/// Module-local because the viewport closure lives outside the
+/// `RegApp` borrow scope; the `HashMap` is keyed by `Breakpoint::id`
+/// so unrelated BPs don't fight over the same draft slot. Entries are
+/// committed on lost-focus / Enter and removed on commit.
+static BP_COND_DRAFTS: OnceCell<Mutex<HashMap<u32, String>>> = OnceCell::new();
+
+fn drafts() -> &'static Mutex<HashMap<u32, String>> {
+    BP_COND_DRAFTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 pub(crate) fn breakpoints_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("em6809_breakpoints_window")
@@ -129,12 +140,37 @@ fn render_breakpoints(
                             egui::RichText::new(format!("{}", bp.ignore_count)).monospace(),
                         ),
                     );
-                    let cond_text = bp.condition.as_deref().unwrap_or("(none)");
-                    ui.add_sized(
+                    // Editable condition. The draft is held module-
+                    // locally so it survives across paints while the
+                    // user is typing. We commit on `lost_focus()`
+                    // (which also fires on Enter), at which point the
+                    // worker thread parses and stores the condition.
+                    let stored = bp.condition.clone().unwrap_or_default();
+                    let mut draft = {
+                        let mut g = drafts().lock().unwrap();
+                        g.entry(bp.id).or_insert_with(|| stored.clone()).clone()
+                    };
+                    let resp = ui.add_sized(
                         [120.0, 0.0],
-                        egui::Label::new(egui::RichText::new(cond_text).monospace())
-                            .wrap_mode(egui::TextWrapMode::Truncate),
+                        egui::TextEdit::singleline(&mut draft)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text("condition"),
                     );
+                    if resp.changed() {
+                        drafts().lock().unwrap().insert(bp.id, draft.clone());
+                    }
+                    if resp.lost_focus() {
+                        let final_text = drafts()
+                            .lock()
+                            .unwrap()
+                            .remove(&bp.id)
+                            .unwrap_or(draft.clone());
+                        if final_text != stored {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::SetBreakpointCondition(bp.id, final_text));
+                            }
+                        }
+                    }
                     let del = ui.add_sized([24.0, 0.0], egui::Button::new("✕"));
                     if del.clicked() {
                         if let Ok(mut q) = cmds.lock() {

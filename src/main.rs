@@ -1800,6 +1800,16 @@ fn main() {
                                                 .remove(em6809::debug::BreakpointId(id));
                                             push_debug_snapshots(&viewer_cpu, &cpu_worker);
                                         }
+                                        regview::Command::SetBreakpointCondition(id, expr) => {
+                                            let bp_id = em6809::debug::BreakpointId(id);
+                                            let cond = if expr.trim().is_empty() {
+                                                None
+                                            } else {
+                                                Some(expr)
+                                            };
+                                            cpu_worker.breakpoints.set_condition(bp_id, cond);
+                                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                        }
                                         regview::Command::SetPc(a) => {
                                             cpu_worker.set_pc(a);
                                             viewer_cpu.set_memory_window(
@@ -3539,6 +3549,16 @@ fn main() {
                             cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
                             push_debug_snapshots(&viewer, &cpu);
                         }
+                        regview::Command::SetBreakpointCondition(id, expr) => {
+                            let bp_id = em6809::debug::BreakpointId(id);
+                            let cond = if expr.trim().is_empty() {
+                                None
+                            } else {
+                                Some(expr)
+                            };
+                            cpu.breakpoints.set_condition(bp_id, cond);
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
                         regview::Command::RefreshHexListing => {
                             let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let (policy, _win_len) = viewer.get_span_policy();
@@ -3765,6 +3785,16 @@ fn main() {
                             }
                             regview::Command::RemoveBreakpoint(id) => {
                                 cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                                push_debug_snapshots(&viewer, &cpu);
+                            }
+                            regview::Command::SetBreakpointCondition(id, expr) => {
+                                let bp_id = em6809::debug::BreakpointId(id);
+                                let cond = if expr.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(expr)
+                                };
+                                cpu.breakpoints.set_condition(bp_id, cond);
                                 push_debug_snapshots(&viewer, &cpu);
                             }
                             regview::Command::SetPc(a) => {
@@ -4502,6 +4532,16 @@ fn main() {
                         }
                         regview::Command::RemoveBreakpoint(id) => {
                             cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
+                        regview::Command::SetBreakpointCondition(id, expr) => {
+                            let bp_id = em6809::debug::BreakpointId(id);
+                            let cond = if expr.trim().is_empty() {
+                                None
+                            } else {
+                                Some(expr)
+                            };
+                            cpu.breakpoints.set_condition(bp_id, cond);
                             push_debug_snapshots(&viewer, &cpu);
                         }
                         regview::Command::SetPc(a) => {
