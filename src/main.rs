@@ -303,6 +303,14 @@ fn finalize_loaded_image(
         } else {
             viewer.force_hex_view();
         }
+        // Re-seed instruction boundaries for the freshly loaded image:
+        // any prior recordings refer to memory that no longer exists,
+        // and a linear sweep over the new ranges gives the live-disasm
+        // pane somewhere safe to anchor from the very first frame.
+        viewer.clear_boundaries();
+        for (s, e) in spans.iter().copied() {
+            viewer.seed_boundaries_sweep(bus, s, e);
+        }
     }
     *loaded = new_loaded;
 }
@@ -1532,6 +1540,11 @@ fn main() {
                     let mut run_until_target: Option<u16> = None;
                     // Track last seen Timer pending state to avoid spamming UI
                     let mut last_timer_pending: Option<bool> = None;
+                    // Last PC for which we pushed a live-disasm refresh.
+                    // Lets us re-render the listing when execution pauses
+                    // on a new PC (step, breakpoint, run-until) without
+                    // re-rendering on every cycle while running.
+                    let mut last_window_pc: Option<u16> = None;
                     let prev_mode = if console_stdin_flag {
                         console_mode::enter_raw()
                     } else {
@@ -1700,37 +1713,54 @@ fn main() {
                                                 loaded_ranges_worker.clone(),
                                             );
                                             let (policy, _win_len) = viewer_cpu.get_span_policy();
-                                            let span_for_pc = spans
-                                                .iter()
-                                                .find(|(s, e)| {
-                                                    *s <= cpu_worker.r.pc && cpu_worker.r.pc < *e
-                                                })
-                                                .copied();
-                                            let (start, total_len) = if policy == 1 {
-                                                let (ws, wl, _) = viewer_cpu.get_memory_window();
-                                                (ws, std::cmp::max(wl, 256))
-                                            } else if let Some((s, e)) = span_for_pc {
-                                                (s, e.wrapping_sub(s) as usize)
+                                            if policy == 1 {
+                                                // PC-window mode: anchor on a confirmed
+                                                // instruction boundary near `pc` (via
+                                                // disasm_window) instead of starting
+                                                // from a constant memory-window offset.
+                                                // Keeps the listing aligned even when
+                                                // `pc` jumps to a new region whose
+                                                // start address never matched a real
+                                                // instruction boundary.
+                                                viewer_cpu.render_pc_window(
+                                                    bus_worker.as_mut(),
+                                                    cpu_worker.r.pc,
+                                                    24,
+                                                    48,
+                                                );
                                             } else {
-                                                let (ws, wl, _) = viewer_cpu.get_memory_window();
-                                                (ws, std::cmp::max(wl, 256))
-                                            };
-                                            let mut cur = start;
-                                            let mut out = String::new();
-                                            let mut processed: usize = 0;
-                                            while processed < total_len {
-                                                let (consumed, text) =
-                                                    em6809::disasm::disasm_one_hex(
-                                                        bus_worker.as_mut(),
-                                                        cur,
-                                                    );
-                                                use core::fmt::Write as _;
-                                                let _ = writeln!(&mut out, "{cur:04X}: {text}");
-                                                let step = core::cmp::max(consumed as usize, 1);
-                                                processed += step;
-                                                cur = cur.wrapping_add(step as u16);
+                                                let span_for_pc = spans
+                                                    .iter()
+                                                    .find(|(s, e)| {
+                                                        *s <= cpu_worker.r.pc
+                                                            && cpu_worker.r.pc < *e
+                                                    })
+                                                    .copied();
+                                                let (start, total_len) =
+                                                    if let Some((s, e)) = span_for_pc {
+                                                        (s, e.wrapping_sub(s) as usize)
+                                                    } else {
+                                                        let (ws, wl, _) =
+                                                            viewer_cpu.get_memory_window();
+                                                        (ws, std::cmp::max(wl, 256))
+                                                    };
+                                                let mut cur = start;
+                                                let mut out = String::new();
+                                                let mut processed: usize = 0;
+                                                while processed < total_len {
+                                                    let (consumed, text) =
+                                                        em6809::disasm::disasm_one_hex(
+                                                            bus_worker.as_mut(),
+                                                            cur,
+                                                        );
+                                                    use core::fmt::Write as _;
+                                                    let _ = writeln!(&mut out, "{cur:04X}: {text}");
+                                                    let step = core::cmp::max(consumed as usize, 1);
+                                                    processed += step;
+                                                    cur = cur.wrapping_add(step as u16);
+                                                }
+                                                viewer_cpu.update_hex_listing(out);
                                             }
-                                            viewer_cpu.update_hex_listing(out);
                                         }
                                         regview::Command::RunUntil(a) => {
                                             run_until_target = Some(a);
@@ -2820,8 +2850,21 @@ fn main() {
                                 viewer_cpu.sync_timer(true, t_pending, t_running);
                             }
                         }
+                        // Record the about-to-execute PC as a confirmed
+                        // instruction boundary for the live-disasm pane.
+                        viewer_cpu.record_instruction_pc(cpu_worker.r.pc);
                         // trace printing removed in GUI-only mode
                         cpu_worker.step(bus_worker.as_mut(), false);
+                        // If we just settled at a new PC while paused
+                        // (step, breakpoint, run-until target), kick a
+                        // listing refresh so the live-disasm pane
+                        // re-renders with the new PC at the anchor.
+                        // Skipped during free-run to avoid per-instruction
+                        // re-rendering cost.
+                        if viewer_cpu.is_paused() && last_window_pc != Some(cpu_worker.r.pc) {
+                            viewer_cpu.request_refresh_hex_listing();
+                            last_window_pc = Some(cpu_worker.r.pc);
+                        }
                         // Dirty-driven memory window refresh while running
                         {
                             let (mstart, mlen, mfollow) = viewer_cpu.get_memory_window();
@@ -3108,6 +3151,9 @@ fn main() {
         signals::install();
         // GUI-only: no --step; run until Ctrl+C / GUI close / breakpoints
         let mut run_until_target: Option<u16> = None;
+        // Paused-edge tracking for the live-disasm refresh (see worker
+        // thread loop for the rationale).
+        let mut last_window_pc: Option<u16> = None;
         // Generic stdin feeder for dyn Bus path, feeding IoBus<Memory|Mc6829>
         // On Windows, switch stdin to raw (no echo, no line input) so keystrokes are delivered immediately
         let prev_mode = if console_stdin {
@@ -4114,8 +4160,25 @@ fn main() {
             if let Some(ref mut seq) = boot_seq {
                 seq.on_pre_step(bus.as_mut(), mmu_regs_base, cpu.r.pc, &mut cpu);
             }
+            // Record the about-to-execute PC as a confirmed instruction
+            // boundary so the live-disasm pane can anchor on it. Doing
+            // this at the call site is cheap (one Mutex::lock per step
+            // when a viewer is attached) and authoritative — the CPU
+            // itself agrees that this byte is an opcode.
+            if let Some(viewer) = &reg_viewer {
+                viewer.record_instruction_pc(cpu.r.pc);
+            }
             // trace printing removed in GUI-only mode
             cpu.step(bus.as_mut(), false);
+            // Same paused-edge / new-PC refresh logic as the worker
+            // thread loop; only fires when execution actually settled
+            // on a new PC, so free-run isn't continuously re-rendered.
+            if let Some(viewer) = &reg_viewer {
+                if viewer.is_paused() && last_window_pc != Some(cpu.r.pc) {
+                    viewer.request_refresh_hex_listing();
+                    last_window_pc = Some(cpu.r.pc);
+                }
+            }
             // Dirty-driven memory window refresh while running (main thread path)
             if let Some(viewer) = &reg_viewer {
                 let (mstart, mlen, mfollow) = viewer.get_memory_window();

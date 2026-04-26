@@ -103,6 +103,7 @@ pub mod gui {
     use crate::i18n::LOADER;
     use crate::settings_worker;
     use eframe::{egui, App};
+    use em6809::debug::InstructionBoundaries;
     use memmap2::Mmap;
     use std::collections::HashMap;
     use std::fs::File;
@@ -978,6 +979,11 @@ pub mod gui {
         pub console_base: Option<u16>,
         pub console_gui_open: bool,
         pub dev_tab: DeviceTab,
+        // Shared with the spawning RegView; the run loop writes here
+        // after every step, the load handlers seed it via linear sweep,
+        // and the live-disasm pane reads it to anchor on a confirmed
+        // instruction boundary near the current PC.
+        pub boundaries: Arc<Mutex<InstructionBoundaries>>,
     }
 
     impl RegApp {
@@ -1759,6 +1765,11 @@ pub mod gui {
         gpio_sync: Arc<Mutex<GpioSyncState>>,
         mmu_sync: Arc<Mutex<MmuSyncState>>,
         dev_tab: DeviceTab,
+        // Confirmed instruction-start addresses, populated by the run
+        // loop (per-step) and by the load handlers (linear sweep). Used
+        // by the live-disasm pane to anchor on a real boundary instead
+        // of guessing with `pc - constant`. See em6809::debug.
+        boundaries: Arc<Mutex<InstructionBoundaries>>,
     }
 
     impl Clone for RegView {
@@ -1794,6 +1805,7 @@ pub mod gui {
                 gpio_sync: Arc::new(Mutex::new(None)),
                 mmu_sync: Arc::new(Mutex::new(None)),
                 dev_tab: self.dev_tab,
+                boundaries: Arc::clone(&self.boundaries),
             }
         }
     }
@@ -1874,6 +1886,7 @@ pub mod gui {
             let mem_utf8 = Arc::new(AtomicBool::new(false));
             let console_input = Arc::new(Mutex::new(Vec::new()));
             let console_state = Arc::new(Mutex::new(ConsoleState::new(24, 80, 1000)));
+            let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
 
             // Try to discover a Japanese-capable font from common system locations
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -1983,6 +1996,7 @@ pub mod gui {
             let started_flag_thread = started_flag.clone();
             let auto_hex_on_edit_thread = Arc::clone(&auto_hex_on_edit);
             let scroll_to_pc_req_thread = Arc::clone(&scroll_to_pc_req);
+            let boundaries_thread = Arc::clone(&boundaries);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
@@ -2141,6 +2155,7 @@ pub mod gui {
                     console_base: None,
                     console_gui_open: true,
                     dev_tab: DeviceTab::Console,
+                    boundaries: boundaries_thread,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -2212,6 +2227,7 @@ pub mod gui {
                 gpio_sync: Arc::new(Mutex::new(None)),
                 mmu_sync: Arc::new(Mutex::new(None)),
                 dev_tab: DeviceTab::Console,
+                boundaries,
             }
         }
 
@@ -2255,6 +2271,7 @@ pub mod gui {
             let quit_flag = Arc::new(AtomicBool::new(false));
             let alive = Arc::new(AtomicBool::new(false));
             let started = Arc::new(AtomicBool::new(false));
+            let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
 
             // Font discovery (same as spawn)
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -2363,6 +2380,7 @@ pub mod gui {
                 gpio_sync: Arc::new(Mutex::new(None)),
                 mmu_sync: Arc::new(Mutex::new(None)),
                 dev_tab: DeviceTab::Console,
+                boundaries,
             }
         }
 
@@ -2547,6 +2565,7 @@ pub mod gui {
                 console_base: None,
                 console_gui_open: true,
                 dev_tab: DeviceTab::Console,
+                boundaries: Arc::clone(&self.boundaries),
             };
             let mut init = init;
             #[cfg(windows)]
@@ -2774,9 +2793,95 @@ pub mod gui {
     pub use RegView as Viewer;
 
     impl RegView {
+        /// Record `pc` as a confirmed instruction-start. Called by the
+        /// run loop right before each `cpu.step` so the live-disasm
+        /// pane has authoritative anchor points to align on.
+        pub fn record_instruction_pc(&self, pc: u16) {
+            if let Ok(mut b) = self.boundaries.lock() {
+                b.insert(pc);
+            }
+        }
+
+        /// Linearly sweep `[start, end)` and record every disassembled
+        /// instruction start. Call after a successful program load to
+        /// pre-seed boundaries for the just-loaded code region.
+        pub fn seed_boundaries_sweep<B: em6809::bus::Bus + ?Sized>(
+            &self,
+            bus: &mut B,
+            start: u16,
+            end: u16,
+        ) {
+            if let Ok(mut b) = self.boundaries.lock() {
+                em6809::debug::linear_sweep(bus, start, end, &mut b);
+            }
+        }
+
+        /// Forget every recorded boundary. Call when the program is
+        /// reloaded or memory is wholesale replaced.
+        pub fn clear_boundaries(&self) {
+            if let Ok(mut b) = self.boundaries.lock() {
+                b.clear();
+            }
+        }
+
+        /// Render a boundary-anchored disassembly window around `pc`
+        /// and push it as the new hex listing for the GUI to display.
+        ///
+        /// Why this lives on the emulator side: the GUI thread does
+        /// not own a `Bus`, but disassembly needs to read instruction
+        /// bytes through it. Doing the work here keeps the bus access
+        /// strictly on the worker thread, while `lst_text` carries
+        /// the rendered result over to the GUI through the same
+        /// channel that file-loaded `.lst` text uses.
+        ///
+        /// This is the live-disasm answer to the anchor problem: the
+        /// produced text is built with `disasm_window`, so the line
+        /// containing `pc` is guaranteed to start on a confirmed
+        /// instruction boundary, which means the existing
+        /// PC-highlight and breakpoint markers in `list_ui.rs` (which
+        /// match by address token) line up correctly without any
+        /// changes to the GUI side.
+        pub fn render_pc_window<B: em6809::bus::Bus + ?Sized>(
+            &self,
+            bus: &mut B,
+            pc: u16,
+            n_before: usize,
+            n_after: usize,
+        ) {
+            // Hold the boundaries lock only while collecting addresses;
+            // the per-line bytes-column re-disassembly below issues its
+            // own bus reads and must not be done under the lock.
+            let lines = {
+                let guard = match self.boundaries.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                em6809::disasm::disasm_window(bus, pc, &guard, n_before, n_after)
+            };
+            let mut out = String::new();
+            use core::fmt::Write as _;
+            for (addr, _) in lines {
+                // Re-disassemble with the hex variant so the text
+                // matches the byte-column format used by file-loaded
+                // `.lst` listings — list_ui.rs already understands it.
+                let (_, hex_text) = em6809::disasm::disasm_one_hex(bus, addr);
+                let _ = writeln!(&mut out, "{addr:04X}: {hex_text}");
+            }
+            self.update_hex_listing(out);
+        }
+
         pub fn request_load_lst(&self, path: std::path::PathBuf) {
             if let Ok(mut q) = self.cmds.lock() {
                 q.push(Command::UiLoadLst(path));
+            }
+        }
+
+        /// Ask the worker to re-render the live disassembly listing.
+        /// Used when execution pauses on a new PC so the boundary-anchored
+        /// window picks up the new anchor before the next paint.
+        pub fn request_refresh_hex_listing(&self) {
+            if let Ok(mut q) = self.cmds.lock() {
+                q.push(Command::RefreshHexListing);
             }
         }
         pub fn auto_hex_on_edit(&self) -> bool {
