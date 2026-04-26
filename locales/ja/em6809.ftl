@@ -8,6 +8,7 @@ start = 開始
 len = 長さ
 run-to-here = ここまで実行
 set-pc-to-here = PCの値を現在のアドレスに変更
+toggle-breakpoint = ブレークポイント切替
 pause = 一時停止
 step = ステップ
 reg = レジスタ

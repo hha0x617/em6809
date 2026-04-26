@@ -3,7 +3,30 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 use i18n_embed_fl::fl;
 
-use super::{Command, RegApp, LOADER};
+use super::{BpUiState, Command, RegApp, LOADER};
+
+/// Look up `addr` in the BP-state snapshot. The slice is small in
+/// practice (a handful of breakpoints), so a linear scan is cheaper
+/// than building a HashMap each frame.
+fn bp_state_for(states: &[(u16, BpUiState)], addr: u16) -> Option<BpUiState> {
+    for (a, s) in states {
+        if *a == addr {
+            return Some(*s);
+        }
+    }
+    None
+}
+
+/// Single character drawn at the start of each row to convey BP state.
+/// `●` means an enabled breakpoint sits here, `○` means a disabled one,
+/// and a space keeps unmarked rows column-aligned with marked ones.
+fn bp_marker_glyph(s: Option<BpUiState>) -> &'static str {
+    match s {
+        Some(BpUiState::Enabled) => "●",
+        Some(BpUiState::Disabled) => "○",
+        None => " ",
+    }
+}
 
 pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
     if app.lst_mmap.is_none() && app.lst_text.is_none() {
@@ -105,6 +128,13 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             let mut highlight_rect: Option<egui::Rect> = None;
                             let mut inner_rect: Option<egui::Rect> = None;
 
+                            // Snapshot the BP-state list once; each
+                            // render_listing_lines call below borrows it.
+                            // Cloning is cheap (small Vec) and cleaner
+                            // than threading a MutexGuard down the
+                            // call chain.
+                            let bp_states_snap: Vec<(u16, BpUiState)> =
+                                app.bp_states.lock().map(|g| g.clone()).unwrap_or_default();
                             if use_hex_view {
                                 if let Some(txt) = &app.lst_text {
                                     if let Ok(s) = txt.lock() {
@@ -138,6 +168,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             cur_pc,
                                             &app.cmds,
                                             scroll_target,
+                                            &bp_states_snap,
                                         );
                                         highlight_rect = highlight;
                                         inner_rect = inner;
@@ -195,6 +226,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         cur_pc,
                                         &app.cmds,
                                         scroll_target,
+                                        &bp_states_snap,
                                     );
                                     highlight_rect = highlight;
                                     inner_rect = inner;
@@ -268,6 +300,11 @@ fn render_listing_lines(
     // from outside it routes the request to the wrong parent and
     // is what made Follow PC look totally unresponsive.
     scroll_target_idx: Option<usize>,
+    // Snapshot of breakpoint states keyed by address. Used to draw a
+    // ● / ○ marker at the start of each addressable row, and unaffected
+    // by GC / mutation outside this paint (the snapshot is owned by the
+    // caller and only read here).
+    bp_states: &[(u16, BpUiState)],
 ) -> (Option<egui::Rect>, Option<egui::Rect>) {
     let mut highlight_rect: Option<egui::Rect> = None;
     let total_rows = total_rows.min(offsets.len());
@@ -326,19 +363,43 @@ fn render_listing_lines(
                     || upper.contains(" ENDM")
                     || upper.starts_with("MACRO ");
                 let is_pc_addr_token = addr_for_line == Some(cur_pc) && !is_macro_line;
-                let (label_run_until, label_set_pc, label_cancel) = (
+                let (label_run_until, label_set_pc, label_cancel, label_toggle_bp) = (
                     fl!(LOADER, "run-to-here"),
                     fl!(LOADER, "set-pc-to-here"),
                     fl!(LOADER, "cancel"),
+                    fl!(LOADER, "toggle-breakpoint"),
                 );
+
+                // Prepend a one-character BP marker so the gutter
+                // column is always aligned regardless of whether a row
+                // has a breakpoint. Done at the string level so the
+                // PC-highlight background still spans the full row.
+                let marker =
+                    bp_marker_glyph(addr_for_line.and_then(|a| bp_state_for(bp_states, a)));
+                let row_text = format!("{} {}", marker, line);
+
                 if is_pc_addr_token {
-                    let mut rt = egui::RichText::new(line).monospace();
+                    let mut rt = egui::RichText::new(&row_text).monospace();
                     rt = rt
                         .background_color(egui::Color32::from_rgb(255, 60, 60))
                         .color(egui::Color32::BLACK);
-                    let resp = ui.add(egui::Label::new(rt).sense(egui::Sense::hover()));
+                    // Sense::click() so we get .double_clicked() events;
+                    // the existing hover/context-menu behaviour still
+                    // works under click sense.
+                    let resp = ui.add(egui::Label::new(rt).sense(egui::Sense::click()));
                     if let Some(addr) = addr_for_line {
+                        if resp.double_clicked() {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::CycleBreakpointAtAddr(addr));
+                            }
+                        }
                         resp.context_menu(|ui| {
+                            if ui.button(label_toggle_bp).clicked() {
+                                if let Ok(mut q) = cmds.lock() {
+                                    q.push(Command::CycleBreakpointAtAddr(addr));
+                                }
+                                ui.close_menu();
+                            }
                             if ui.button(label_run_until).clicked() {
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::RunUntil(addr));
@@ -359,11 +420,22 @@ fn render_listing_lines(
                     highlight_rect = Some(resp.rect);
                 } else {
                     let resp = ui.add(
-                        egui::Label::new(egui::RichText::new(line).monospace())
-                            .sense(egui::Sense::hover()),
+                        egui::Label::new(egui::RichText::new(&row_text).monospace())
+                            .sense(egui::Sense::click()),
                     );
                     if let Some(addr) = addr_for_line {
+                        if resp.double_clicked() {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::CycleBreakpointAtAddr(addr));
+                            }
+                        }
                         resp.context_menu(|ui| {
+                            if ui.button(label_toggle_bp).clicked() {
+                                if let Ok(mut q) = cmds.lock() {
+                                    q.push(Command::CycleBreakpointAtAddr(addr));
+                                }
+                                ui.close_menu();
+                            }
                             if ui.button(label_run_until).clicked() {
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::RunUntil(addr));

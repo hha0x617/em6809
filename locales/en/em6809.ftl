@@ -8,6 +8,7 @@ start = Start
 len = Len
 run-to-here = Run to here
 set-pc-to-here = Set PC to this address
+toggle-breakpoint = Toggle breakpoint
 pause = Pause
 step = Step
 reg = Reg

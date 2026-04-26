@@ -703,10 +703,25 @@ pub mod gui {
         Mmu,
     }
 
+    /// UI-side breakpoint state for a given address. The list pane
+    /// renders a `●` for `Enabled`, a `○` for `Disabled`, and nothing
+    /// for an address with no breakpoint at all.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum BpUiState {
+        Enabled,
+        Disabled,
+    }
+
     #[derive(Clone, Debug)]
     pub enum Command {
         SetPc(u16),
         RunUntil(u16),
+        /// Cycle the breakpoint state at `addr` through none → enabled
+        /// → disabled → none. Triggered by double-clicking a line in
+        /// the listing pane (or via the right-click context menu).
+        /// Worker thread mutates `cpu.breakpoints` and pushes a fresh
+        /// snapshot back via `Viewer::update_breakpoint_states`.
+        CycleBreakpointAtAddr(u16),
         ApplyRegs(RegSnapshot),
         MemWrite(Vec<(u16, u8)>),
         OpenImage {
@@ -984,6 +999,9 @@ pub mod gui {
         // and the live-disasm pane reads it to anchor on a confirmed
         // instruction boundary near the current PC.
         pub boundaries: Arc<Mutex<InstructionBoundaries>>,
+        /// Snapshot of breakpoint UI state. Worker thread writes,
+        /// list pane reads on every paint to render markers.
+        pub bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>>,
     }
 
     impl RegApp {
@@ -1770,6 +1788,10 @@ pub mod gui {
         // by the live-disasm pane to anchor on a real boundary instead
         // of guessing with `pc - constant`. See em6809::debug.
         boundaries: Arc<Mutex<InstructionBoundaries>>,
+        /// UI-visible snapshot of the current breakpoint set. Keyed by
+        /// address so a per-row lookup in the list pane is cheap.
+        /// The worker thread is the writer; the GUI thread reads.
+        bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>>,
     }
 
     impl Clone for RegView {
@@ -1806,6 +1828,7 @@ pub mod gui {
                 mmu_sync: Arc::new(Mutex::new(None)),
                 dev_tab: self.dev_tab,
                 boundaries: Arc::clone(&self.boundaries),
+                bp_states: Arc::clone(&self.bp_states),
             }
         }
     }
@@ -1887,6 +1910,7 @@ pub mod gui {
             let console_input = Arc::new(Mutex::new(Vec::new()));
             let console_state = Arc::new(Mutex::new(ConsoleState::new(24, 80, 1000)));
             let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
+            let bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>> = Arc::new(Mutex::new(Vec::new()));
 
             // Try to discover a Japanese-capable font from common system locations
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -1997,6 +2021,7 @@ pub mod gui {
             let auto_hex_on_edit_thread = Arc::clone(&auto_hex_on_edit);
             let scroll_to_pc_req_thread = Arc::clone(&scroll_to_pc_req);
             let boundaries_thread = Arc::clone(&boundaries);
+            let bp_states_thread = Arc::clone(&bp_states);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
@@ -2156,6 +2181,7 @@ pub mod gui {
                     console_gui_open: true,
                     dev_tab: DeviceTab::Console,
                     boundaries: boundaries_thread,
+                    bp_states: bp_states_thread,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -2228,6 +2254,7 @@ pub mod gui {
                 mmu_sync: Arc::new(Mutex::new(None)),
                 dev_tab: DeviceTab::Console,
                 boundaries,
+                bp_states,
             }
         }
 
@@ -2272,6 +2299,7 @@ pub mod gui {
             let alive = Arc::new(AtomicBool::new(false));
             let started = Arc::new(AtomicBool::new(false));
             let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
+            let bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>> = Arc::new(Mutex::new(Vec::new()));
 
             // Font discovery (same as spawn)
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -2381,6 +2409,7 @@ pub mod gui {
                 mmu_sync: Arc::new(Mutex::new(None)),
                 dev_tab: DeviceTab::Console,
                 boundaries,
+                bp_states,
             }
         }
 
@@ -2566,6 +2595,7 @@ pub mod gui {
                 console_gui_open: true,
                 dev_tab: DeviceTab::Console,
                 boundaries: Arc::clone(&self.boundaries),
+                bp_states: Arc::clone(&self.bp_states),
             };
             let mut init = init;
             #[cfg(windows)]
@@ -2884,6 +2914,17 @@ pub mod gui {
                 q.push(Command::RefreshHexListing);
             }
         }
+
+        /// Worker-side: replace the GUI's BP-state snapshot with the
+        /// current view of `cpu.breakpoints`. Cheap (small Vec, no
+        /// allocation when the state is identical and the caller
+        /// reuses an existing Vec, but we just replace for simplicity).
+        pub fn update_breakpoint_states(&self, states: Vec<(u16, BpUiState)>) {
+            if let Ok(mut g) = self.bp_states.lock() {
+                *g = states;
+            }
+        }
+
         pub fn auto_hex_on_edit(&self) -> bool {
             self.auto_hex_on_edit.load(Ordering::SeqCst)
         }
@@ -2984,6 +3025,7 @@ pub mod gui {
 }
 
 pub use gui::set_force_in_app_settings;
+pub use gui::BpUiState;
 pub use gui::Command;
 pub use gui::Viewer;
 // Public helpers for external/native windows to interact with the same viewer command queue
