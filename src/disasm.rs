@@ -1170,3 +1170,116 @@ pub fn disasm_one_hex<B: Bus + ?Sized>(bus: &mut B, pc: u16) -> (u16, String) {
         format!("{: <width$} {}", bytes, text, width = BYTES_COL_MIN_WIDTH),
     )
 }
+
+// =============================================================================
+// Boundary-anchored window disassembly
+// =============================================================================
+
+use crate::debug::InstructionBoundaries;
+
+/// One disassembled line: `(address, mnemonic_text)`.
+pub type DisasmLine = (u16, String);
+
+/// Disassemble a window of instructions covering `pc`, anchored on the
+/// most recent confirmed instruction boundary at or before `pc`.
+///
+/// This is the recommended entry point for any UI that displays the
+/// disassembly stream around the current PC. Unlike walking forward
+/// from `pc - some_constant`, anchoring on `boundaries.floor(pc)`
+/// guarantees that the line containing `pc` aligns with the real
+/// instruction boundary in the byte stream.
+///
+/// Behaviour:
+/// - The anchor is `boundaries.floor(pc)` if known; otherwise `pc`
+///   itself (the PC line is correct, but lines preceding it may
+///   not appear because no earlier boundary is known).
+/// - The window walks forward from the anchor until it has produced
+///   `n_before + 1 + n_after` lines or wraps past 0xFFFF.
+/// - If the anchor is far below `pc`, only `n_after` lines after the
+///   PC line are kept; surplus lines before the PC line are trimmed
+///   to keep at most `n_before`.
+///
+/// Returns the resulting list of `(addr, text)` lines, in ascending
+/// address order. The PC's line is somewhere in the middle (or near
+/// the start, when the anchor is close to `pc`).
+pub fn disasm_window<B: Bus + ?Sized>(
+    bus: &mut B,
+    pc: u16,
+    boundaries: &InstructionBoundaries,
+    n_before: usize,
+    n_after: usize,
+) -> Vec<DisasmLine> {
+    let anchor = boundaries.floor(pc).unwrap_or(pc);
+
+    // To produce up to `n_before` instructions BEFORE `pc`, walk
+    // backwards through the known boundary set (NOT byte arithmetic).
+    // The earliest of those becomes our walk_start so that subsequent
+    // forward walk delivers anchor-aligned lines for the entire
+    // pre-PC region.
+    let walk_start = if anchor == 0 {
+        anchor
+    } else {
+        let mut start = anchor;
+        for b in boundaries
+            .iter_range(0, anchor.saturating_sub(1))
+            .rev()
+            .take(n_before)
+        {
+            start = b;
+        }
+        start
+    };
+
+    // Walk walk_start → ... forward, stopping when we've covered the
+    // PC line plus `n_after` more lines. Cap at a generous upper
+    // bound so we can't run away if the bus returns garbage.
+    let max_lines = n_before + n_after + 1;
+    let mut lines: Vec<DisasmLine> = Vec::with_capacity(max_lines + 8);
+    let mut cur = walk_start;
+    let mut pc_idx: Option<usize> = None;
+    // Hard upper bound on lines we walk: the requested window plus a
+    // generous slack for the case where the anchor is many instructions
+    // behind `pc`. 6809 instructions are at most 5 bytes, so 0x200
+    // bytes of code is comfortably more than `n_before` lines.
+    let walk_limit = max_lines + 256;
+    while lines.len() < walk_limit {
+        let (consumed, text) = disasm_one(bus, cur);
+        if cur == pc {
+            pc_idx = Some(lines.len());
+        }
+        lines.push((cur, text));
+        if consumed == 0 {
+            break;
+        }
+        let (next, wrapped) = cur.overflowing_add(consumed);
+        if wrapped || next <= cur {
+            break;
+        }
+        cur = next;
+
+        // Stop walking once we've placed PC and gathered enough
+        // following lines. (We can't stop earlier because we don't
+        // know the PC index until we hit it.)
+        if let Some(idx) = pc_idx {
+            if lines.len() >= idx + 1 + n_after {
+                break;
+            }
+        }
+    }
+
+    // Trim surplus pre-PC lines to keep at most n_before.
+    if let Some(idx) = pc_idx {
+        let start = idx.saturating_sub(n_before);
+        let end = (idx + 1 + n_after).min(lines.len());
+        lines = lines[start..end].to_vec();
+    }
+    // If pc_idx is None we never reached `pc` from `anchor`. That
+    // means `anchor` was below pc and the anchor's instruction stream
+    // skipped past pc. Fall back to a single-line listing at pc.
+    if pc_idx.is_none() {
+        let (_, text) = disasm_one(bus, pc);
+        return vec![(pc, text)];
+    }
+
+    lines
+}
