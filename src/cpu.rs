@@ -1,5 +1,6 @@
 #![allow(clippy::uninlined_format_args)]
 use crate::bus::Bus;
+use crate::debug::{BreakpointSet, CallFrame, CallKind, ShadowCallStack};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Default)]
@@ -22,6 +23,19 @@ pub struct Cpu {
     pub nmi_pending: bool,
     pub firq_pending: bool,
     pub irq_pending: bool,
+    /// Shadow call stack — pushed by BSR/LBSR/JSR/SWI/IRQ/FIRQ/NMI
+    /// handlers inside `step`, popped by RTS/RTI. Owned by `Cpu` so
+    /// the call/return paths can update it inline without going
+    /// through trait objects. UI layers read this via
+    /// `cpu.shadow_stack.frames()`.
+    pub shadow_stack: ShadowCallStack,
+    /// Execution-breakpoint set. The run loop is expected to call
+    /// `breakpoints.should_break(cpu.r.pc)` *before* each `step` and
+    /// pause execution if it returns `Some(id)`. Kept on `Cpu` (not
+    /// in a higher-level runtime) so emfe plugins that embed the
+    /// core can expose breakpoints through the same struct without a
+    /// parallel storage layer.
+    pub breakpoints: BreakpointSet,
 }
 
 impl Default for Cpu {
@@ -54,6 +68,8 @@ impl Cpu {
             nmi_pending: false,
             firq_pending: false,
             irq_pending: false,
+            shadow_stack: ShadowCallStack::new(),
+            breakpoints: BreakpointSet::new(),
         }
     }
 
@@ -64,6 +80,10 @@ impl Cpu {
         self.r.pc = ((pch as u16) << 8) | (pcl as u16);
         self.r.cc = I | F; // mask interrupts by default
         self.r.dp = 0;
+        // Frames recorded before reset belong to a program that has
+        // just gone away — keeping them would make the call-stack
+        // pane lie about who's currently executing.
+        self.shadow_stack.clear();
     }
 
     pub fn set_pc(&mut self, pc: u16) {
@@ -522,6 +542,15 @@ impl Cpu {
         let vec = (hi << 8) | lo;
         self.r.pc = vec;
         self.nmi_pending = false;
+        // Async event — there's no "call site instruction" so we fold
+        // it onto pc_prev (the instruction the NMI interrupted).
+        self.shadow_stack.push(CallFrame {
+            return_addr: pc_prev,
+            call_site: pc_prev,
+            target: vec,
+            sp_at_call: self.r.s,
+            kind: CallKind::Nmi,
+        });
         if DEBUG_IRQ_LOG.load(Ordering::SeqCst) {
             println!("[irq] NMI: pc=${:04X} -> vec=${:04X}", pc_prev, vec);
         }
@@ -540,6 +569,13 @@ impl Cpu {
         let vec = (hi << 8) | lo;
         self.r.pc = vec;
         self.firq_pending = false;
+        self.shadow_stack.push(CallFrame {
+            return_addr: pc_prev,
+            call_site: pc_prev,
+            target: vec,
+            sp_at_call: self.r.s,
+            kind: CallKind::Firq,
+        });
         if DEBUG_IRQ_LOG.load(Ordering::SeqCst) {
             println!("[irq] FIRQ: pc=${:04X} -> vec=${:04X}", pc_prev, vec);
         }
@@ -564,6 +600,13 @@ impl Cpu {
         let vec = (hi << 8) | lo;
         self.r.pc = vec;
         self.irq_pending = false;
+        self.shadow_stack.push(CallFrame {
+            return_addr: pc_prev,
+            call_site: pc_prev,
+            target: vec,
+            sp_at_call: self.r.s,
+            kind: CallKind::Irq,
+        });
         if DEBUG_IRQ_LOG.load(Ordering::SeqCst) {
             println!("[irq] IRQ: pc=${:04X} -> vec=${:04X}", pc_prev, vec);
         }
@@ -772,6 +815,7 @@ impl Cpu {
                     }
                 } else if sub == 0x3F {
                     // SWI2 — vector at $FFF4/$FFF5
+                    let ret = self.r.pc;
                     self.r.cc |= E;
                     self.push8(bus, self.r.cc);
                     self.push8(bus, self.r.a);
@@ -785,6 +829,13 @@ impl Cpu {
                     let hi = bus.read8(0xFFF4) as u16;
                     let lo = bus.read8(0xFFF5) as u16;
                     self.r.pc = (hi << 8) | lo;
+                    self.shadow_stack.push(CallFrame {
+                        return_addr: ret,
+                        call_site: pc0,
+                        target: self.r.pc,
+                        sp_at_call: self.r.s,
+                        kind: CallKind::Swi(2),
+                    });
                     consumed = 20;
                     if trace {
                         println!("{:04X}: 10 3F   SWI2", pc0);
@@ -1331,6 +1382,7 @@ impl Cpu {
                 let sub = self.fetch8(bus);
                 if sub == 0x3F {
                     // SWI3 — vector at $FFF2/$FFF3
+                    let ret = self.r.pc;
                     self.r.cc |= E;
                     self.push8(bus, self.r.cc);
                     self.push8(bus, self.r.a);
@@ -1344,6 +1396,13 @@ impl Cpu {
                     let hi = bus.read8(0xFFF2) as u16;
                     let lo = bus.read8(0xFFF3) as u16;
                     self.r.pc = (hi << 8) | lo;
+                    self.shadow_stack.push(CallFrame {
+                        return_addr: ret,
+                        call_site: pc0,
+                        target: self.r.pc,
+                        sp_at_call: self.r.s,
+                        kind: CallKind::Swi(3),
+                    });
                     consumed = 20;
                     if trace {
                         println!("{:04X}: 11 3F   SWI3", pc0);
@@ -1681,6 +1740,13 @@ impl Cpu {
                 self.r.s = self.r.s.wrapping_sub(1);
                 bus.write8(self.r.s, (ret >> 8) as u8);
                 self.r.pc = addr;
+                self.shadow_stack.push(CallFrame {
+                    return_addr: ret,
+                    call_site: pc0,
+                    target: self.r.pc,
+                    sp_at_call: self.r.s,
+                    kind: CallKind::Jsr,
+                });
                 consumed = 7;
                 if trace {
                     println!("{:04X}: 9D {:02X}   JSR <${:02X}", pc0, zp, zp);
@@ -1695,6 +1761,13 @@ impl Cpu {
                 self.r.s = self.r.s.wrapping_sub(1);
                 bus.write8(self.r.s, (ret >> 8) as u8);
                 self.r.pc = ea;
+                self.shadow_stack.push(CallFrame {
+                    return_addr: ret,
+                    call_site: pc0,
+                    target: self.r.pc,
+                    sp_at_call: self.r.s,
+                    kind: CallKind::Jsr,
+                });
                 consumed = 7 + addcyc;
                 if trace {
                     println!("{:04X}: AD ..    JSR {}", pc0, desc);
@@ -2022,6 +2095,13 @@ impl Cpu {
                 self.r.s = self.r.s.wrapping_sub(1);
                 bus.write8(self.r.s, (ret >> 8) as u8);
                 self.r.pc = (self.r.pc as i32 + off as i32) as u16;
+                self.shadow_stack.push(CallFrame {
+                    return_addr: ret,
+                    call_site: pc0,
+                    target: self.r.pc,
+                    sp_at_call: self.r.s,
+                    kind: CallKind::Bsr,
+                });
                 consumed = 9;
                 if trace {
                     println!("{:04X}: 17 {:04X} LBSR", pc0, off as u16);
@@ -2034,6 +2114,10 @@ impl Cpu {
                 let lo = bus.read8(self.r.s);
                 self.r.s = self.r.s.wrapping_add(1);
                 self.r.pc = ((hi as u16) << 8) | (lo as u16);
+                // SP after the pop matches the recorded `sp_at_call`
+                // for a normal call/return pair, which is the
+                // condition pop_for_return uses to validate the frame.
+                self.shadow_stack.pop_for_return(self.r.s);
                 consumed = 5;
                 if trace {
                     println!("{:04X}: 39        RTS", pc0);
@@ -2053,6 +2137,11 @@ impl Cpu {
                     self.r.u = self.pull16(bus);
                 }
                 self.r.pc = self.pull16(bus);
+                // RTI may also peel off any stray non-interrupt frames
+                // sitting on top (e.g., a BSR whose RTS the program
+                // skipped via `puls pc`). pop_for_rti walks until it
+                // finds a Swi/Irq/Firq/Nmi frame.
+                self.shadow_stack.pop_for_rti();
                 // 6809: full frame ~15, minimal ~12
                 consumed = if e_set { 15 } else { 12 };
                 if trace {
@@ -2091,6 +2180,7 @@ impl Cpu {
             }
             0x3F => {
                 // SWI — vector at $FFFA/$FFFB
+                let ret = self.r.pc;
                 self.r.cc |= E;
                 self.push8(bus, self.r.cc);
                 self.push8(bus, self.r.a);
@@ -2104,6 +2194,13 @@ impl Cpu {
                 let hi = bus.read8(0xFFFA) as u16;
                 let lo = bus.read8(0xFFFB) as u16;
                 self.r.pc = (hi << 8) | lo;
+                self.shadow_stack.push(CallFrame {
+                    return_addr: ret,
+                    call_site: pc0,
+                    target: self.r.pc,
+                    sp_at_call: self.r.s,
+                    kind: CallKind::Swi(1),
+                });
                 consumed = 19;
                 if trace {
                     println!("{:04X}: 3F        SWI", pc0);
@@ -2119,6 +2216,13 @@ impl Cpu {
                 self.r.s = self.r.s.wrapping_sub(1);
                 bus.write8(self.r.s, (ret >> 8) as u8);
                 self.r.pc = (self.r.pc as i16).wrapping_add(off) as u16;
+                self.shadow_stack.push(CallFrame {
+                    return_addr: ret,
+                    call_site: pc0,
+                    target: self.r.pc,
+                    sp_at_call: self.r.s,
+                    kind: CallKind::Bsr,
+                });
                 consumed = 7;
                 if trace {
                     println!("{:04X}: 8D {:02X}   BSR", pc0, (off as i8) as u8);
@@ -2297,6 +2401,13 @@ impl Cpu {
                 self.r.s = self.r.s.wrapping_sub(1);
                 bus.write8(self.r.s, (ret >> 8) as u8);
                 self.r.pc = addr;
+                self.shadow_stack.push(CallFrame {
+                    return_addr: ret,
+                    call_site: pc0,
+                    target: self.r.pc,
+                    sp_at_call: self.r.s,
+                    kind: CallKind::Jsr,
+                });
                 consumed = 7;
                 if trace {
                     println!("{:04X}: BD {:04X} JSR ${:04X}", pc0, addr, addr);

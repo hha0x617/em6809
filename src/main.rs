@@ -2853,6 +2853,23 @@ fn main() {
                         // Record the about-to-execute PC as a confirmed
                         // instruction boundary for the live-disasm pane.
                         viewer_cpu.record_instruction_pc(cpu_worker.r.pc);
+                        // Execution breakpoint check: if PC matches an
+                        // enabled breakpoint, pause *before* executing
+                        // it. should_break() advances ignore/hit
+                        // counters as a side effect, so guard it on
+                        // the not-already-paused branch — otherwise a
+                        // single physical hit would tick the counter
+                        // every frame the user lingers at the BP.
+                        if !viewer_cpu.is_paused()
+                            && cpu_worker
+                                .breakpoints
+                                .should_break(cpu_worker.r.pc)
+                                .is_some()
+                        {
+                            viewer_cpu.set_paused(true);
+                            viewer_cpu.request_refresh_hex_listing();
+                            continue;
+                        }
                         // trace printing removed in GUI-only mode
                         cpu_worker.step(bus_worker.as_mut(), false);
                         // If we just settled at a new PC while paused
@@ -4167,6 +4184,20 @@ fn main() {
             // itself agrees that this byte is an opcode.
             if let Some(viewer) = &reg_viewer {
                 viewer.record_instruction_pc(cpu.r.pc);
+            }
+            // Execution breakpoint check (mirrors the worker-thread
+            // loop's logic). A hit pauses the viewer and skips the
+            // step, so the loop falls through to the same paused path
+            // it would for a user-pressed Pause button.
+            {
+                let viewer_paused = reg_viewer.as_ref().map(|v| v.is_paused()).unwrap_or(false);
+                if !viewer_paused && cpu.breakpoints.should_break(cpu.r.pc).is_some() {
+                    if let Some(viewer) = &reg_viewer {
+                        viewer.set_paused(true);
+                        viewer.request_refresh_hex_listing();
+                    }
+                    continue;
+                }
             }
             // trace printing removed in GUI-only mode
             cpu.step(bus.as_mut(), false);
