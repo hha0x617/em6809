@@ -1,6 +1,135 @@
 #![allow(clippy::uninlined_format_args)]
+use std::collections::BTreeSet;
+
 use crate::bus::{Bus, Memory};
 use crate::cpu::Cpu;
+use crate::disasm::disasm_one;
+
+// =============================================================================
+// Instruction boundaries
+// =============================================================================
+//
+// MC6809 instructions are 1..5 bytes long. Decoding `bus[pc]` as if it were
+// always an opcode goes well only when `pc` happens to be the start of a real
+// instruction; offset by one byte and the entire downstream stream is wrong.
+// That's why disassembly views that anchor on `pc - some_constant` look
+// stable until the user reaches a region where the chosen offset isn't a
+// boundary, and then everything desyncs — including the current-PC line and
+// any breakpoint markers, since those are matched by address against the
+// (now-misaligned) line list.
+//
+// `InstructionBoundaries` is a confirmed-boundary set: every address it
+// holds is *known* to be an instruction start, either because the CPU has
+// actually executed that PC or because a linear sweep of a known code
+// region disassembled an instruction starting there. Disassembly views
+// then anchor on `boundaries.floor(pc)` — the most recent confirmed
+// boundary at or before `pc` — guaranteeing the rendered listing aligns
+// with the real instruction stream around `pc`.
+
+/// A set of addresses that are *known* to be instruction starts.
+///
+/// Used by disassembly views to pick a safe anchor near the current PC
+/// instead of guessing with `pc - constant` arithmetic. Populate via
+/// [`InstructionBoundaries::insert`] (per executed instruction) and
+/// [`linear_sweep`] (after loading code).
+#[derive(Debug, Default, Clone)]
+pub struct InstructionBoundaries {
+    set: BTreeSet<u16>,
+}
+
+impl InstructionBoundaries {
+    pub fn new() -> Self {
+        Self {
+            set: BTreeSet::new(),
+        }
+    }
+
+    /// Forget every recorded boundary. Call this when the program is
+    /// reloaded, the bus is reset, or memory contents change in a way
+    /// that invalidates previously-confirmed instruction starts.
+    pub fn clear(&mut self) {
+        self.set.clear();
+    }
+
+    /// Record `addr` as an instruction start.
+    pub fn insert(&mut self, addr: u16) {
+        self.set.insert(addr);
+    }
+
+    pub fn extend<I: IntoIterator<Item = u16>>(&mut self, iter: I) {
+        self.set.extend(iter);
+    }
+
+    /// Largest known boundary `<= addr`. `None` if no boundary at or
+    /// below `addr` has been seen yet.
+    pub fn floor(&self, addr: u16) -> Option<u16> {
+        self.set.range(..=addr).next_back().copied()
+    }
+
+    /// Smallest known boundary `>= addr`. `None` if no boundary at or
+    /// above `addr` has been seen yet.
+    pub fn ceil(&self, addr: u16) -> Option<u16> {
+        self.set.range(addr..).next().copied()
+    }
+
+    /// Iterate boundaries in ascending order over the inclusive range
+    /// `[from, to]`. Implements `DoubleEndedIterator` so callers can
+    /// walk the range from either side via `.rev()`.
+    pub fn iter_range(&self, from: u16, to: u16) -> impl DoubleEndedIterator<Item = u16> + '_ {
+        self.set.range(from..=to).copied()
+    }
+
+    pub fn contains(&self, addr: u16) -> bool {
+        self.set.contains(&addr)
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+}
+
+/// Disassemble linearly from `start` up to (but not including) `end`,
+/// recording each instruction start in `boundaries`.
+///
+/// This is the cheap pass to run right after a program load — it walks
+/// the byte stream as if every encountered byte starts an instruction,
+/// which is correct for pure code regions. In code/data mixed regions
+/// the sweep may stamp boundaries onto bytes that are actually data;
+/// the resulting "phantom" boundaries do no harm as long as the
+/// real PC ends up inside a true code region, because
+/// [`InstructionBoundaries::floor`] will return whichever true boundary
+/// is closest.
+///
+/// Stops when `pc >= end` or when it would wrap past 0xFFFF.
+pub fn linear_sweep<B: Bus + ?Sized>(
+    bus: &mut B,
+    start: u16,
+    end: u16,
+    boundaries: &mut InstructionBoundaries,
+) {
+    if end <= start {
+        return;
+    }
+    let mut pc = start;
+    while pc < end {
+        boundaries.insert(pc);
+        let (consumed, _) = disasm_one(bus, pc);
+        // disasm_one always consumes at least one byte for valid 6809;
+        // guard against pathological zero-consume to avoid infinite loop.
+        if consumed == 0 {
+            break;
+        }
+        let (next, wrapped) = pc.overflowing_add(consumed);
+        if wrapped || next <= pc {
+            break;
+        }
+        pc = next;
+    }
+}
 
 pub fn dump_registers(cpu: &Cpu) {
     let r = &cpu.r;
