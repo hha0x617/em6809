@@ -43,6 +43,12 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             .clicked()
                         {
                             app.follow_pc_flag.store(follow_pc, Ordering::SeqCst);
+                            // Toggling on should immediately re-center on the
+                            // current PC even if it hasn't changed since the
+                            // last paint — the user just expressed intent.
+                            if follow_pc {
+                                app.scroll_to_pc_req.store(true, Ordering::SeqCst);
+                            }
                         }
                         if have_lst
                             && have_hex
@@ -118,6 +124,11 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                                 cur_pc,
                                             );
                                         }
+                                        let scroll_target = if follow_pc && need_scroll {
+                                            pc_line_index
+                                        } else {
+                                            None
+                                        };
                                         let (highlight, inner) = render_listing_lines(
                                             ui,
                                             &s,
@@ -126,6 +137,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             total_rows,
                                             cur_pc,
                                             &app.cmds,
+                                            scroll_target,
                                         );
                                         highlight_rect = highlight;
                                         inner_rect = inner;
@@ -169,6 +181,11 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             cur_pc,
                                         );
                                     }
+                                    let scroll_target = if follow_pc && need_scroll {
+                                        pc_line_index
+                                    } else {
+                                        None
+                                    };
                                     let (highlight, inner) = render_listing_lines(
                                         ui,
                                         text,
@@ -177,30 +194,30 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         total_rows,
                                         cur_pc,
                                         &app.cmds,
+                                        scroll_target,
                                     );
                                     highlight_rect = highlight;
                                     inner_rect = inner;
                                 }
                             }
 
+                            // The actual scroll-to-PC happens inside
+                            // render_listing_lines (it has to, because
+                            // `scroll_to_rect` needs to fire from
+                            // *inside* the vertical ScrollArea closure).
+                            // Out here we just acknowledge the request.
                             if follow_pc && need_scroll {
-                                if let Some(idx) = pc_line_index {
-                                    if let Some(inner) = inner_rect {
-                                        let y = inner.top() + idx as f32 * row_height_with_spacing;
-                                        let rect = egui::Rect::from_min_size(
-                                            egui::pos2(inner.left(), y),
-                                            egui::vec2(inner.width(), row_height),
-                                        );
-                                        ui.scroll_to_rect(rect, None);
-                                        app.scroll_to_pc_req.store(false, Ordering::SeqCst);
-                                        app.last_pc_for_scroll = cur_pc;
-                                    }
-                                } else if let Some(rect) = highlight_rect {
-                                    ui.scroll_to_rect(rect, None);
+                                if pc_line_index.is_some() || highlight_rect.is_some() {
                                     app.scroll_to_pc_req.store(false, Ordering::SeqCst);
                                     app.last_pc_for_scroll = cur_pc;
                                 }
                             }
+                            // `inner_rect` and `row_height_with_spacing` are
+                            // no longer used after the move; silence dead-code
+                            // warnings without losing the locals (other code
+                            // may reference inner_rect later).
+                            let _ = inner_rect;
+                            let _ = row_height_with_spacing;
                         });
                 });
         });
@@ -245,6 +262,12 @@ fn render_listing_lines(
     total_rows: usize,
     cur_pc: u16,
     cmds: &std::sync::Arc<std::sync::Mutex<Vec<Command>>>,
+    // When `Some(idx)`, the inner ScrollArea will scroll so that
+    // line `idx` lands centered in the viewport. Must be done from
+    // *inside* the ScrollArea closure — calling `scroll_to_rect`
+    // from outside it routes the request to the wrong parent and
+    // is what made Follow PC look totally unresponsive.
+    scroll_target_idx: Option<usize>,
 ) -> (Option<egui::Rect>, Option<egui::Rect>) {
     let mut highlight_rect: Option<egui::Rect> = None;
     let total_rows = total_rows.min(offsets.len());
@@ -254,6 +277,37 @@ fn render_listing_lines(
     let output = egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_rows(ui, row_height, total_rows, |ui, row_range| {
+            let row_h_with_spacing = row_height + ui.spacing().item_spacing.y;
+            // Sticky-scroll Follow PC: only re-center the viewport when
+            // the target row has actually drifted out of the visible
+            // window. As long as PC stays within the rows currently
+            // rendered by `show_rows`, leave the scroll position alone
+            // — the per-row PC highlight in the loop below is enough
+            // visual feedback, and re-centering on every step would
+            // make the listing flicker in a way that's harder to read.
+            //
+            // Note `row_range` is the half-open `[start, end)` range
+            // of rows `show_rows` is rendering this frame. Rows at
+            // the edges of that range may be only partially visible,
+            // but treating them as in-view matches how a user would
+            // perceive "PC is still on screen".
+            //
+            // (See render_listing_lines docstring above for the
+            //  reason this scroll fires from inside the closure.)
+            if let Some(target_idx) = scroll_target_idx {
+                let in_view = target_idx >= row_range.start && target_idx < row_range.end;
+                if !in_view {
+                    let visible_top = ui.min_rect().top();
+                    let content_origin_y =
+                        visible_top - row_range.start as f32 * row_h_with_spacing;
+                    let y = content_origin_y + target_idx as f32 * row_h_with_spacing;
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.min_rect().left(), y),
+                        egui::vec2(ui.available_width().max(64.0), row_height),
+                    );
+                    ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                }
+            }
             let end = row_range.end.min(offsets.len());
             for idx in row_range.start..end {
                 let line = line_at(text, offsets, idx);
