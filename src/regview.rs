@@ -784,6 +784,13 @@ pub mod gui {
         /// Remove the breakpoint with this id. Used by the
         /// breakpoints panel's per-row delete button.
         RemoveBreakpoint(u32),
+        /// Set (or clear, with an empty string) the condition
+        /// expression on the breakpoint with this id. Empty / all-
+        /// whitespace strings are stored as `None`. The expression
+        /// is **not** validated here; if it fails to parse, the
+        /// fail-safe path in `BreakpointSet::check` triggers the BP
+        /// anyway so the user notices.
+        SetBreakpointCondition(u32, String),
         ApplyRegs(RegSnapshot),
         MemWrite(Vec<(u16, u8)>),
         OpenImage {

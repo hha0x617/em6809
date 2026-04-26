@@ -232,9 +232,175 @@ fn breakpoint_set_condition_stores_string() {
         .set_condition(id, Some("a == 5".to_string())));
     let bp = cpu.breakpoints.get(id).unwrap();
     assert_eq!(bp.condition.as_deref(), Some("a == 5"));
-    // Currently the condition is stored but not evaluated, so the BP
-    // still triggers unconditionally.
+    // The pre-condition path (`should_break`) still triggers
+    // unconditionally — it doesn't see the condition. The
+    // condition-aware path is exercised in the dedicated
+    // condition_* tests below.
     assert_eq!(cpu.breakpoints.should_break(0x1234), Some(id));
+}
+
+// ============================================================
+// Condition evaluator (BreakpointSet::check / Cpu::check_breakpoint)
+// ============================================================
+
+#[test]
+fn condition_no_condition_always_triggers() {
+    let mut cpu = Cpu::new();
+    cpu.r.pc = 0x1234;
+    let id = cpu.breakpoints.add(0x1234);
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+}
+
+#[test]
+fn condition_empty_string_treated_as_no_condition() {
+    let mut cpu = Cpu::new();
+    cpu.r.pc = 0x1234;
+    let id = cpu.breakpoints.add(0x1234);
+    assert!(cpu.breakpoints.set_condition(id, Some("   ".to_string())));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+}
+
+#[test]
+fn condition_register_equality_true() {
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0x42;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("a == 0x42".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+    let bp = cpu.breakpoints.get(id).unwrap();
+    assert_eq!(bp.hit_count, 1, "a true condition counts as a hit");
+}
+
+#[test]
+fn condition_register_equality_false_skips_silently() {
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0x10;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("a == 0x42".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+    let bp = cpu.breakpoints.get(id).unwrap();
+    assert_eq!(
+        bp.hit_count, 0,
+        "a false condition does not advance hit_count"
+    );
+}
+
+#[test]
+fn condition_dollar_hex_literal() {
+    let mut cpu = Cpu::new();
+    cpu.r.pc = 0x1234;
+    cpu.r.x = 0x0FFE;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("x < $1000".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+}
+
+#[test]
+fn condition_d_register_is_a_concat_b() {
+    // D should read as ((a << 8) | b)
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0x12;
+    cpu.r.b = 0x34;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("d == 0x1234".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+}
+
+#[test]
+fn condition_logical_and_short_circuit() {
+    let mut cpu = Cpu::new();
+    cpu.r.x = 0x100;
+    cpu.r.y = 0x300;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("x > 0 && y < 0x400".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+
+    cpu.breakpoints
+        .set_condition(id, Some("x > 0 && y > 0x400".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+}
+
+#[test]
+fn condition_logical_or_and_negation() {
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0;
+    cpu.r.b = 1;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("a == 0 || b == 0".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+
+    cpu.breakpoints
+        .set_condition(id, Some("!(a == 0)".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+}
+
+#[test]
+fn condition_arithmetic() {
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0x10;
+    cpu.r.b = 0x20;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("a + b == 0x30".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+}
+
+#[test]
+fn condition_parens_override_precedence() {
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0;
+    cpu.r.b = 1;
+    let id = cpu.breakpoints.add(0x1234);
+    // Without parens: a == 0 || b == 0 && false → first disjunct
+    // wins. With parens around the OR, the AND clamps it.
+    cpu.breakpoints
+        .set_condition(id, Some("(a == 0 || b == 0) && a + b > 100".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+}
+
+#[test]
+fn condition_parse_error_falls_through_to_trigger() {
+    // Fail-safe: a malformed condition makes the BP trigger anyway,
+    // so the user notices it instead of silently skipping forever.
+    let mut cpu = Cpu::new();
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("a == == 5".to_string()));
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
+}
+
+#[test]
+fn condition_ignore_count_only_consumed_when_condition_true() {
+    let mut cpu = Cpu::new();
+    cpu.r.a = 0x10;
+    let id = cpu.breakpoints.add(0x1234);
+    cpu.breakpoints
+        .set_condition(id, Some("a == 0x42".to_string()));
+    cpu.breakpoints.set_ignore_count(id, 3);
+
+    // Condition is false; ignore_count must NOT be consumed.
+    for _ in 0..5 {
+        assert_eq!(cpu.check_breakpoint(0x1234), None);
+    }
+    let bp = cpu.breakpoints.get(id).unwrap();
+    assert_eq!(
+        bp.ignore_count, 3,
+        "false-condition skips do not burn ignore ticks"
+    );
+
+    // Now flip A so the condition is true; first 3 hits go to the
+    // ignore counter, the 4th finally triggers.
+    cpu.r.a = 0x42;
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+    assert_eq!(cpu.check_breakpoint(0x1234), None);
+    assert_eq!(cpu.check_breakpoint(0x1234), Some(id));
 }
 
 #[test]

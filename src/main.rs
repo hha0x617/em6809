@@ -1800,6 +1800,16 @@ fn main() {
                                                 .remove(em6809::debug::BreakpointId(id));
                                             push_debug_snapshots(&viewer_cpu, &cpu_worker);
                                         }
+                                        regview::Command::SetBreakpointCondition(id, expr) => {
+                                            let bp_id = em6809::debug::BreakpointId(id);
+                                            let cond = if expr.trim().is_empty() {
+                                                None
+                                            } else {
+                                                Some(expr)
+                                            };
+                                            cpu_worker.breakpoints.set_condition(bp_id, cond);
+                                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                        }
                                         regview::Command::SetPc(a) => {
                                             cpu_worker.set_pc(a);
                                             viewer_cpu.set_memory_window(
@@ -2968,17 +2978,16 @@ fn main() {
                         // instruction boundary for the live-disasm pane.
                         viewer_cpu.record_instruction_pc(cpu_worker.r.pc);
                         // Execution breakpoint check: if PC matches an
-                        // enabled breakpoint, pause *before* executing
-                        // it. should_break() advances ignore/hit
-                        // counters as a side effect, so guard it on
-                        // the not-already-paused branch — otherwise a
-                        // single physical hit would tick the counter
-                        // every frame the user lingers at the BP.
+                        // enabled breakpoint (and the BP's condition,
+                        // if any, evaluates true), pause *before*
+                        // executing it. check_breakpoint() advances
+                        // ignore/hit counters as a side effect, so
+                        // guard it on the not-already-paused branch —
+                        // otherwise a single physical hit would tick
+                        // the counter every frame the user lingers at
+                        // the BP.
                         if !viewer_cpu.is_paused()
-                            && cpu_worker
-                                .breakpoints
-                                .should_break(cpu_worker.r.pc)
-                                .is_some()
+                            && cpu_worker.check_breakpoint(cpu_worker.r.pc).is_some()
                         {
                             viewer_cpu.set_paused(true);
                             viewer_cpu.request_refresh_hex_listing();
@@ -3540,6 +3549,16 @@ fn main() {
                             cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
                             push_debug_snapshots(&viewer, &cpu);
                         }
+                        regview::Command::SetBreakpointCondition(id, expr) => {
+                            let bp_id = em6809::debug::BreakpointId(id);
+                            let cond = if expr.trim().is_empty() {
+                                None
+                            } else {
+                                Some(expr)
+                            };
+                            cpu.breakpoints.set_condition(bp_id, cond);
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
                         regview::Command::RefreshHexListing => {
                             let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let (policy, _win_len) = viewer.get_span_policy();
@@ -3766,6 +3785,16 @@ fn main() {
                             }
                             regview::Command::RemoveBreakpoint(id) => {
                                 cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                                push_debug_snapshots(&viewer, &cpu);
+                            }
+                            regview::Command::SetBreakpointCondition(id, expr) => {
+                                let bp_id = em6809::debug::BreakpointId(id);
+                                let cond = if expr.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(expr)
+                                };
+                                cpu.breakpoints.set_condition(bp_id, cond);
                                 push_debug_snapshots(&viewer, &cpu);
                             }
                             regview::Command::SetPc(a) => {
@@ -4339,7 +4368,7 @@ fn main() {
             // it would for a user-pressed Pause button.
             {
                 let viewer_paused = reg_viewer.as_ref().map(|v| v.is_paused()).unwrap_or(false);
-                if !viewer_paused && cpu.breakpoints.should_break(cpu.r.pc).is_some() {
+                if !viewer_paused && cpu.check_breakpoint(cpu.r.pc).is_some() {
                     if let Some(viewer) = &reg_viewer {
                         viewer.set_paused(true);
                         viewer.request_refresh_hex_listing();
@@ -4503,6 +4532,16 @@ fn main() {
                         }
                         regview::Command::RemoveBreakpoint(id) => {
                             cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
+                        regview::Command::SetBreakpointCondition(id, expr) => {
+                            let bp_id = em6809::debug::BreakpointId(id);
+                            let cond = if expr.trim().is_empty() {
+                                None
+                            } else {
+                                Some(expr)
+                            };
+                            cpu.breakpoints.set_condition(bp_id, cond);
                             push_debug_snapshots(&viewer, &cpu);
                         }
                         regview::Command::SetPc(a) => {

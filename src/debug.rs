@@ -2,8 +2,465 @@
 use std::collections::BTreeSet;
 
 use crate::bus::{Bus, Memory};
-use crate::cpu::Cpu;
+use crate::cpu::{Cpu, Registers};
 use crate::disasm::disasm_one;
+
+// =============================================================================
+// Breakpoint condition expression language
+// =============================================================================
+//
+// Tiny calculator-style expression language used by `Breakpoint::condition`.
+// Recognised tokens are arithmetic-and-comparison friendly so users can write
+// the kinds of guards they would naturally type into a debugger:
+//
+//   a == 0x42
+//   pc >= $1000 && pc < $2000
+//   x > 0 && y != x
+//   !(d == 0)
+//   a + b == 0xFF
+//
+// Grammar (loosely; recursive-descent, left-associative for binary ops at the
+// same precedence level):
+//
+//   expr     := or_expr
+//   or_expr  := and_expr   ( "||"  and_expr  )*
+//   and_expr := not_expr   ( "&&"  not_expr  )*
+//   not_expr := "!" not_expr | rel_expr
+//   rel_expr := add_expr   ( cmp_op  add_expr )?         (no chaining)
+//   add_expr := mul_expr   ( ("+" | "-") mul_expr )*
+//   mul_expr := unary      ( ("*" | "/") unary    )*
+//   unary    := "-" unary  | atom
+//   atom     := number | register | "(" expr ")"
+//
+//   number   := decimal | "0x" hex | "$" hex
+//   register := a|b|d|x|y|u|s|pc|dp|cc      (case-insensitive)
+//
+// Boolean values are represented as 0/1 i64 so arithmetic and logical ops
+// compose without a separate value type. The final result of `evaluate` is
+// `result != 0`. There is no memory access (`[addr]`) or CC-bit accessor in
+// this v1; both are queued for a follow-up.
+pub mod cond {
+    use super::Registers;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum CondError {
+        /// Tokenizer hit a character it doesn't know about.
+        UnknownChar(char),
+        /// A token sequence didn't match the grammar.
+        Parse(String),
+        /// Successful parse, but evaluation hit something unrecoverable
+        /// (currently only "divide by zero").
+        DivideByZero,
+        /// The string `regs.a`-style would need a CC-bit accessor or
+        /// memory read that this v1 doesn't support yet. Reserved.
+        Unsupported(String),
+    }
+
+    impl std::fmt::Display for CondError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                CondError::UnknownChar(c) => write!(f, "unknown character '{}'", c),
+                CondError::Parse(msg) => write!(f, "parse error: {}", msg),
+                CondError::DivideByZero => write!(f, "divide by zero"),
+                CondError::Unsupported(s) => write!(f, "unsupported: {}", s),
+            }
+        }
+    }
+
+    type Result<T> = std::result::Result<T, CondError>;
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Tok {
+        Num(i64),
+        Ident(String),
+        Eq,
+        Ne,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+        AndAnd,
+        OrOr,
+        Bang,
+        Plus,
+        Minus,
+        Star,
+        Slash,
+        LParen,
+        RParen,
+    }
+
+    fn tokenize(s: &str) -> Result<Vec<Tok>> {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        let mut out = Vec::new();
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c.is_whitespace() {
+                i += 1;
+                continue;
+            }
+            // Numeric literal: 0x.., $.., or decimal.
+            if c == '$' {
+                i += 1;
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_hexdigit() {
+                    i += 1;
+                }
+                if start == i {
+                    return Err(CondError::Parse("expected hex digits after '$'".into()));
+                }
+                let v = i64::from_str_radix(&s[start..i], 16)
+                    .map_err(|e| CondError::Parse(e.to_string()))?;
+                out.push(Tok::Num(v));
+                continue;
+            }
+            if c == '0' && i + 1 < bytes.len() && (bytes[i + 1] as char) == 'x' {
+                i += 2;
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_hexdigit() {
+                    i += 1;
+                }
+                if start == i {
+                    return Err(CondError::Parse("expected hex digits after '0x'".into()));
+                }
+                let v = i64::from_str_radix(&s[start..i], 16)
+                    .map_err(|e| CondError::Parse(e.to_string()))?;
+                out.push(Tok::Num(v));
+                continue;
+            }
+            if c.is_ascii_digit() {
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_digit() {
+                    i += 1;
+                }
+                let v: i64 = s[start..i]
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| CondError::Parse(e.to_string()))?;
+                out.push(Tok::Num(v));
+                continue;
+            }
+            // Identifier (register name).
+            if c.is_ascii_alphabetic() || c == '_' {
+                let start = i;
+                while i < bytes.len() && {
+                    let ch = bytes[i] as char;
+                    ch.is_ascii_alphanumeric() || ch == '_'
+                } {
+                    i += 1;
+                }
+                out.push(Tok::Ident(s[start..i].to_ascii_lowercase()));
+                continue;
+            }
+            // Multi-character operators first.
+            let two: &str = if i + 1 < bytes.len() {
+                &s[i..i + 2]
+            } else {
+                ""
+            };
+            match two {
+                "==" => {
+                    out.push(Tok::Eq);
+                    i += 2;
+                    continue;
+                }
+                "!=" => {
+                    out.push(Tok::Ne);
+                    i += 2;
+                    continue;
+                }
+                "<=" => {
+                    out.push(Tok::Le);
+                    i += 2;
+                    continue;
+                }
+                ">=" => {
+                    out.push(Tok::Ge);
+                    i += 2;
+                    continue;
+                }
+                "&&" => {
+                    out.push(Tok::AndAnd);
+                    i += 2;
+                    continue;
+                }
+                "||" => {
+                    out.push(Tok::OrOr);
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+            // Single-character punctuation.
+            let tok = match c {
+                '<' => Tok::Lt,
+                '>' => Tok::Gt,
+                '!' => Tok::Bang,
+                '+' => Tok::Plus,
+                '-' => Tok::Minus,
+                '*' => Tok::Star,
+                '/' => Tok::Slash,
+                '(' => Tok::LParen,
+                ')' => Tok::RParen,
+                other => return Err(CondError::UnknownChar(other)),
+            };
+            out.push(tok);
+            i += 1;
+        }
+        Ok(out)
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Reg {
+        A,
+        B,
+        D,
+        X,
+        Y,
+        U,
+        S,
+        Pc,
+        Dp,
+        Cc,
+    }
+
+    fn reg_from_ident(name: &str) -> Result<Reg> {
+        match name {
+            "a" => Ok(Reg::A),
+            "b" => Ok(Reg::B),
+            "d" => Ok(Reg::D),
+            "x" => Ok(Reg::X),
+            "y" => Ok(Reg::Y),
+            "u" => Ok(Reg::U),
+            "s" => Ok(Reg::S),
+            "pc" => Ok(Reg::Pc),
+            "dp" => Ok(Reg::Dp),
+            "cc" => Ok(Reg::Cc),
+            other => Err(CondError::Parse(format!("unknown identifier '{}'", other))),
+        }
+    }
+
+    fn reg_value(r: Reg, regs: &Registers) -> i64 {
+        match r {
+            Reg::A => regs.a as i64,
+            Reg::B => regs.b as i64,
+            Reg::D => (((regs.a as u16) << 8) | (regs.b as u16)) as i64,
+            Reg::X => regs.x as i64,
+            Reg::Y => regs.y as i64,
+            Reg::U => regs.u as i64,
+            Reg::S => regs.s as i64,
+            Reg::Pc => regs.pc as i64,
+            Reg::Dp => regs.dp as i64,
+            Reg::Cc => regs.cc as i64,
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum Expr {
+        Num(i64),
+        Reg(Reg),
+        Neg(Box<Expr>),
+        Not(Box<Expr>),
+        Bin(BinOp, Box<Expr>, Box<Expr>),
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum BinOp {
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Eq,
+        Ne,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+        And,
+        Or,
+    }
+
+    struct Parser {
+        toks: Vec<Tok>,
+        pos: usize,
+    }
+
+    impl Parser {
+        fn peek(&self) -> Option<&Tok> {
+            self.toks.get(self.pos)
+        }
+        fn bump(&mut self) -> Option<Tok> {
+            let t = self.toks.get(self.pos).cloned();
+            if t.is_some() {
+                self.pos += 1;
+            }
+            t
+        }
+        fn parse_expr(&mut self) -> Result<Expr> {
+            let e = self.parse_or()?;
+            if self.pos != self.toks.len() {
+                return Err(CondError::Parse(format!(
+                    "trailing tokens after expression at position {}",
+                    self.pos
+                )));
+            }
+            Ok(e)
+        }
+        fn parse_or(&mut self) -> Result<Expr> {
+            let mut lhs = self.parse_and()?;
+            while matches!(self.peek(), Some(Tok::OrOr)) {
+                self.bump();
+                let rhs = self.parse_and()?;
+                lhs = Expr::Bin(BinOp::Or, Box::new(lhs), Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+        fn parse_and(&mut self) -> Result<Expr> {
+            let mut lhs = self.parse_not()?;
+            while matches!(self.peek(), Some(Tok::AndAnd)) {
+                self.bump();
+                let rhs = self.parse_not()?;
+                lhs = Expr::Bin(BinOp::And, Box::new(lhs), Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+        fn parse_not(&mut self) -> Result<Expr> {
+            if matches!(self.peek(), Some(Tok::Bang)) {
+                self.bump();
+                let e = self.parse_not()?;
+                return Ok(Expr::Not(Box::new(e)));
+            }
+            self.parse_rel()
+        }
+        fn parse_rel(&mut self) -> Result<Expr> {
+            let lhs = self.parse_add()?;
+            let op = match self.peek() {
+                Some(Tok::Eq) => BinOp::Eq,
+                Some(Tok::Ne) => BinOp::Ne,
+                Some(Tok::Lt) => BinOp::Lt,
+                Some(Tok::Le) => BinOp::Le,
+                Some(Tok::Gt) => BinOp::Gt,
+                Some(Tok::Ge) => BinOp::Ge,
+                _ => return Ok(lhs),
+            };
+            self.bump();
+            let rhs = self.parse_add()?;
+            Ok(Expr::Bin(op, Box::new(lhs), Box::new(rhs)))
+        }
+        fn parse_add(&mut self) -> Result<Expr> {
+            let mut lhs = self.parse_mul()?;
+            loop {
+                let op = match self.peek() {
+                    Some(Tok::Plus) => BinOp::Add,
+                    Some(Tok::Minus) => BinOp::Sub,
+                    _ => break,
+                };
+                self.bump();
+                let rhs = self.parse_mul()?;
+                lhs = Expr::Bin(op, Box::new(lhs), Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+        fn parse_mul(&mut self) -> Result<Expr> {
+            let mut lhs = self.parse_unary()?;
+            loop {
+                let op = match self.peek() {
+                    Some(Tok::Star) => BinOp::Mul,
+                    Some(Tok::Slash) => BinOp::Div,
+                    _ => break,
+                };
+                self.bump();
+                let rhs = self.parse_unary()?;
+                lhs = Expr::Bin(op, Box::new(lhs), Box::new(rhs));
+            }
+            Ok(lhs)
+        }
+        fn parse_unary(&mut self) -> Result<Expr> {
+            if matches!(self.peek(), Some(Tok::Minus)) {
+                self.bump();
+                let e = self.parse_unary()?;
+                return Ok(Expr::Neg(Box::new(e)));
+            }
+            self.parse_atom()
+        }
+        fn parse_atom(&mut self) -> Result<Expr> {
+            match self.bump() {
+                Some(Tok::Num(n)) => Ok(Expr::Num(n)),
+                Some(Tok::Ident(name)) => Ok(Expr::Reg(reg_from_ident(&name)?)),
+                Some(Tok::LParen) => {
+                    let e = self.parse_or()?;
+                    match self.bump() {
+                        Some(Tok::RParen) => Ok(e),
+                        _ => Err(CondError::Parse("expected ')'".into())),
+                    }
+                }
+                other => Err(CondError::Parse(format!(
+                    "expected number, register, or '(' but got {:?}",
+                    other
+                ))),
+            }
+        }
+    }
+
+    fn parse(s: &str) -> Result<Expr> {
+        let toks = tokenize(s)?;
+        if toks.is_empty() {
+            return Err(CondError::Parse("empty expression".into()));
+        }
+        let mut p = Parser { toks, pos: 0 };
+        p.parse_expr()
+    }
+
+    fn eval(e: &Expr, regs: &Registers) -> Result<i64> {
+        Ok(match e {
+            Expr::Num(n) => *n,
+            Expr::Reg(r) => reg_value(*r, regs),
+            Expr::Neg(x) => -eval(x, regs)?,
+            Expr::Not(x) => {
+                if eval(x, regs)? == 0 {
+                    1
+                } else {
+                    0
+                }
+            }
+            Expr::Bin(op, a, b) => {
+                let av = eval(a, regs)?;
+                let bv = eval(b, regs)?;
+                match op {
+                    BinOp::Add => av.wrapping_add(bv),
+                    BinOp::Sub => av.wrapping_sub(bv),
+                    BinOp::Mul => av.wrapping_mul(bv),
+                    BinOp::Div => {
+                        if bv == 0 {
+                            return Err(CondError::DivideByZero);
+                        }
+                        av.wrapping_div(bv)
+                    }
+                    BinOp::Eq => (av == bv) as i64,
+                    BinOp::Ne => (av != bv) as i64,
+                    BinOp::Lt => (av < bv) as i64,
+                    BinOp::Le => (av <= bv) as i64,
+                    BinOp::Gt => (av > bv) as i64,
+                    BinOp::Ge => (av >= bv) as i64,
+                    BinOp::And => ((av != 0) && (bv != 0)) as i64,
+                    BinOp::Or => ((av != 0) || (bv != 0)) as i64,
+                }
+            }
+        })
+    }
+
+    /// Parse and evaluate `s` against `regs`. Returns whether the
+    /// resulting numeric value is non-zero. Empty / whitespace-only
+    /// strings parse as an error; the caller (`BreakpointSet::check`)
+    /// distinguishes "no condition" *before* it ever calls this.
+    pub fn evaluate(s: &str, regs: &Registers) -> Result<bool> {
+        let ast = parse(s)?;
+        let v = eval(&ast, regs)?;
+        Ok(v != 0)
+    }
+}
+
+pub use cond::CondError;
 
 // =============================================================================
 // Instruction boundaries
@@ -397,8 +854,11 @@ impl BreakpointSet {
         self.bps.iter()
     }
 
-    /// Decide whether `pc` triggers a stop. Walks all enabled BPs at
-    /// that address and applies their ignore_count semantics:
+    /// Decide whether `pc` triggers a stop, ignoring conditions.
+    /// See `check` for the full version that consults
+    /// `Breakpoint::condition`. Kept for callers (and tests) that
+    /// don't have a register snapshot handy and want the
+    /// pre-condition behaviour.
     ///
     /// - Disabled BPs are skipped entirely.
     /// - If `ignore_count > 0`, decrement it and pretend this BP didn't
@@ -424,6 +884,55 @@ impl BreakpointSet {
                 hit = Some(b.id);
             }
             // keep iterating so any other co-located BPs also count their hit
+        }
+        hit
+    }
+
+    /// Same as [`should_break`] but evaluates `Breakpoint::condition`
+    /// against the supplied register snapshot. A BP without a
+    /// condition (or with an empty / whitespace-only condition string)
+    /// always passes the condition check and behaves like
+    /// `should_break`.
+    ///
+    /// Condition evaluation rules:
+    /// - **true** → the BP triggers (counted, returned as the hit).
+    /// - **false** → the BP is silently skipped, *without* consuming
+    ///   `ignore_count` and *without* incrementing `hit_count`.
+    /// - **parse / runtime error** → fail-safe: trigger the BP. A
+    ///   broken condition surfacing as "the program halts here so the
+    ///   user notices" is far better than "the program quietly runs
+    ///   past the BP because the expression is malformed". The id is
+    ///   still returned, so a future UI can highlight the BP and let
+    ///   the user fix the condition.
+    pub fn check(&mut self, pc: u16, regs: &Registers) -> Option<BreakpointId> {
+        let mut hit: Option<BreakpointId> = None;
+        for b in self.bps.iter_mut() {
+            if !b.enabled || b.addr != pc {
+                continue;
+            }
+            // Evaluate condition (if any) *before* touching ignore /
+            // hit counters — a condition that says "no" should make
+            // this BP behave as if it weren't here at all for this
+            // instruction, including not consuming an ignore tick.
+            if let Some(cond) = b.condition.as_deref() {
+                let trimmed = cond.trim();
+                if !trimmed.is_empty() {
+                    match cond::evaluate(trimmed, regs) {
+                        Ok(false) => continue,
+                        // Parse / runtime errors fall through to
+                        // the "trigger" path so the user notices.
+                        Ok(true) | Err(_) => {}
+                    }
+                }
+            }
+            if b.ignore_count > 0 {
+                b.ignore_count -= 1;
+                continue;
+            }
+            b.hit_count = b.hit_count.saturating_add(1);
+            if hit.is_none() {
+                hit = Some(b.id);
+            }
         }
         hit
     }

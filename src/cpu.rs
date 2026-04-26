@@ -73,6 +73,17 @@ impl Cpu {
         }
     }
 
+    /// Run-loop entry point for execution-breakpoint checking. Wraps
+    /// `BreakpointSet::check`, threading `&self.r` through so the
+    /// condition evaluator sees the live register state.
+    pub fn check_breakpoint(&mut self, pc: u16) -> Option<crate::debug::BreakpointId> {
+        // Field-level disjoint borrow: `self.breakpoints` is mutably
+        // borrowed and `self.r` is immutably borrowed in the same
+        // expression. Rust 2021+ accepts this because the two fields
+        // are non-overlapping.
+        self.breakpoints.check(pc, &self.r)
+    }
+
     pub fn reset<B: Bus + ?Sized>(&mut self, bus: &mut B) {
         // PC from reset vector at FFFE/FFFF
         let pch = bus.read8(0xFFFE);
