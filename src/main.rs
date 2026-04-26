@@ -148,6 +148,51 @@ mod signals {
     } // SIGINT=2
 }
 
+/// Cycle the breakpoint state at `addr` through the three-state ring
+/// the GUI exposes via double-click in the listing pane:
+///   - no BP        → add a fresh enabled BP
+///   - enabled BP   → disable it (still in the set, just won't fire)
+///   - disabled BP  → remove it
+/// If multiple BPs share the same address (BreakpointSet allows this),
+/// the first match is operated on; repeated cycles drain duplicates
+/// without leaving the ring half-stepped.
+fn cycle_breakpoint_at(cpu: &mut em6809::cpu::Cpu, addr: u16) {
+    let existing = cpu
+        .breakpoints
+        .iter()
+        .find(|b| b.addr == addr)
+        .map(|b| (b.id, b.enabled));
+    match existing {
+        None => {
+            cpu.breakpoints.add(addr);
+        }
+        Some((id, true)) => {
+            cpu.breakpoints.set_enabled(id, false);
+        }
+        Some((id, false)) => {
+            cpu.breakpoints.remove(id);
+        }
+    }
+}
+
+/// Build the (addr, BpUiState) snapshot the listing pane reads on
+/// every paint to render BP markers.
+fn snapshot_bp_states(cpu: &em6809::cpu::Cpu) -> Vec<(u16, regview::BpUiState)> {
+    cpu.breakpoints
+        .iter()
+        .map(|b| {
+            (
+                b.addr,
+                if b.enabled {
+                    regview::BpUiState::Enabled
+                } else {
+                    regview::BpUiState::Disabled
+                },
+            )
+        })
+        .collect()
+}
+
 fn clear_logical_memory(bus: &mut dyn Bus) {
     if let Some(io_mmu) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
         let inner = io_mmu.inner_any_mut();
@@ -1686,6 +1731,12 @@ fn main() {
                                         regview::Command::UiOpenImageDialog => {}
                                         regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                                         regview::Command::UiAckSettings { .. } => {}
+                                        regview::Command::CycleBreakpointAtAddr(a) => {
+                                            cycle_breakpoint_at(&mut cpu_worker, a);
+                                            viewer_cpu.update_breakpoint_states(
+                                                snapshot_bp_states(&cpu_worker),
+                                            );
+                                        }
                                         regview::Command::SetPc(a) => {
                                             cpu_worker.set_pc(a);
                                             viewer_cpu.set_memory_window(
@@ -3405,6 +3456,10 @@ fn main() {
                             let clen2 = core::cmp::max(consumed as usize, 1);
                             viewer.set_memory_highlight(cpu.r.pc, clen2);
                         }
+                        regview::Command::CycleBreakpointAtAddr(a) => {
+                            cycle_breakpoint_at(&mut cpu, a);
+                            viewer.update_breakpoint_states(snapshot_bp_states(&cpu));
+                        }
                         regview::Command::RefreshHexListing => {
                             let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
                             let (policy, _win_len) = viewer.get_span_policy();
@@ -3619,6 +3674,10 @@ fn main() {
                                     cur = cur.wrapping_add(step as u16);
                                 }
                                 viewer.update_hex_listing(out);
+                            }
+                            regview::Command::CycleBreakpointAtAddr(a) => {
+                                cycle_breakpoint_at(&mut cpu, a);
+                                viewer.update_breakpoint_states(snapshot_bp_states(&cpu));
                             }
                             regview::Command::SetPc(a) => {
                                 cpu.set_pc(a);
@@ -4341,6 +4400,10 @@ fn main() {
                                 );
                                 settings_runtime::send_settings_ack(payload.instance_id);
                             }
+                        }
+                        regview::Command::CycleBreakpointAtAddr(a) => {
+                            cycle_breakpoint_at(&mut cpu, a);
+                            viewer.update_breakpoint_states(snapshot_bp_states(&cpu));
                         }
                         regview::Command::SetPc(a) => {
                             cpu.set_pc(a);
