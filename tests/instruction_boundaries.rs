@@ -162,9 +162,10 @@ fn linear_sweep_handles_loaded_data_region_without_panicking() {
     // Code region boundaries we definitely expect:
     assert!(b.contains(0x1000));
     assert!(b.contains(0x1002)); // RTS
-    // Sweep marched into the data region — this is acceptable; the
-    // test just asserts we didn't crash and that floor/ceil still
-    // work over the recorded set.
+
+    // Sweep marched into the data region — this is acceptable; the test
+    // just asserts we didn't crash and that floor/ceil still work over
+    // the recorded set.
     assert!(b.floor(0x1003).is_some());
     assert!(b.ceil(0x2000).is_some());
 }

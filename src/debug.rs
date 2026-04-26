@@ -39,7 +39,9 @@ pub struct InstructionBoundaries {
 
 impl InstructionBoundaries {
     pub fn new() -> Self {
-        Self { set: BTreeSet::new() }
+        Self {
+            set: BTreeSet::new(),
+        }
     }
 
     /// Forget every recorded boundary. Call this when the program is
@@ -73,11 +75,7 @@ impl InstructionBoundaries {
     /// Iterate boundaries in ascending order over the inclusive range
     /// `[from, to]`. Implements `DoubleEndedIterator` so callers can
     /// walk the range from either side via `.rev()`.
-    pub fn iter_range(
-        &self,
-        from: u16,
-        to: u16,
-    ) -> impl DoubleEndedIterator<Item = u16> + '_ {
+    pub fn iter_range(&self, from: u16, to: u16) -> impl DoubleEndedIterator<Item = u16> + '_ {
         self.set.range(from..=to).copied()
     }
 
