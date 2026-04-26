@@ -1,17 +1,54 @@
-// Call-stack panel — read-only view of `Cpu::shadow_stack`. Rendered
-// newest-first (current frame on top) so the most relevant context
-// for a paused program sits where the eye lands first. Frames carry
-// kind / call_site / target / return_addr / sp_at_call; the worker
-// thread converts `em6809::debug::CallFrame` into the UI-side
-// `CallFrameInfo` mirror before pushing here, so this module
-// stays free of any `em6809::debug` dependency.
+// Call-stack window — a real OS-level child window (eframe viewport
+// API), same pattern as the VT100 console and the breakpoints
+// window. Read-only view of the shadow call stack, rendered
+// newest-first so the active frame sits at the top.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
+use once_cell::sync::OnceCell;
 
-use super::{CallFrameInfo, RegApp};
+use super::CallFrameInfo;
 
-pub(super) fn render_call_stack_panel(app: &mut RegApp, ui: &mut egui::Ui) {
-    let frames: Vec<CallFrameInfo> = app.call_stack.lock().map(|g| g.clone()).unwrap_or_default();
+static CS_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
+static CS_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
+
+pub(crate) fn call_stack_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("em6809_call_stack_window")
+}
+
+fn update_visible(desired: bool) -> bool {
+    let flag = CS_VISIBLE.get_or_init(|| AtomicBool::new(desired));
+    let prev = flag.swap(desired, Ordering::SeqCst);
+    prev != desired
+}
+
+fn set_visible(ctx: &egui::Context, visible: bool) {
+    update_visible(visible);
+    ctx.send_viewport_cmd_to(
+        call_stack_viewport_id(),
+        egui::ViewportCommand::Visible(visible),
+    );
+}
+
+fn note_closed() {
+    if let Some(flag) = CS_CLOSED.get() {
+        flag.store(true, Ordering::SeqCst);
+    } else {
+        let _ = CS_CLOSED.set(AtomicBool::new(true));
+    }
+}
+
+pub(crate) fn take_closed() -> bool {
+    CS_CLOSED
+        .get()
+        .map(|f| f.swap(false, Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo>>>) {
+    let frames: Vec<CallFrameInfo> = call_stack.lock().map(|g| g.clone()).unwrap_or_default();
 
     if frames.is_empty() {
         ui.weak("No active calls.");
@@ -24,9 +61,9 @@ pub(super) fn render_call_stack_panel(app: &mut RegApp, ui: &mut egui::Ui) {
     }
 
     egui::ScrollArea::vertical()
+        .id_salt("call_stack_window_scroll")
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            // Column header.
             ui.horizontal(|ui| {
                 ui.add_sized(
                     [28.0, 0.0],
@@ -40,7 +77,7 @@ pub(super) fn render_call_stack_panel(app: &mut RegApp, ui: &mut egui::Ui) {
                     [62.0, 0.0],
                     egui::Label::new(egui::RichText::new("Call").monospace().strong()),
                 );
-                ui.add_sized([22.0, 0.0], egui::Label::new("")); // arrow
+                ui.add_sized([22.0, 0.0], egui::Label::new(""));
                 ui.add_sized(
                     [62.0, 0.0],
                     egui::Label::new(egui::RichText::new("Target").monospace().strong()),
@@ -56,12 +93,9 @@ pub(super) fn render_call_stack_panel(app: &mut RegApp, ui: &mut egui::Ui) {
             });
             ui.separator();
 
-            // Newest-first: current frame at the top of the panel.
-            // The numbering keeps the original push index so users can
-            // tell "we are 3 calls deep" without counting rows.
             let total = frames.len();
             for (rev_idx, frame) in frames.iter().rev().enumerate() {
-                let depth = total - rev_idx; // 1-based depth, top = total
+                let depth = total - rev_idx;
                 ui.horizontal(|ui| {
                     ui.add_sized(
                         [28.0, 0.0],
@@ -101,4 +135,54 @@ pub(super) fn render_call_stack_panel(app: &mut RegApp, ui: &mut egui::Ui) {
                 });
             }
         });
+}
+
+pub(super) fn show_call_stack_viewport(
+    ctx: &egui::Context,
+    call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
+    open: bool,
+) {
+    let id = call_stack_viewport_id();
+    if update_visible(open) {
+        set_visible(ctx, open);
+    }
+    let builder = egui::ViewportBuilder::default()
+        .with_title("em6809 Call Stack")
+        .with_inner_size(egui::vec2(500.0, 260.0))
+        .with_visible(open)
+        .with_window_level(egui::WindowLevel::Normal)
+        .with_resizable(true);
+
+    #[cfg(target_os = "windows")]
+    {
+        let cs_cl = Arc::clone(&call_stack);
+        ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
+            if open {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_call_stack(ui, &cs_cl);
+                });
+            }
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_visible(false);
+                note_closed();
+            }
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let cs_cl = Arc::clone(&call_stack);
+        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_call_stack(ui, &cs_cl);
+            });
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_visible(false);
+                note_closed();
+            }
+        });
+    }
 }

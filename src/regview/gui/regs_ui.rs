@@ -293,8 +293,6 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                     tab_button("GPIO", DeviceTab::Gpio);
                     tab_button("Timer", DeviceTab::Timer);
                     tab_button("MMU", DeviceTab::Mmu);
-                    tab_button("BP", DeviceTab::Breakpoints);
-                    tab_button("Stack", DeviceTab::CallStack);
                 });
                 ui.separator();
                 match app.dev_tab {
@@ -658,12 +656,6 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                 ui.small("disabled");
                             });
                         }
-                    }
-                    DeviceTab::Breakpoints => {
-                        super::breakpoints_ui::render_breakpoints_panel(app, ui);
-                    }
-                    DeviceTab::CallStack => {
-                        super::call_stack_ui::render_call_stack_panel(app, ui);
                     }
                 }
             });

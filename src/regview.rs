@@ -703,8 +703,6 @@ pub mod gui {
         Gpio,
         Timer,
         Mmu,
-        Breakpoints,
-        CallStack,
     }
 
     /// UI-side mirror of `em6809::debug::CallKind`. Kept as its own
@@ -1066,10 +1064,16 @@ pub mod gui {
         /// Snapshot of breakpoint UI state. Worker thread writes,
         /// list pane reads on every paint to render markers.
         pub bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>>,
-        /// Full breakpoint list snapshot for the breakpoints panel.
+        /// Full breakpoint list snapshot for the breakpoints window.
         pub bp_list: Arc<Mutex<Vec<BpInfo>>>,
-        /// Shadow call stack snapshot for the call-stack panel.
+        /// Shadow call stack snapshot for the call-stack window.
         pub call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
+        /// Open/closed state of the standalone Breakpoints window.
+        /// Toggled from the View menu; the X close button on the
+        /// window itself flips it back via egui's `.open(&mut bool)`.
+        pub bp_window_open: bool,
+        /// Open/closed state of the standalone Call Stack window.
+        pub call_stack_window_open: bool,
     }
 
     impl RegApp {
@@ -1536,6 +1540,12 @@ pub mod gui {
                                 ui.close_menu();
                             }
                         });
+                        ui.menu_button("View", |ui| {
+                            // Checkbox-style toggle so the menu shows
+                            // current visibility at a glance.
+                            ui.checkbox(&mut self.bp_window_open, "Breakpoints");
+                            ui.checkbox(&mut self.call_stack_window_open, "Call Stack");
+                        });
                         ui.menu_button("Help", |ui| {
                             if ui.button("About em6809…").clicked() {
                                 self.about_open = true;
@@ -1595,6 +1605,10 @@ pub mod gui {
                                 ui.close_menu();
                             }
                         });
+                        ui.menu_button("View", |ui| {
+                            ui.checkbox(&mut self.bp_window_open, "Breakpoints");
+                            ui.checkbox(&mut self.call_stack_window_open, "Call Stack");
+                        });
                         ui.menu_button("Help", |ui| {
                             if ui.button("About em6809…").clicked() {
                                 self.about_open = true;
@@ -1641,6 +1655,10 @@ pub mod gui {
                                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                                     ui.close_menu();
                                 }
+                            });
+                            ui.menu_button("View", |ui| {
+                                ui.checkbox(&mut self.bp_window_open, "Breakpoints");
+                                ui.checkbox(&mut self.call_stack_window_open, "Call Stack");
                             });
                             ui.menu_button("Help", |ui| {
                                 if ui.button("About em6809…").clicked() {
@@ -1723,6 +1741,29 @@ pub mod gui {
             list_ui::render_listing_panel(self, ctx);
 
             regs_ui::render_regs_panel(self, ctx);
+
+            // Real OS-level child windows for breakpoints / call stack
+            // (eframe viewport API — same pattern as the VT100 console).
+            // The View-menu checkbox writes `self.bp_window_open`;
+            // the OS window's X button is reconciled here by
+            // consuming the module's "closed" flag.
+            if breakpoints_ui::take_closed() {
+                self.bp_window_open = false;
+            }
+            if call_stack_ui::take_closed() {
+                self.call_stack_window_open = false;
+            }
+            breakpoints_ui::show_breakpoints_viewport(
+                ctx,
+                Arc::clone(&self.bp_list),
+                Arc::clone(&self.cmds),
+                self.bp_window_open,
+            );
+            call_stack_ui::show_call_stack_viewport(
+                ctx,
+                Arc::clone(&self.call_stack),
+                self.call_stack_window_open,
+            );
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
             let editing = self.edit_mode;
@@ -2267,6 +2308,8 @@ pub mod gui {
                     bp_states: bp_states_thread,
                     bp_list: bp_list_thread,
                     call_stack: call_stack_thread,
+                    bp_window_open: false,
+                    call_stack_window_open: false,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -2689,6 +2732,8 @@ pub mod gui {
                 bp_states: Arc::clone(&self.bp_states),
                 bp_list: Arc::clone(&self.bp_list),
                 call_stack: Arc::clone(&self.call_stack),
+                bp_window_open: false,
+                call_stack_window_open: false,
             };
             let mut init = init;
             #[cfg(windows)]
