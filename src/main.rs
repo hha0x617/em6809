@@ -193,6 +193,59 @@ fn snapshot_bp_states(cpu: &em6809::cpu::Cpu) -> Vec<(u16, regview::BpUiState)> 
         .collect()
 }
 
+/// Build a full BP list snapshot for the breakpoints panel. Carries
+/// id / enabled / hit_count / ignore_count / condition so the panel
+/// can render the per-row controls (checkbox, delete, counter labels)
+/// without holding the worker's lock.
+fn snapshot_bp_list(cpu: &em6809::cpu::Cpu) -> Vec<regview::BpInfo> {
+    cpu.breakpoints
+        .iter()
+        .map(|b| regview::BpInfo {
+            id: b.id.0,
+            addr: b.addr,
+            enabled: b.enabled,
+            condition: b.condition.clone(),
+            hit_count: b.hit_count,
+            ignore_count: b.ignore_count,
+        })
+        .collect()
+}
+
+/// Build a snapshot of the shadow call stack for the call-stack panel.
+/// Frames are kept in push order (outermost first) — the panel
+/// renders them newest-first by iterating in reverse.
+fn snapshot_call_stack(cpu: &em6809::cpu::Cpu) -> Vec<regview::CallFrameInfo> {
+    use em6809::debug::CallKind;
+    cpu.shadow_stack
+        .frames()
+        .iter()
+        .map(|f| regview::CallFrameInfo {
+            return_addr: f.return_addr,
+            call_site: f.call_site,
+            target: f.target,
+            sp_at_call: f.sp_at_call,
+            kind: match f.kind {
+                CallKind::Bsr => regview::CallKindUi::Bsr,
+                CallKind::Jsr => regview::CallKindUi::Jsr,
+                CallKind::Swi(n) => regview::CallKindUi::Swi(n),
+                CallKind::Irq => regview::CallKindUi::Irq,
+                CallKind::Firq => regview::CallKindUi::Firq,
+                CallKind::Nmi => regview::CallKindUi::Nmi,
+            },
+        })
+        .collect()
+}
+
+/// Convenience: push fresh BP-states / BP-list / call-stack snapshots
+/// to the viewer in one go. Used at the points where any one of those
+/// might have changed (BP edits, pause-edge, RTS/JSR through the
+/// listener) — cheaper than tracking which subset is dirty.
+fn push_debug_snapshots(viewer: &regview::Viewer, cpu: &em6809::cpu::Cpu) {
+    viewer.update_breakpoint_states(snapshot_bp_states(cpu));
+    viewer.update_bp_list(snapshot_bp_list(cpu));
+    viewer.update_call_stack(snapshot_call_stack(cpu));
+}
+
 fn clear_logical_memory(bus: &mut dyn Bus) {
     if let Some(io_mmu) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
         let inner = io_mmu.inner_any_mut();
@@ -1733,9 +1786,19 @@ fn main() {
                                         regview::Command::UiAckSettings { .. } => {}
                                         regview::Command::CycleBreakpointAtAddr(a) => {
                                             cycle_breakpoint_at(&mut cpu_worker, a);
-                                            viewer_cpu.update_breakpoint_states(
-                                                snapshot_bp_states(&cpu_worker),
-                                            );
+                                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                        }
+                                        regview::Command::SetBreakpointEnabled(id, en) => {
+                                            cpu_worker
+                                                .breakpoints
+                                                .set_enabled(em6809::debug::BreakpointId(id), en);
+                                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                        }
+                                        regview::Command::RemoveBreakpoint(id) => {
+                                            cpu_worker
+                                                .breakpoints
+                                                .remove(em6809::debug::BreakpointId(id));
+                                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
                                         }
                                         regview::Command::SetPc(a) => {
                                             cpu_worker.set_pc(a);
@@ -2919,6 +2982,9 @@ fn main() {
                         {
                             viewer_cpu.set_paused(true);
                             viewer_cpu.request_refresh_hex_listing();
+                            // Hit count / call stack changed in lockstep
+                            // with the pause; refresh both panels here.
+                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
                             continue;
                         }
                         // trace printing removed in GUI-only mode
@@ -2931,6 +2997,11 @@ fn main() {
                         // re-rendering cost.
                         if viewer_cpu.is_paused() && last_window_pc != Some(cpu_worker.r.pc) {
                             viewer_cpu.request_refresh_hex_listing();
+                            // While stepping, the call stack may have
+                            // changed every instruction (BSR/RTS/SWI).
+                            // Resync only on pause edges so free-run
+                            // stays cheap.
+                            push_debug_snapshots(&viewer_cpu, &cpu_worker);
                             last_window_pc = Some(cpu_worker.r.pc);
                         }
                         // Dirty-driven memory window refresh while running
@@ -3458,7 +3529,16 @@ fn main() {
                         }
                         regview::Command::CycleBreakpointAtAddr(a) => {
                             cycle_breakpoint_at(&mut cpu, a);
-                            viewer.update_breakpoint_states(snapshot_bp_states(&cpu));
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
+                        regview::Command::SetBreakpointEnabled(id, en) => {
+                            cpu.breakpoints
+                                .set_enabled(em6809::debug::BreakpointId(id), en);
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
+                        regview::Command::RemoveBreakpoint(id) => {
+                            cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                            push_debug_snapshots(&viewer, &cpu);
                         }
                         regview::Command::RefreshHexListing => {
                             let spans = loader_util::coalesce_ranges(loaded.loaded_ranges.clone());
@@ -3677,7 +3757,16 @@ fn main() {
                             }
                             regview::Command::CycleBreakpointAtAddr(a) => {
                                 cycle_breakpoint_at(&mut cpu, a);
-                                viewer.update_breakpoint_states(snapshot_bp_states(&cpu));
+                                push_debug_snapshots(&viewer, &cpu);
+                            }
+                            regview::Command::SetBreakpointEnabled(id, en) => {
+                                cpu.breakpoints
+                                    .set_enabled(em6809::debug::BreakpointId(id), en);
+                                push_debug_snapshots(&viewer, &cpu);
+                            }
+                            regview::Command::RemoveBreakpoint(id) => {
+                                cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                                push_debug_snapshots(&viewer, &cpu);
                             }
                             regview::Command::SetPc(a) => {
                                 cpu.set_pc(a);
@@ -4254,6 +4343,7 @@ fn main() {
                     if let Some(viewer) = &reg_viewer {
                         viewer.set_paused(true);
                         viewer.request_refresh_hex_listing();
+                        push_debug_snapshots(viewer, &cpu);
                     }
                     continue;
                 }
@@ -4266,6 +4356,7 @@ fn main() {
             if let Some(viewer) = &reg_viewer {
                 if viewer.is_paused() && last_window_pc != Some(cpu.r.pc) {
                     viewer.request_refresh_hex_listing();
+                    push_debug_snapshots(viewer, &cpu);
                     last_window_pc = Some(cpu.r.pc);
                 }
             }
@@ -4403,7 +4494,16 @@ fn main() {
                         }
                         regview::Command::CycleBreakpointAtAddr(a) => {
                             cycle_breakpoint_at(&mut cpu, a);
-                            viewer.update_breakpoint_states(snapshot_bp_states(&cpu));
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
+                        regview::Command::SetBreakpointEnabled(id, en) => {
+                            cpu.breakpoints
+                                .set_enabled(em6809::debug::BreakpointId(id), en);
+                            push_debug_snapshots(&viewer, &cpu);
+                        }
+                        regview::Command::RemoveBreakpoint(id) => {
+                            cpu.breakpoints.remove(em6809::debug::BreakpointId(id));
+                            push_debug_snapshots(&viewer, &cpu);
                         }
                         regview::Command::SetPc(a) => {
                             cpu.set_pc(a);

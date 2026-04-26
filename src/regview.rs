@@ -90,6 +90,8 @@ impl RegSnapshot {
 pub static SHOW_ORIGINS_OVERRIDE: OnceCell<AtomicBool> = OnceCell::new();
 
 pub mod gui {
+    pub(crate) mod breakpoints_ui;
+    pub(crate) mod call_stack_ui;
     pub(crate) mod console_ui;
     mod list_ui;
     mod mem_ui;
@@ -701,6 +703,61 @@ pub mod gui {
         Gpio,
         Timer,
         Mmu,
+        Breakpoints,
+        CallStack,
+    }
+
+    /// UI-side mirror of `em6809::debug::CallKind`. Kept as its own
+    /// type so the GUI layer doesn't pull `em6809::debug` into every
+    /// module — the worker thread converts when pushing snapshots.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum CallKindUi {
+        Bsr,
+        Jsr,
+        Swi(u8),
+        Irq,
+        Firq,
+        Nmi,
+    }
+
+    impl CallKindUi {
+        pub fn label(&self) -> &'static str {
+            match self {
+                CallKindUi::Bsr => "BSR",
+                CallKindUi::Jsr => "JSR",
+                CallKindUi::Swi(1) => "SWI",
+                CallKindUi::Swi(2) => "SWI2",
+                CallKindUi::Swi(3) => "SWI3",
+                CallKindUi::Swi(_) => "SWI?",
+                CallKindUi::Irq => "IRQ",
+                CallKindUi::Firq => "FIRQ",
+                CallKindUi::Nmi => "NMI",
+            }
+        }
+    }
+
+    /// One row in the breakpoints panel — full mirror of
+    /// `em6809::debug::Breakpoint` for the GUI to read each frame
+    /// without holding the worker thread's lock.
+    #[derive(Clone, Debug)]
+    pub struct BpInfo {
+        pub id: u32,
+        pub addr: u16,
+        pub enabled: bool,
+        pub condition: Option<String>,
+        pub hit_count: u64,
+        pub ignore_count: u64,
+    }
+
+    /// One row in the call-stack panel — UI mirror of
+    /// `em6809::debug::CallFrame`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct CallFrameInfo {
+        pub return_addr: u16,
+        pub call_site: u16,
+        pub target: u16,
+        pub sp_at_call: u16,
+        pub kind: CallKindUi,
     }
 
     /// UI-side breakpoint state for a given address. The list pane
@@ -722,6 +779,13 @@ pub mod gui {
         /// Worker thread mutates `cpu.breakpoints` and pushes a fresh
         /// snapshot back via `Viewer::update_breakpoint_states`.
         CycleBreakpointAtAddr(u16),
+        /// Set whether the breakpoint with this id is enabled. Used
+        /// by the breakpoints panel's per-row checkbox. Unknown ids
+        /// (deleted between paint and dispatch) are silently ignored.
+        SetBreakpointEnabled(u32, bool),
+        /// Remove the breakpoint with this id. Used by the
+        /// breakpoints panel's per-row delete button.
+        RemoveBreakpoint(u32),
         ApplyRegs(RegSnapshot),
         MemWrite(Vec<(u16, u8)>),
         OpenImage {
@@ -1002,6 +1066,10 @@ pub mod gui {
         /// Snapshot of breakpoint UI state. Worker thread writes,
         /// list pane reads on every paint to render markers.
         pub bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>>,
+        /// Full breakpoint list snapshot for the breakpoints panel.
+        pub bp_list: Arc<Mutex<Vec<BpInfo>>>,
+        /// Shadow call stack snapshot for the call-stack panel.
+        pub call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
     }
 
     impl RegApp {
@@ -1792,6 +1860,15 @@ pub mod gui {
         /// address so a per-row lookup in the list pane is cheap.
         /// The worker thread is the writer; the GUI thread reads.
         bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>>,
+        /// Full breakpoint list for the breakpoints panel. Contains
+        /// id / addr / enabled / hit_count / ignore_count / condition
+        /// for each registered BP. Pushed by the worker on the same
+        /// pause-edge events as bp_states.
+        bp_list: Arc<Mutex<Vec<BpInfo>>>,
+        /// Snapshot of the shadow call stack for the call-stack panel.
+        /// Frames are in push order (oldest → newest). Pushed on
+        /// pause-edge events.
+        call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
     }
 
     impl Clone for RegView {
@@ -1829,6 +1906,8 @@ pub mod gui {
                 dev_tab: self.dev_tab,
                 boundaries: Arc::clone(&self.boundaries),
                 bp_states: Arc::clone(&self.bp_states),
+                bp_list: Arc::clone(&self.bp_list),
+                call_stack: Arc::clone(&self.call_stack),
             }
         }
     }
@@ -1911,6 +1990,8 @@ pub mod gui {
             let console_state = Arc::new(Mutex::new(ConsoleState::new(24, 80, 1000)));
             let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
             let bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>> = Arc::new(Mutex::new(Vec::new()));
+            let bp_list: Arc<Mutex<Vec<BpInfo>>> = Arc::new(Mutex::new(Vec::new()));
+            let call_stack: Arc<Mutex<Vec<CallFrameInfo>>> = Arc::new(Mutex::new(Vec::new()));
 
             // Try to discover a Japanese-capable font from common system locations
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -2022,6 +2103,8 @@ pub mod gui {
             let scroll_to_pc_req_thread = Arc::clone(&scroll_to_pc_req);
             let boundaries_thread = Arc::clone(&boundaries);
             let bp_states_thread = Arc::clone(&bp_states);
+            let bp_list_thread = Arc::clone(&bp_list);
+            let call_stack_thread = Arc::clone(&call_stack);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Make the window compact and appropriate for the register grid
@@ -2182,6 +2265,8 @@ pub mod gui {
                     dev_tab: DeviceTab::Console,
                     boundaries: boundaries_thread,
                     bp_states: bp_states_thread,
+                    bp_list: bp_list_thread,
+                    call_stack: call_stack_thread,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -2255,6 +2340,8 @@ pub mod gui {
                 dev_tab: DeviceTab::Console,
                 boundaries,
                 bp_states,
+                bp_list,
+                call_stack,
             }
         }
 
@@ -2300,6 +2387,8 @@ pub mod gui {
             let started = Arc::new(AtomicBool::new(false));
             let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
             let bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>> = Arc::new(Mutex::new(Vec::new()));
+            let bp_list: Arc<Mutex<Vec<BpInfo>>> = Arc::new(Mutex::new(Vec::new()));
+            let call_stack: Arc<Mutex<Vec<CallFrameInfo>>> = Arc::new(Mutex::new(Vec::new()));
 
             // Font discovery (same as spawn)
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -2410,6 +2499,8 @@ pub mod gui {
                 dev_tab: DeviceTab::Console,
                 boundaries,
                 bp_states,
+                bp_list,
+                call_stack,
             }
         }
 
@@ -2596,6 +2687,8 @@ pub mod gui {
                 dev_tab: DeviceTab::Console,
                 boundaries: Arc::clone(&self.boundaries),
                 bp_states: Arc::clone(&self.bp_states),
+                bp_list: Arc::clone(&self.bp_list),
+                call_stack: Arc::clone(&self.call_stack),
             };
             let mut init = init;
             #[cfg(windows)]
@@ -2925,6 +3018,24 @@ pub mod gui {
             }
         }
 
+        /// Worker-side: replace the BP-panel snapshot. Caller passes
+        /// in the full list each time; the panel keeps no state of
+        /// its own, so we don't need diff machinery here.
+        pub fn update_bp_list(&self, list: Vec<BpInfo>) {
+            if let Ok(mut g) = self.bp_list.lock() {
+                *g = list;
+            }
+        }
+
+        /// Worker-side: replace the call-stack-panel snapshot. Frames
+        /// are passed in oldest-first order (push order); the panel
+        /// renders them newest-first so the current frame is on top.
+        pub fn update_call_stack(&self, frames: Vec<CallFrameInfo>) {
+            if let Ok(mut g) = self.call_stack.lock() {
+                *g = frames;
+            }
+        }
+
         pub fn auto_hex_on_edit(&self) -> bool {
             self.auto_hex_on_edit.load(Ordering::SeqCst)
         }
@@ -3025,7 +3136,10 @@ pub mod gui {
 }
 
 pub use gui::set_force_in_app_settings;
+pub use gui::BpInfo;
 pub use gui::BpUiState;
+pub use gui::CallFrameInfo;
+pub use gui::CallKindUi;
 pub use gui::Command;
 pub use gui::Viewer;
 // Public helpers for external/native windows to interact with the same viewer command queue
