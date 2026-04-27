@@ -825,17 +825,18 @@ impl Cpu {
                         );
                     }
                 } else if sub == 0x3F {
-                    // SWI2 — vector at $FFF4/$FFF5
+                    // SWI2 — vector at $FFF4/$FFF5. Same push-order fix
+                    // as SWI: PC, U, Y, X, DP, B, A, CC (deepest first).
                     let ret = self.r.pc;
                     self.r.cc |= E;
-                    self.push8(bus, self.r.cc);
-                    self.push8(bus, self.r.a);
-                    self.push8(bus, self.r.b);
-                    self.push8(bus, self.r.dp);
-                    self.push16(bus, self.r.x);
-                    self.push16(bus, self.r.y);
-                    self.push16(bus, self.r.u);
                     self.push16(bus, self.r.pc);
+                    self.push16(bus, self.r.u);
+                    self.push16(bus, self.r.y);
+                    self.push16(bus, self.r.x);
+                    self.push8(bus, self.r.dp);
+                    self.push8(bus, self.r.b);
+                    self.push8(bus, self.r.a);
+                    self.push8(bus, self.r.cc);
                     self.r.cc |= I | F;
                     let hi = bus.read8(0xFFF4) as u16;
                     let lo = bus.read8(0xFFF5) as u16;
@@ -1392,17 +1393,18 @@ impl Cpu {
                 // SWI3 or extended prefix
                 let sub = self.fetch8(bus);
                 if sub == 0x3F {
-                    // SWI3 — vector at $FFF2/$FFF3
+                    // SWI3 — vector at $FFF2/$FFF3. Same push-order fix
+                    // as SWI: PC, U, Y, X, DP, B, A, CC (deepest first).
                     let ret = self.r.pc;
                     self.r.cc |= E;
-                    self.push8(bus, self.r.cc);
-                    self.push8(bus, self.r.a);
-                    self.push8(bus, self.r.b);
-                    self.push8(bus, self.r.dp);
-                    self.push16(bus, self.r.x);
-                    self.push16(bus, self.r.y);
-                    self.push16(bus, self.r.u);
                     self.push16(bus, self.r.pc);
+                    self.push16(bus, self.r.u);
+                    self.push16(bus, self.r.y);
+                    self.push16(bus, self.r.x);
+                    self.push8(bus, self.r.dp);
+                    self.push8(bus, self.r.b);
+                    self.push8(bus, self.r.a);
+                    self.push8(bus, self.r.cc);
                     self.r.cc |= I | F;
                     let hi = bus.read8(0xFFF2) as u16;
                     let lo = bus.read8(0xFFF3) as u16;
@@ -2190,17 +2192,26 @@ impl Cpu {
                 }
             }
             0x3F => {
-                // SWI — vector at $FFFA/$FFFB
+                // SWI — vector at $FFFA/$FFFB.
+                // MC6809 spec push order: PC, U, Y, X, DP, B, A, CC
+                // (deepest -> top). NMI/IRQ already do this. SWI was
+                // historically reversed here, which placed CC at the
+                // bottom and PC at the top of the saved frame, so the
+                // matching RTI restored garbage into PC and other
+                // registers. Aligning with NMI/IRQ also matches what
+                // a real 6809 puts on the S stack, so guest code that
+                // peeks at the saved frame (e.g., NetBSD trap glue)
+                // sees what it expects.
                 let ret = self.r.pc;
                 self.r.cc |= E;
-                self.push8(bus, self.r.cc);
-                self.push8(bus, self.r.a);
-                self.push8(bus, self.r.b);
-                self.push8(bus, self.r.dp);
-                self.push16(bus, self.r.x);
-                self.push16(bus, self.r.y);
-                self.push16(bus, self.r.u);
                 self.push16(bus, self.r.pc);
+                self.push16(bus, self.r.u);
+                self.push16(bus, self.r.y);
+                self.push16(bus, self.r.x);
+                self.push8(bus, self.r.dp);
+                self.push8(bus, self.r.b);
+                self.push8(bus, self.r.a);
+                self.push8(bus, self.r.cc);
                 self.r.cc |= I | F;
                 let hi = bus.read8(0xFFFA) as u16;
                 let lo = bus.read8(0xFFFB) as u16;
