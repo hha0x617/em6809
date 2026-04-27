@@ -106,6 +106,13 @@ mod console_mode {
 use std::sync::atomic::{AtomicBool, Ordering};
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Upper bound on instructions executed per `step_over` / `step_out`
+/// invocation before giving up. Keeps the worker thread responsive
+/// when the user steps over a callee that never returns (infinite
+/// loop, deadlocked spin-wait, etc.). The same value is used by
+/// `emfe_plugin_mc6809::emfe_step_over`/`emfe_step_out`.
+const STEP_OVER_LIMIT: u32 = 2_000_000;
+
 #[cfg(windows)]
 mod signals {
     use super::STOP_REQUESTED;
@@ -2996,8 +3003,28 @@ fn main() {
                             push_debug_snapshots(&viewer_cpu, &cpu_worker);
                             continue;
                         }
-                        // trace printing removed in GUI-only mode
-                        cpu_worker.step(bus_worker.as_mut(), false);
+                        // trace printing removed in GUI-only mode.
+                        // Dispatch by the user-requested step kind.
+                        // `next_step_action` returns the kind for the
+                        // queued request (or `Step` for free-running)
+                        // and consumes one request as a side effect.
+                        match viewer_cpu.next_step_action() {
+                            regview::StepAction::Step => {
+                                cpu_worker.step(bus_worker.as_mut(), false);
+                            }
+                            regview::StepAction::Over => {
+                                // StepStop variants (ReturnTarget /
+                                // Breakpoint / Limit / NotACall) all
+                                // leave the CPU at a sensible PC; the
+                                // run loop's normal post-step refresh
+                                // picks them up via PC change. No
+                                // per-variant UI state to thread yet.
+                                let _ = cpu_worker.step_over(bus_worker.as_mut(), STEP_OVER_LIMIT);
+                            }
+                            regview::StepAction::Out => {
+                                let _ = cpu_worker.step_out(bus_worker.as_mut(), STEP_OVER_LIMIT);
+                            }
+                        }
                         // If we just settled at a new PC while paused
                         // (step, breakpoint, run-until target), kick a
                         // listing refresh so the live-disasm pane
@@ -4377,8 +4404,24 @@ fn main() {
                     continue;
                 }
             }
-            // trace printing removed in GUI-only mode
-            cpu.step(bus.as_mut(), false);
+            // trace printing removed in GUI-only mode.
+            // Mirror the worker-thread dispatch: pick the step kind
+            // from the viewer (if any) before each pass.
+            let action = reg_viewer
+                .as_ref()
+                .map(|v| v.next_step_action())
+                .unwrap_or(regview::StepAction::Step);
+            match action {
+                regview::StepAction::Step => {
+                    cpu.step(bus.as_mut(), false);
+                }
+                regview::StepAction::Over => {
+                    let _ = cpu.step_over(bus.as_mut(), STEP_OVER_LIMIT);
+                }
+                regview::StepAction::Out => {
+                    let _ = cpu.step_out(bus.as_mut(), STEP_OVER_LIMIT);
+                }
+            }
             // Same paused-edge / new-PC refresh logic as the worker
             // thread loop; only fires when execution actually settled
             // on a new PC, so free-run isn't continuously re-rendered.

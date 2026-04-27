@@ -933,6 +933,14 @@ pub mod gui {
         pub snap: Arc<Mutex<RegSnapshot>>,
         pub paused: Arc<AtomicBool>,
         pub step_requests: Arc<AtomicUsize>,
+        /// Pending Step Over requests (counter, multi-click queues up).
+        /// Drained by the run loop in priority `Out > Over > Step` so a
+        /// queued plain Step doesn't sneak ahead of an Over the user
+        /// pressed afterwards.
+        pub step_over_requests: Arc<AtomicUsize>,
+        /// Pending Step Out requests. Same draining rules as
+        /// `step_over_requests`.
+        pub step_out_requests: Arc<AtomicUsize>,
         pub lst_mmap: Option<Arc<Mmap>>,
         pub lst_text: Option<Arc<Mutex<String>>>,
         pub lst_rev: Arc<AtomicUsize>,
@@ -1870,6 +1878,12 @@ pub mod gui {
         pub snapshot: Arc<Mutex<RegSnapshot>>,
         pub paused: Arc<AtomicBool>,
         pub step_requests: Arc<AtomicUsize>,
+        /// Pending Step Over requests. Mirrored into `RegApp` for the
+        /// UI thread; the worker drains via `take_step_action`.
+        pub step_over_requests: Arc<AtomicUsize>,
+        /// Pending Step Out requests. Same lifetime as
+        /// `step_over_requests`.
+        pub step_out_requests: Arc<AtomicUsize>,
         pub lst_mmap: Option<Arc<Mmap>>,
         pub lst_text: Option<Arc<Mutex<String>>>,
         pub lst_rev: Arc<AtomicUsize>,
@@ -1925,6 +1939,8 @@ pub mod gui {
                 snapshot: Arc::clone(&self.snapshot),
                 paused: Arc::clone(&self.paused),
                 step_requests: Arc::clone(&self.step_requests),
+                step_over_requests: Arc::clone(&self.step_over_requests),
+                step_out_requests: Arc::clone(&self.step_out_requests),
                 lst_mmap: self.lst_mmap.as_ref().map(Arc::clone),
                 lst_text: self.lst_text.as_ref().map(Arc::clone),
                 lst_rev: Arc::clone(&self.lst_rev),
@@ -2006,6 +2022,8 @@ pub mod gui {
             let snapshot = Arc::new(Mutex::new(RegSnapshot::default()));
             let paused = Arc::new(AtomicBool::new(false));
             let step_requests = Arc::new(AtomicUsize::new(0));
+            let step_over_requests = Arc::new(AtomicUsize::new(0));
+            let step_out_requests = Arc::new(AtomicUsize::new(0));
             let lst_mmap: Option<Arc<Mmap>> = lst_path.and_then(|p| {
                 if let Ok(f) = File::open(p) {
                     unsafe { Mmap::map(&f).ok() }.map(Arc::new)
@@ -2120,6 +2138,8 @@ pub mod gui {
             let snap_clone = Arc::clone(&snapshot);
             let paused_clone = Arc::clone(&paused);
             let step_requests_clone = Arc::clone(&step_requests);
+            let step_over_requests_clone = Arc::clone(&step_over_requests);
+            let step_out_requests_clone = Arc::clone(&step_out_requests);
             let lst_clone = lst_mmap.as_ref().map(Arc::clone);
             let lst_text_clone = lst_text.as_ref().map(Arc::clone);
             let lst_rev_clone = Arc::clone(&lst_rev);
@@ -2155,10 +2175,13 @@ pub mod gui {
             let call_stack_thread = Arc::clone(&call_stack);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
-                // Make the window compact and appropriate for the register grid
+                // Make the window compact and appropriate for the register grid.
+                // Width 1620 = 600 (listing) + 440 (memory) + 580 (registers
+                // central panel headroom for the Resume/Step/StepOver/StepOut/|/
+                // Apply/Cancel toolbar row in either en-US or ja-JP).
                 let base = eframe::egui::ViewportBuilder::default()
-                    .with_inner_size(eframe::egui::vec2(1400.0, 700.0))
-                    .with_min_inner_size(eframe::egui::vec2(1400.0, 700.0))
+                    .with_inner_size(eframe::egui::vec2(1620.0, 700.0))
+                    .with_min_inner_size(eframe::egui::vec2(1620.0, 700.0))
                     .with_resizable(true);
                 #[cfg(all(unix, not(target_os = "macos")))]
                 let vp = {
@@ -2197,6 +2220,8 @@ pub mod gui {
                     snap: snap_clone,
                     paused: paused_clone,
                     step_requests: step_requests_clone,
+                    step_over_requests: step_over_requests_clone,
+                    step_out_requests: step_out_requests_clone,
                     lst_mmap: lst_clone,
                     lst_text: lst_text_clone,
                     lst_rev: lst_rev_clone,
@@ -2361,6 +2386,8 @@ pub mod gui {
                 snapshot,
                 paused,
                 step_requests,
+                step_over_requests,
+                step_out_requests,
                 lst_mmap,
                 lst_text,
                 lst_rev,
@@ -2405,6 +2432,8 @@ pub mod gui {
             let snapshot = Arc::new(Mutex::new(RegSnapshot::default()));
             let paused = Arc::new(AtomicBool::new(false));
             let step_requests = Arc::new(AtomicUsize::new(0));
+            let step_over_requests = Arc::new(AtomicUsize::new(0));
+            let step_out_requests = Arc::new(AtomicUsize::new(0));
             let lst_mmap: Option<Arc<Mmap>> = lst_path.and_then(|p| {
                 if let Ok(f) = File::open(p) {
                     unsafe { Mmap::map(&f).ok() }.map(Arc::new)
@@ -2520,6 +2549,8 @@ pub mod gui {
                 snapshot,
                 paused,
                 step_requests,
+                step_over_requests,
+                step_out_requests,
                 lst_mmap,
                 lst_text,
                 lst_rev,
@@ -2562,6 +2593,8 @@ pub mod gui {
             let snap_clone = Arc::clone(&self.snapshot);
             let paused_clone = Arc::clone(&self.paused);
             let step_requests_clone = Arc::clone(&self.step_requests);
+            let step_over_requests_clone = Arc::clone(&self.step_over_requests);
+            let step_out_requests_clone = Arc::clone(&self.step_out_requests);
             let lst_clone = self.lst_mmap.as_ref().map(Arc::clone);
             let lst_text_clone = self.lst_text.as_ref().map(Arc::clone);
             let lst_rev_clone = Arc::clone(&self.lst_rev);
@@ -2585,9 +2618,12 @@ pub mod gui {
             let use_japanese = Self::is_japanese_locale();
 
             let mut native_options = eframe::NativeOptions::default();
+            // Width 1720 leaves the registers central panel ~680 px,
+            // enough for the toolbar row at all combinations of
+            // paused/running + Edit/non-Edit in either locale.
             let base = eframe::egui::ViewportBuilder::default()
-                .with_inner_size(eframe::egui::vec2(1500.0, 700.0))
-                .with_min_inner_size(eframe::egui::vec2(900.0, 400.0))
+                .with_inner_size(eframe::egui::vec2(1720.0, 700.0))
+                .with_min_inner_size(eframe::egui::vec2(1100.0, 400.0))
                 .with_resizable(false);
             #[cfg(all(unix, not(target_os = "macos")))]
             let vp = {
@@ -2621,6 +2657,8 @@ pub mod gui {
                 snap: snap_clone,
                 paused: paused_clone,
                 step_requests: step_requests_clone,
+                step_over_requests: step_over_requests_clone,
+                step_out_requests: step_out_requests_clone,
                 lst_mmap: lst_clone,
                 lst_text: lst_text_clone,
                 lst_rev: lst_rev_clone,
@@ -2949,20 +2987,65 @@ pub mod gui {
             self.paused.store(v, Ordering::SeqCst)
         }
 
-        /// Returns true if the CPU loop should pause before executing the next instruction.
-        /// If paused and there is at least one step request, this consumes one request and returns false.
+        /// Returns true if the CPU loop should pause before executing
+        /// the next instruction. The pause-busy-wait in main.rs's run
+        /// loop spins on this. Returns false either because the user
+        /// is no longer paused, OR because at least one step / step-
+        /// over / step-out request is queued — in the latter case the
+        /// caller drains the request via [`Self::next_step_action`].
+        ///
+        /// Unlike the older one-counter version this method does
+        /// **not** consume any request as a side effect — that would
+        /// drop the kind information and force the run loop to always
+        /// run plain `cpu.step`.
         pub fn should_pause(&self) -> bool {
-            if !self.is_paused() {
-                return false;
-            }
-            let pending = self.step_requests.load(Ordering::SeqCst);
-            if pending > 0 {
-                // Consume one step request and allow one instruction to proceed
-                self.step_requests.fetch_sub(1, Ordering::SeqCst);
-                return false;
-            }
-            true
+            self.is_paused() && !self.has_pending_step_request()
         }
+
+        fn has_pending_step_request(&self) -> bool {
+            self.step_requests.load(Ordering::SeqCst) > 0
+                || self.step_over_requests.load(Ordering::SeqCst) > 0
+                || self.step_out_requests.load(Ordering::SeqCst) > 0
+        }
+
+        /// Drain at most one queued step request and return which CPU
+        /// step variant the run loop should invoke for the upcoming
+        /// instruction. Priority is **Out > Over > Step** so a queued
+        /// plain Step from earlier doesn't sneak ahead of an Over /
+        /// Out the user pressed afterwards.
+        ///
+        /// Returns [`StepAction::Step`] when no request is queued —
+        /// that's the free-running case, where the run loop just
+        /// keeps calling `cpu.step` once per pass.
+        pub fn next_step_action(&self) -> StepAction {
+            if self.step_out_requests.load(Ordering::SeqCst) > 0 {
+                self.step_out_requests.fetch_sub(1, Ordering::SeqCst);
+                return StepAction::Out;
+            }
+            if self.step_over_requests.load(Ordering::SeqCst) > 0 {
+                self.step_over_requests.fetch_sub(1, Ordering::SeqCst);
+                return StepAction::Over;
+            }
+            if self.step_requests.load(Ordering::SeqCst) > 0 {
+                self.step_requests.fetch_sub(1, Ordering::SeqCst);
+            }
+            StepAction::Step
+        }
+    }
+
+    /// Which CPU step variant the run loop should invoke next pass.
+    /// Returned by [`RegView::next_step_action`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum StepAction {
+        /// Plain single-instruction step. Used both for free-running
+        /// (no pending request) and when the user presses Step.
+        Step,
+        /// Step over a CALL — descends, runs until PC reaches the
+        /// byte right after the call (or a BP hits / limit exhausted).
+        Over,
+        /// Step out — runs until the current callee's return target
+        /// (or a BP hits / limit exhausted).
+        Out,
     }
 
     pub use RegView as Viewer;
@@ -3193,6 +3276,7 @@ pub use gui::BpUiState;
 pub use gui::CallFrameInfo;
 pub use gui::CallKindUi;
 pub use gui::Command;
+pub use gui::StepAction;
 pub use gui::Viewer;
 // Public helpers for external/native windows to interact with the same viewer command queue
 pub fn push_global_command(cmd: Command) -> bool {

@@ -9,7 +9,12 @@ use super::{
 
 pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
-        ui.set_min_width(320.0);
+        // Sized for the worst-case toolbar row when both Edit mode and
+        // pause are active: Resume / Step / Step Over / Step Out / sep
+        // / Apply / Cancel. Step Over/Out add ~160 px over the original
+        // 320 px minimum, so leave headroom for ja-JP labels which are
+        // a touch wider than en-US.
+        ui.set_min_width(520.0);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -26,6 +31,16 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                             app.step_requests
                                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         }
+                        if ui.button(fl!(LOADER, "step-over")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_over_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if ui.button(fl!(LOADER, "step-out")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_out_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
                     } else {
                         if ui.button(fl!(LOADER, "pause")).clicked() {
                             app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -33,6 +48,16 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                         if ui.button(fl!(LOADER, "step")).clicked() {
                             app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
                             app.step_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if ui.button(fl!(LOADER, "step-over")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_over_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if ui.button(fl!(LOADER, "step-out")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_out_requests
                                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         }
                     }
