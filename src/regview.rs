@@ -2175,10 +2175,13 @@ pub mod gui {
             let call_stack_thread = Arc::clone(&call_stack);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
-                // Make the window compact and appropriate for the register grid
+                // Make the window compact and appropriate for the register grid.
+                // Width 1620 = 600 (listing) + 440 (memory) + 580 (registers
+                // central panel headroom for the Resume/Step/StepOver/StepOut/|/
+                // Apply/Cancel toolbar row in either en-US or ja-JP).
                 let base = eframe::egui::ViewportBuilder::default()
-                    .with_inner_size(eframe::egui::vec2(1400.0, 700.0))
-                    .with_min_inner_size(eframe::egui::vec2(1400.0, 700.0))
+                    .with_inner_size(eframe::egui::vec2(1620.0, 700.0))
+                    .with_min_inner_size(eframe::egui::vec2(1620.0, 700.0))
                     .with_resizable(true);
                 #[cfg(all(unix, not(target_os = "macos")))]
                 let vp = {
@@ -2615,9 +2618,12 @@ pub mod gui {
             let use_japanese = Self::is_japanese_locale();
 
             let mut native_options = eframe::NativeOptions::default();
+            // Width 1720 leaves the registers central panel ~680 px,
+            // enough for the toolbar row at all combinations of
+            // paused/running + Edit/non-Edit in either locale.
             let base = eframe::egui::ViewportBuilder::default()
-                .with_inner_size(eframe::egui::vec2(1500.0, 700.0))
-                .with_min_inner_size(eframe::egui::vec2(900.0, 400.0))
+                .with_inner_size(eframe::egui::vec2(1720.0, 700.0))
+                .with_min_inner_size(eframe::egui::vec2(1100.0, 400.0))
                 .with_resizable(false);
             #[cfg(all(unix, not(target_os = "macos")))]
             let vp = {
