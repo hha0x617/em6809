@@ -190,10 +190,7 @@ fn puls_with_pc_pops_call_frame_like_rts() {
     //   $1004  34 04     PSHS b               (callee entry: save B)
     //   $1006  35 84     PULS b,pc            (callee return)
     let mut mem = Memory::new();
-    mem.load_slice(
-        0x1000,
-        &[0x8D, 0x02, 0x39, 0x00, 0x34, 0x04, 0x35, 0x84],
-    );
+    mem.load_slice(0x1000, &[0x8D, 0x02, 0x39, 0x00, 0x34, 0x04, 0x35, 0x84]);
     let mut cpu = boot(&mem);
 
     cpu.step(&mut mem, false); // BSR $1004
