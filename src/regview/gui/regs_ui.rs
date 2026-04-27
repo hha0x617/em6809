@@ -26,6 +26,16 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                             app.step_requests
                                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         }
+                        if ui.button(fl!(LOADER, "step-over")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_over_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if ui.button(fl!(LOADER, "step-out")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_out_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
                     } else {
                         if ui.button(fl!(LOADER, "pause")).clicked() {
                             app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -33,6 +43,16 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                         if ui.button(fl!(LOADER, "step")).clicked() {
                             app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
                             app.step_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if ui.button(fl!(LOADER, "step-over")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_over_requests
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if ui.button(fl!(LOADER, "step-out")).clicked() {
+                            app.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.step_out_requests
                                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         }
                     }

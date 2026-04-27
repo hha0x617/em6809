@@ -60,6 +60,55 @@ pub fn set_irq_log(on: bool) {
     DEBUG_IRQ_LOG.store(on, Ordering::SeqCst);
 }
 
+/// Outcome of `Cpu::step_over` / `Cpu::step_out`. The variant tells
+/// callers (UI / scripted tests) why the step terminated, so they can
+/// distinguish "ran to the expected target" from "a breakpoint got in
+/// the way" or "we gave up after `limit` instructions".
+///
+/// The CPU's PC is left at the address where execution stopped in
+/// every variant.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepStop {
+    /// `step_over`: PC reached the instruction immediately after the
+    /// CALL we stepped over. `step_out`: PC reached the topmost
+    /// shadow-frame's `return_addr`.
+    ReturnTarget,
+    /// A breakpoint fired before we reached the return target. The
+    /// `BreakpointId` is whichever BP `BreakpointSet::check` selected.
+    Breakpoint(crate::debug::BreakpointId),
+    /// `limit` instructions executed without reaching the return
+    /// target. Caller should treat this like a hit-the-wall stop —
+    /// likely a runaway callee that never returns.
+    Limit,
+    /// `step_over` only: the instruction at PC was not a CALL, so we
+    /// just executed it once and stopped — same observable result as
+    /// a plain step.
+    NotACall,
+    /// `step_out` only: the shadow stack was empty, so there's no
+    /// caller frame to step out to. Caller (UI) should treat this as
+    /// "no-op, button should have been disabled".
+    EmptyStack,
+}
+
+/// MC6809 "call" opcodes that `step_over` should descend into:
+///   $8D       BSR  rel8
+///   $17       LBSR rel16
+///   $9D       JSR  direct
+///   $AD       JSR  indexed   (variable length via postbyte)
+///   $BD       JSR  extended
+///   $3F       SWI
+///   $10 $3F   SWI2
+///   $11 $3F   SWI3
+fn is_call_instruction<B: Bus + ?Sized>(bus: &mut B, pc: u16) -> bool {
+    let op = bus.read8(pc);
+    match op {
+        0x8D | 0x17 | 0x9D | 0xAD | 0xBD | 0x3F => true,
+        0x10 | 0x11 => bus.read8(pc.wrapping_add(1)) == 0x3F,
+        _ => false,
+    }
+}
+
 impl Cpu {
     pub fn new() -> Self {
         Self {
@@ -100,6 +149,78 @@ impl Cpu {
     pub fn set_pc(&mut self, pc: u16) {
         self.r.pc = pc;
     }
+
+    /// Step over the instruction at PC. If it's a CALL (BSR / LBSR /
+    /// JSR / SWI / SWI2 / SWI3), execute until PC reaches the byte
+    /// right after the CALL instruction, a breakpoint fires, or
+    /// `limit` instructions have been retired without reaching the
+    /// target. Otherwise behaves like a single `step` and returns
+    /// `StepStop::NotACall`.
+    ///
+    /// The `limit` is a guard against runaway callees (e.g., a step-
+    /// over of a `bsr loop_forever`). Callers typically pass something
+    /// like `2_000_000`; tests pick small values to exercise the
+    /// `Limit` branch directly.
+    pub fn step_over<B: Bus + ?Sized>(&mut self, bus: &mut B, limit: u32) -> StepStop {
+        let pc0 = self.r.pc;
+        if !is_call_instruction(bus, pc0) {
+            let _ = self.step(bus, false);
+            return StepStop::NotACall;
+        }
+
+        // Compute the return target via the disassembler so indexed
+        // JSR (and the multi-byte SWI2/SWI3 prefixes) are handled
+        // uniformly. `len` is the byte length of the instruction at
+        // pc0; the call's RTS/RTI will eventually transfer control to
+        // pc0 + len.
+        let (len, _) = crate::disasm::disasm_one(bus, pc0);
+        let return_target = pc0.wrapping_add(len);
+
+        // Always execute the CALL itself first so we descend into the
+        // callee — otherwise `step_over` on a CALL with no further
+        // breakpoints would just sit at pc0 forever.
+        let _ = self.step(bus, false);
+
+        let mut count = 1u32;
+        while count < limit {
+            if self.r.pc == return_target {
+                return StepStop::ReturnTarget;
+            }
+            if let Some(id) = self.check_breakpoint(self.r.pc) {
+                return StepStop::Breakpoint(id);
+            }
+            let _ = self.step(bus, false);
+            count += 1;
+        }
+        StepStop::Limit
+    }
+
+    /// Run until the current callee returns to its caller. Uses the
+    /// topmost shadow-stack frame's `return_addr` as the target — this
+    /// is robust across both RTS-style returns (where S happens to
+    /// hold the return PC) and SWI/IRQ-style returns (where the S
+    /// stack top is the saved CC byte, not a PC). Stops early on
+    /// breakpoint hit or `limit` exhaustion.
+    pub fn step_out<B: Bus + ?Sized>(&mut self, bus: &mut B, limit: u32) -> StepStop {
+        let return_target = match self.shadow_stack.peek() {
+            Some(frame) => frame.return_addr,
+            None => return StepStop::EmptyStack,
+        };
+
+        let mut count = 0u32;
+        while count < limit {
+            if self.r.pc == return_target {
+                return StepStop::ReturnTarget;
+            }
+            if let Some(id) = self.check_breakpoint(self.r.pc) {
+                return StepStop::Breakpoint(id);
+            }
+            let _ = self.step(bus, false);
+            count += 1;
+        }
+        StepStop::Limit
+    }
+
     pub fn request_nmi(&mut self) {
         self.nmi_pending = true;
     }
