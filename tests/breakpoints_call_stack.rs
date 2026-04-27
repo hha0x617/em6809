@@ -117,12 +117,6 @@ fn nested_calls_keep_frames_in_push_order() {
 fn swi_pushes_with_swi_kind_and_rti_pops() {
     // $1000  3F        SWI    -> jumps to $4000 (vector at $FFFA/$FFFB)
     // $4000  3B        RTI    (immediately return)
-    //
-    // We assert that SWI pushes a Swi(1) frame and RTI drops it.
-    // We deliberately do NOT assert the post-RTI PC value here:
-    // em6809's SWI/RTI byte-order in the saved frame is a separate
-    // concern (and a known quirk in this codebase) that's outside
-    // the scope of the shadow-stack hooks.
     let mut mem = Memory::new();
     mem.load_slice(0x1000, &[0x3F]);
     mem.load_slice(0x4000, &[0x3B]);
@@ -138,6 +132,10 @@ fn swi_pushes_with_swi_kind_and_rti_pops() {
 
     cpu.step(&mut mem, false); // RTI
     assert!(cpu.shadow_stack.is_empty());
+    assert_eq!(
+        cpu.r.pc, 0x1001,
+        "RTI must restore PC to the byte after SWI"
+    );
 }
 
 #[test]
