@@ -178,6 +178,112 @@ fn nmi_during_bsr_keeps_both_frames_then_rti_drops_only_the_nmi() {
     assert_eq!(cpu.shadow_stack.peek().unwrap().kind, CallKind::Bsr);
 }
 
+#[test]
+fn puls_with_pc_pops_call_frame_like_rts() {
+    // Common 6809 idiom: `pshs b` on entry, `puls b,pc` to return.
+    // The PULS-with-PC effectively performs an RTS, so it must
+    // retire the BSR/JSR frame just like RTS would. Without the
+    // pop, callees that use this pattern leak frames.
+    //
+    //   $1000  8D 02     BSR  +2 -> $1004     (caller)
+    //   $1002  39        RTS                  (never reached here)
+    //   $1004  34 04     PSHS b               (callee entry: save B)
+    //   $1006  35 84     PULS b,pc            (callee return)
+    let mut mem = Memory::new();
+    mem.load_slice(
+        0x1000,
+        &[0x8D, 0x02, 0x39, 0x00, 0x34, 0x04, 0x35, 0x84],
+    );
+    let mut cpu = boot(&mem);
+
+    cpu.step(&mut mem, false); // BSR $1004
+    assert_eq!(cpu.shadow_stack.len(), 1);
+    cpu.step(&mut mem, false); // PSHS b
+    assert_eq!(cpu.shadow_stack.len(), 1);
+    cpu.step(&mut mem, false); // PULS b,pc -> return $1002
+    assert!(
+        cpu.shadow_stack.is_empty(),
+        "PULS with PC should pop the BSR call frame"
+    );
+    assert_eq!(cpu.r.pc, 0x1002);
+}
+
+#[test]
+fn puls_without_pc_keeps_call_frame() {
+    // Pulling registers other than PC is not a return — the BSR
+    // frame must stay on the shadow stack.
+    //
+    //   $1000  8D 02     BSR  +2 -> $1004
+    //   $1004  34 04     PSHS b
+    //   $1006  35 04     PULS b              (no PC bit)
+    //   $1008  39        RTS
+    let mut mem = Memory::new();
+    mem.load_slice(
+        0x1000,
+        &[0x8D, 0x02, 0x39, 0x00, 0x34, 0x04, 0x35, 0x04, 0x39],
+    );
+    let mut cpu = boot(&mem);
+
+    cpu.step(&mut mem, false); // BSR
+    cpu.step(&mut mem, false); // PSHS b
+    cpu.step(&mut mem, false); // PULS b (no PC)
+    assert_eq!(
+        cpu.shadow_stack.len(),
+        1,
+        "PULS without PC must NOT pop the BSR call frame"
+    );
+    cpu.step(&mut mem, false); // RTS
+    assert!(cpu.shadow_stack.is_empty());
+}
+
+#[test]
+fn puls_pc_then_swi_then_bsr_yields_two_live_frames() {
+    // Reproduces the swi_demo Call Stack shape. Without the PULS
+    // pop fix the main-loop BSR's frame leaks past the manual
+    // return, and the user observes three frames at the BP point
+    // (BSR-leak / EXCEPTION / inner-BSR) instead of two.
+    //
+    //   $1000  8D 06     BSR putc        -> $1008  (main loop call #1)
+    //   $1002  3F        SWI             -> $4000  (vector below)
+    //   $1003  39        RTS             (never reached)
+    //   ...
+    //   $1008  34 04     PSHS b          (putc entry)
+    //   $100A  35 84     PULS b,pc       (putc exit -> $1002)
+    //   ...
+    //   $4000  8D 06     BSR putc        -> $4008  (handler's nested call)
+    //   $4002  3B        RTI             (never reached in this slice)
+    //   ...
+    //   $4008  12        NOP             (stand-in for the BP location)
+    //   $4009  39        RTS
+    //
+    //   $FFFA/$FFFB -> $4000  (SWI vector)
+    let mut mem = Memory::new();
+    mem.load_slice(0x1000, &[0x8D, 0x06, 0x3F, 0x39]);
+    mem.load_slice(0x1008, &[0x34, 0x04, 0x35, 0x84]);
+    mem.load_slice(0x4000, &[0x8D, 0x06, 0x3B]);
+    mem.load_slice(0x4008, &[0x12, 0x39]);
+    mem.load_slice(0xFFFA, &[0x40, 0x00]);
+    let mut cpu = boot(&mem);
+
+    cpu.step(&mut mem, false); // BSR $1008
+    cpu.step(&mut mem, false); // PSHS b
+    cpu.step(&mut mem, false); // PULS b,pc -> $1002
+    assert!(cpu.shadow_stack.is_empty(), "main-loop BSR must be popped");
+    cpu.step(&mut mem, false); // SWI -> $4000
+    assert_eq!(cpu.shadow_stack.len(), 1);
+    assert_eq!(cpu.shadow_stack.peek().unwrap().kind, CallKind::Swi(1));
+    cpu.step(&mut mem, false); // BSR $4008
+    assert_eq!(
+        cpu.shadow_stack.len(),
+        2,
+        "exactly two live frames at the BP point: SWI + nested BSR"
+    );
+    let frames = cpu.shadow_stack.frames();
+    assert_eq!(frames[0].kind, CallKind::Swi(1));
+    assert_eq!(frames[1].kind, CallKind::Bsr);
+    assert_eq!(frames[1].target, 0x4008);
+}
+
 // ============================================================
 // BreakpointSet
 // ============================================================

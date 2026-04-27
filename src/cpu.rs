@@ -2356,6 +2356,13 @@ impl Cpu {
                 if (pb & 0x80) != 0 {
                     self.r.pc = self.pull16(bus);
                     bytes += 2;
+                    // `puls ...,pc` is a manual return: it pops the
+                    // saved PC just like RTS does, so the matching
+                    // BSR/JSR call frame should be retired here too.
+                    // Without this, callees that return via
+                    // `puls b,pc` (a common 6809 idiom) leave their
+                    // CALL frame on the shadow stack indefinitely.
+                    self.shadow_stack.pop_for_return(self.r.s);
                 }
                 consumed = 5 + bytes;
                 if trace {
