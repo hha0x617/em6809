@@ -230,25 +230,13 @@ pub(super) fn show_breakpoints_viewport(
             }
         });
     }
-    #[cfg(not(target_os = "windows"))]
+    // Linux: deferred viewports do not honor
+    // `ViewportBuilder::with_visible(false)`, so we have to gate the
+    // declaration itself — dropping it on the next frame closes the
+    // viewport.  See git log for the original WSLg-startup bug.
+    #[cfg(target_os = "linux")]
     {
-        // Only declare the deferred viewport while the window is open.
-        // Dropping the declaration on the next frame after `open` flips
-        // false tells egui to close the viewport. Linux/macOS deferred
-        // viewports do not honor `ViewportBuilder::with_visible(false)`,
-        // so without this gate the window pops up at startup despite
-        // the menu showing it hidden.
         if open {
-            // The caller (RegApp::update) decides when to nudge this
-            // viewport with `request_repaint_of` based on the
-            // `bp_list_rev` counter — driven by data changes rather
-            // than the parent's frame rate.  An earlier version
-            // pumped `request_repaint_of` + `request_repaint_after_for`
-            // unconditionally every parent frame which on macOS made
-            // AppKit treat the BP / Call Stack viewports as the
-            // "active" key window, so they monopolised input from the
-            // main window and the VT100 console.
-
             let bp_list_cl = Arc::clone(&bp_list);
             let cmds_cl = Arc::clone(&cmds);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
@@ -263,5 +251,33 @@ pub(super) fn show_breakpoints_viewport(
                 }
             });
         }
+    }
+
+    // macOS: declare the viewport unconditionally and toggle
+    // visibility with `Visible(bool)` viewport commands instead.
+    // Re-declaring after an `if open == false` gap creates a fresh
+    // NSWindow each time the user re-opens the panel, and AppKit
+    // promotes the new NSWindow to the key window — that's what
+    // monopolised input from the main window and the VT100 console
+    // on macOS.  Mirrors what `console_ui` does for its own
+    // deferred viewport.  Render is still guarded by `open` so a
+    // hidden viewport doesn't spend time laying out the table.
+    #[cfg(target_os = "macos")]
+    {
+        let bp_list_cl = Arc::clone(&bp_list);
+        let cmds_cl = Arc::clone(&cmds);
+        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+            if open {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_breakpoints(ui, &bp_list_cl, &cmds_cl);
+                });
+            }
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_visible(false);
+                note_closed();
+            }
+        });
     }
 }
