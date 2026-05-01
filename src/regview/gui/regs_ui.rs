@@ -11,10 +11,12 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
         // Sized for the worst-case toolbar row when both Edit mode and
         // pause are active: Resume / Step / Step Over / Step Out / sep
-        // / Apply / Cancel. Step Over/Out add ~160 px over the original
-        // 320 px minimum, so leave headroom for ja-JP labels which are
-        // a touch wider than en-US.
-        ui.set_min_width(520.0);
+        // / Apply / Cancel. ja-JP labels (ステップオーバー / 適用 / …)
+        // are a touch wider than en-US, so the minimum is locale-aware:
+        // pinning ja-JP at 520 leaves en-US needlessly wide and wastes
+        // the dead-space the other panels can't grow into.
+        let toolbar_min = if app.use_japanese { 480.0 } else { 340.0 };
+        ui.set_min_width(toolbar_min);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -175,7 +177,13 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                     .resizable(false)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .column(Column::auto().at_least(40.0))
-                    .column(Column::remainder())
+                    // Value column was `Column::remainder()`, which made
+                    // each cell stretch to fill the central panel — at
+                    // 580 px wide that's an absurd amount of whitespace
+                    // around `0x00` / `0x0000`. Cap at 160 px (room for
+                    // the CC flag row "E F H I N Z V C" in monospace
+                    // plus the 100-px TextEdit used in edit mode).
+                    .column(Column::auto().at_least(160.0))
                     .header(22.0, |mut header| {
                         header.col(|ui| {
                             ui.strong(fl!(LOADER, "reg"));
