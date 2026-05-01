@@ -177,11 +177,9 @@ pub(super) fn show_call_stack_viewport(
         // rationale — deferred viewports on Linux/macOS ignore
         // `with_visible(false)`, so we gate declaration instead.
         if open {
-            // Pump repaints so the deferred viewport picks up worker-side
-            // call-stack mutations (BSR/JSR/RTS, IRQ entry, …) without
-            // requiring the user to focus the child window first.
-            ctx.request_repaint_of(id);
-            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
+            // Repaints are driven by `call_stack_rev` from RegApp::update
+            // — see `breakpoints_ui::show_breakpoints_viewport` for the
+            // macOS focus-monopolisation rationale.
 
             let cs_cl = Arc::clone(&call_stack);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {

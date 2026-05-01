@@ -232,13 +232,15 @@ pub(super) fn show_breakpoints_viewport(
         // so without this gate the window pops up at startup despite
         // the menu showing it hidden.
         if open {
-            // Pump repaints so the deferred viewport reflects parent-side
-            // updates (worker-side bp_list mutations from listing-pane
-            // double-clicks etc.) without requiring the user to focus
-            // the child window first. Mirrors what console_ui does for
-            // its own deferred viewport.
-            ctx.request_repaint_of(id);
-            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
+            // The caller (RegApp::update) decides when to nudge this
+            // viewport with `request_repaint_of` based on the
+            // `bp_list_rev` counter — driven by data changes rather
+            // than the parent's frame rate.  An earlier version
+            // pumped `request_repaint_of` + `request_repaint_after_for`
+            // unconditionally every parent frame which on macOS made
+            // AppKit treat the BP / Call Stack viewports as the
+            // "active" key window, so they monopolised input from the
+            // main window and the VT100 console.
 
             let bp_list_cl = Arc::clone(&bp_list);
             let cmds_cl = Arc::clone(&cmds);

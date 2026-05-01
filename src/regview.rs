@@ -17,7 +17,7 @@ use std::time::Duration;
 use eframe::egui;
 use once_cell::sync::OnceCell;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 
@@ -1089,8 +1089,23 @@ pub mod gui {
         pub bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>>,
         /// Full breakpoint list snapshot for the breakpoints window.
         pub bp_list: Arc<Mutex<Vec<BpInfo>>>,
+        /// Bumped by `Viewer::update_bp_list` whenever the worker
+        /// rewrites the BP-panel snapshot.  Compared against
+        /// `last_bp_list_rev` each frame; we only nudge the deferred
+        /// Breakpoints viewport with `request_repaint_of` when this
+        /// counter advanced.  Replaces the previous unconditional
+        /// per-frame repaint pump, which on macOS caused the BP / Call
+        /// Stack windows to monopolise key input.
+        pub bp_list_rev: Arc<AtomicU64>,
+        /// Last `bp_list_rev` value the GUI thread acted on.  Local
+        /// to `RegApp`; not shared with the worker.
+        pub last_bp_list_rev: u64,
         /// Shadow call stack snapshot for the call-stack window.
         pub call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
+        /// See `bp_list_rev`.  Bumped by `Viewer::update_call_stack`.
+        pub call_stack_rev: Arc<AtomicU64>,
+        /// Last `call_stack_rev` value the GUI thread acted on.
+        pub last_call_stack_rev: u64,
         /// Open/closed state of the standalone Breakpoints window.
         /// Toggled from the View menu; the X close button on the
         /// window itself flips it back via egui's `.open(&mut bool)`.
@@ -1817,6 +1832,25 @@ pub mod gui {
             if call_stack_ui::take_closed() {
                 self.call_stack_window_open = false;
             }
+            // Nudge the deferred BP / Call Stack viewports to repaint
+            // only when the worker actually rewrote their snapshots.
+            // The previous "pump every frame" approach made macOS
+            // AppKit treat these viewports as key-window candidates
+            // and steal input from the main window / VT100 console.
+            if self.bp_window_open {
+                let cur = self.bp_list_rev.load(Ordering::SeqCst);
+                if cur != self.last_bp_list_rev {
+                    ctx.request_repaint_of(breakpoints_ui::breakpoints_viewport_id());
+                    self.last_bp_list_rev = cur;
+                }
+            }
+            if self.call_stack_window_open {
+                let cur = self.call_stack_rev.load(Ordering::SeqCst);
+                if cur != self.last_call_stack_rev {
+                    ctx.request_repaint_of(call_stack_ui::call_stack_viewport_id());
+                    self.last_call_stack_rev = cur;
+                }
+            }
             breakpoints_ui::show_breakpoints_viewport(
                 ctx,
                 Arc::clone(&self.bp_list),
@@ -1976,10 +2010,16 @@ pub mod gui {
         /// for each registered BP. Pushed by the worker on the same
         /// pause-edge events as bp_states.
         bp_list: Arc<Mutex<Vec<BpInfo>>>,
+        /// Bumped by `update_bp_list` so the GUI thread can detect
+        /// when the deferred Breakpoints viewport needs a repaint
+        /// without polling the list contents on every frame.
+        bp_list_rev: Arc<AtomicU64>,
         /// Snapshot of the shadow call stack for the call-stack panel.
         /// Frames are in push order (oldest → newest). Pushed on
         /// pause-edge events.
         call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
+        /// Bumped by `update_call_stack`. See `bp_list_rev`.
+        call_stack_rev: Arc<AtomicU64>,
     }
 
     impl Clone for RegView {
@@ -2020,7 +2060,9 @@ pub mod gui {
                 boundaries: Arc::clone(&self.boundaries),
                 bp_states: Arc::clone(&self.bp_states),
                 bp_list: Arc::clone(&self.bp_list),
+                bp_list_rev: Arc::clone(&self.bp_list_rev),
                 call_stack: Arc::clone(&self.call_stack),
+                call_stack_rev: Arc::clone(&self.call_stack_rev),
             }
         }
     }
@@ -2106,7 +2148,9 @@ pub mod gui {
             let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
             let bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>> = Arc::new(Mutex::new(Vec::new()));
             let bp_list: Arc<Mutex<Vec<BpInfo>>> = Arc::new(Mutex::new(Vec::new()));
+            let bp_list_rev: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
             let call_stack: Arc<Mutex<Vec<CallFrameInfo>>> = Arc::new(Mutex::new(Vec::new()));
+            let call_stack_rev: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
             // Try to discover a Japanese-capable font from common system locations
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -2221,7 +2265,9 @@ pub mod gui {
             let boundaries_thread = Arc::clone(&boundaries);
             let bp_states_thread = Arc::clone(&bp_states);
             let bp_list_thread = Arc::clone(&bp_list);
+            let bp_list_rev_thread = Arc::clone(&bp_list_rev);
             let call_stack_thread = Arc::clone(&call_stack);
+            let call_stack_rev_thread = Arc::clone(&call_stack_rev);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
                 // Locale-aware default width: ja-JP toolbar labels
@@ -2395,7 +2441,11 @@ pub mod gui {
                     boundaries: boundaries_thread,
                     bp_states: bp_states_thread,
                     bp_list: bp_list_thread,
+                    bp_list_rev: bp_list_rev_thread,
+                    last_bp_list_rev: 0,
                     call_stack: call_stack_thread,
+                    call_stack_rev: call_stack_rev_thread,
+                    last_call_stack_rev: 0,
                     bp_window_open: false,
                     call_stack_window_open: false,
                 };
@@ -2474,7 +2524,9 @@ pub mod gui {
                 boundaries,
                 bp_states,
                 bp_list,
+                bp_list_rev,
                 call_stack,
+                call_stack_rev,
             }
         }
 
@@ -2523,7 +2575,9 @@ pub mod gui {
             let boundaries = Arc::new(Mutex::new(InstructionBoundaries::new()));
             let bp_states: Arc<Mutex<Vec<(u16, BpUiState)>>> = Arc::new(Mutex::new(Vec::new()));
             let bp_list: Arc<Mutex<Vec<BpInfo>>> = Arc::new(Mutex::new(Vec::new()));
+            let bp_list_rev: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
             let call_stack: Arc<Mutex<Vec<CallFrameInfo>>> = Arc::new(Mutex::new(Vec::new()));
+            let call_stack_rev: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
             // Font discovery (same as spawn)
             let ja_font: Option<Arc<Vec<u8>>> = {
@@ -2637,7 +2691,9 @@ pub mod gui {
                 boundaries,
                 bp_states,
                 bp_list,
+                bp_list_rev,
                 call_stack,
+                call_stack_rev,
             }
         }
 
@@ -2835,7 +2891,11 @@ pub mod gui {
                 boundaries: Arc::clone(&self.boundaries),
                 bp_states: Arc::clone(&self.bp_states),
                 bp_list: Arc::clone(&self.bp_list),
+                bp_list_rev: Arc::clone(&self.bp_list_rev),
+                last_bp_list_rev: 0,
                 call_stack: Arc::clone(&self.call_stack),
+                call_stack_rev: Arc::clone(&self.call_stack_rev),
+                last_call_stack_rev: 0,
                 bp_window_open: false,
                 call_stack_window_open: false,
             };
@@ -3214,20 +3274,29 @@ pub mod gui {
 
         /// Worker-side: replace the BP-panel snapshot. Caller passes
         /// in the full list each time; the panel keeps no state of
-        /// its own, so we don't need diff machinery here.
+        /// its own, so we don't need diff machinery here.  The rev
+        /// counter is bumped so the GUI thread can detect that the
+        /// deferred Breakpoints viewport (Linux/macOS) needs a
+        /// repaint — pumping `request_repaint_of` every frame
+        /// regardless of changes was found to interfere with macOS
+        /// AppKit focus dispatch (BP / Call Stack windows would
+        /// monopolise key input).
         pub fn update_bp_list(&self, list: Vec<BpInfo>) {
             if let Ok(mut g) = self.bp_list.lock() {
                 *g = list;
             }
+            self.bp_list_rev.fetch_add(1, Ordering::SeqCst);
         }
 
         /// Worker-side: replace the call-stack-panel snapshot. Frames
         /// are passed in oldest-first order (push order); the panel
         /// renders them newest-first so the current frame is on top.
+        /// See `update_bp_list` for the rev-counter rationale.
         pub fn update_call_stack(&self, frames: Vec<CallFrameInfo>) {
             if let Ok(mut g) = self.call_stack.lock() {
                 *g = frames;
             }
+            self.call_stack_rev.fetch_add(1, Ordering::SeqCst);
         }
 
         pub fn auto_hex_on_edit(&self) -> bool {
