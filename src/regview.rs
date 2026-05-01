@@ -2229,7 +2229,12 @@ pub mod gui {
                 // registers central panel; en-US fits in ~420. Memory
                 // (440) + Listing (600) are constant, so the window
                 // total swings by ~120 px.
-                let init_w = if use_japanese { 1540.0 } else { 1440.0 };
+                let init_w = match (use_japanese, cfg!(windows)) {
+                    (true, true) => 1600.0,
+                    (true, false) => 1540.0,
+                    (false, true) => 1500.0,
+                    (false, false) => 1440.0,
+                };
                 let base = eframe::egui::ViewportBuilder::default()
                     .with_inner_size(eframe::egui::vec2(init_w, 700.0))
                     .with_min_inner_size(eframe::egui::vec2(init_w, 700.0))

@@ -15,7 +15,17 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
         // are a touch wider than en-US, so the minimum is locale-aware:
         // pinning ja-JP at 520 leaves en-US needlessly wide and wastes
         // the dead-space the other panels can't grow into.
-        let toolbar_min = if app.use_japanese { 480.0 } else { 340.0 };
+        // OS-aware headroom: Windows' system font lays the toolbar out
+        // wider than Linux's Noto Sans / macOS' Helvetica, so the floor
+        // is higher on Windows in both locales to keep the rightmost
+        // button (Cancel / キャンセル) fully visible without a
+        // horizontal scroll.
+        let toolbar_min = match (app.use_japanese, cfg!(windows)) {
+            (true, true) => 520.0,
+            (true, false) => 480.0,
+            (false, true) => 420.0,
+            (false, false) => 340.0,
+        };
         ui.set_min_width(toolbar_min);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
