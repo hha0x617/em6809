@@ -3223,6 +3223,29 @@ pub mod gui {
         pub fn auto_hex_on_edit(&self) -> bool {
             self.auto_hex_on_edit.load(Ordering::SeqCst)
         }
+        /// Worker-side: pop only breakpoint-class commands so the
+        /// running CPU loop on Linux/macOS can apply BP set/toggle/
+        /// remove/condition edits without first requiring the user to
+        /// pause. Mirrors the Windows behavior (where the main CPU
+        /// loop drains *all* commands every iteration via
+        /// [`take_command_worker`]). Order-preserving: returns the
+        /// oldest matching command and leaves all others queued.
+        pub fn take_breakpoint_command_eager(&self) -> Option<Command> {
+            if let Ok(mut q) = self.cmds.lock() {
+                if let Some(idx) = q.iter().position(|c| {
+                    matches!(
+                        c,
+                        Command::CycleBreakpointAtAddr(..)
+                            | Command::SetBreakpointEnabled(..)
+                            | Command::RemoveBreakpoint(..)
+                            | Command::SetBreakpointCondition(..)
+                    )
+                }) {
+                    return Some(q.remove(idx));
+                }
+            }
+            None
+        }
         /// Worker-side: pop only non-UI commands that must be handled by the worker.
         /// Leave UiSet* and UI-only commands (e.g., prompts, LST load) for the GUI thread.
         pub fn take_command_worker(&self) -> Option<Command> {

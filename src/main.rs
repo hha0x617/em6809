@@ -2983,6 +2983,50 @@ fn main() {
                                 viewer_cpu.sync_timer(true, t_pending, t_running);
                             }
                         }
+                        // Drain breakpoint-class commands before the
+                        // per-instruction BP check so a BP set in the
+                        // listing pane (or toggled / removed in the BP
+                        // window) takes effect *immediately* while the
+                        // guest is running. Without this, BP commands
+                        // sit in the queue until the user pauses —
+                        // matching the Windows main-loop drain at
+                        // line 3402 but limited to the four commands
+                        // that are safe and useful to apply mid-step.
+                        // Other commands (Apply*, MemWrite, …) still
+                        // wait for the pause spin-loop drain above.
+                        while let Some(cmd) = viewer_cpu.take_breakpoint_command_eager() {
+                            match cmd {
+                                regview::Command::CycleBreakpointAtAddr(a) => {
+                                    cycle_breakpoint_at(&mut cpu_worker, a);
+                                    push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                }
+                                regview::Command::SetBreakpointEnabled(id, en) => {
+                                    cpu_worker
+                                        .breakpoints
+                                        .set_enabled(em6809::debug::BreakpointId(id), en);
+                                    push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                }
+                                regview::Command::RemoveBreakpoint(id) => {
+                                    cpu_worker
+                                        .breakpoints
+                                        .remove(em6809::debug::BreakpointId(id));
+                                    push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                }
+                                regview::Command::SetBreakpointCondition(id, expr) => {
+                                    let bp_id = em6809::debug::BreakpointId(id);
+                                    let cond = if expr.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(expr)
+                                    };
+                                    cpu_worker.breakpoints.set_condition(bp_id, cond);
+                                    push_debug_snapshots(&viewer_cpu, &cpu_worker);
+                                }
+                                _ => unreachable!(
+                                    "take_breakpoint_command_eager filtered to BP-class only"
+                                ),
+                            }
+                        }
                         // Record the about-to-execute PC as a confirmed
                         // instruction boundary for the live-disasm pane.
                         viewer_cpu.record_instruction_pc(cpu_worker.r.pc);

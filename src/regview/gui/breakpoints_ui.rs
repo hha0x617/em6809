@@ -232,6 +232,14 @@ pub(super) fn show_breakpoints_viewport(
         // so without this gate the window pops up at startup despite
         // the menu showing it hidden.
         if open {
+            // Pump repaints so the deferred viewport reflects parent-side
+            // updates (worker-side bp_list mutations from listing-pane
+            // double-clicks etc.) without requiring the user to focus
+            // the child window first. Mirrors what console_ui does for
+            // its own deferred viewport.
+            ctx.request_repaint_of(id);
+            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
+
             let bp_list_cl = Arc::clone(&bp_list);
             let cmds_cl = Arc::clone(&cmds);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
