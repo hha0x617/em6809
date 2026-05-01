@@ -335,20 +335,17 @@ pub fn install_view_menu_once(
         let target = ensure_view_helper_instance();
 
         let bp_item: *mut ObjcObject = msg_send![class!(NSMenuItem), alloc];
-        let bp_item: *mut ObjcObject =
-            msg_send![bp_item, initWithTitle: nsstring("Breakpoints") action: sel!(em_toggleBp:) keyEquivalent: nsstring("")];
+        let bp_item: *mut ObjcObject = msg_send![bp_item, initWithTitle: nsstring("Breakpoints") action: sel!(em_toggleBp:) keyEquivalent: nsstring("")];
         let _: () = msg_send![bp_item, setTarget: target];
         let _: () = msg_send![view_menu, addItem: bp_item];
 
         let cs_item: *mut ObjcObject = msg_send![class!(NSMenuItem), alloc];
-        let cs_item: *mut ObjcObject =
-            msg_send![cs_item, initWithTitle: nsstring("Call Stack") action: sel!(em_toggleCs:) keyEquivalent: nsstring("")];
+        let cs_item: *mut ObjcObject = msg_send![cs_item, initWithTitle: nsstring("Call Stack") action: sel!(em_toggleCs:) keyEquivalent: nsstring("")];
         let _: () = msg_send![cs_item, setTarget: target];
         let _: () = msg_send![view_menu, addItem: cs_item];
 
         let top_item: *mut ObjcObject = msg_send![class!(NSMenuItem), alloc];
-        let top_item: *mut ObjcObject =
-            msg_send![top_item, initWithTitle: view_title action: core::ptr::null::<()>() keyEquivalent: nsstring("")];
+        let top_item: *mut ObjcObject = msg_send![top_item, initWithTitle: view_title action: core::ptr::null::<()>() keyEquivalent: nsstring("")];
         let _: () = msg_send![top_item, setSubmenu: view_menu];
         let _: () = msg_send![main_menu, addItem: top_item];
 
