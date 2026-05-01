@@ -146,10 +146,13 @@ pub(super) fn show_call_stack_viewport(
     if update_visible(open) {
         set_visible(ctx, open);
     }
+    // See `breakpoints_ui::show_breakpoints_viewport` for the
+    // `with_active(false)` rationale (macOS focus monopolisation).
     let builder = egui::ViewportBuilder::default()
         .with_title("em6809 Call Stack")
         .with_inner_size(egui::vec2(500.0, 260.0))
         .with_visible(open)
+        .with_active(false)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
 

@@ -198,10 +198,17 @@ pub(super) fn show_breakpoints_viewport(
     if update_visible(open) {
         set_visible(ctx, open);
     }
+    // `with_active(false)` is the macOS-relevant bit: tell AppKit not
+    // to promote this NSWindow to the key window when it appears, so
+    // typing into the main window or VT100 console keeps working
+    // while the BP / Call Stack panels are open.  Documented as
+    // unsupported on X11 / Wayland in egui, but harmless there — the
+    // flag is simply ignored.
     let builder = egui::ViewportBuilder::default()
         .with_title("em6809 Breakpoints")
         .with_inner_size(egui::vec2(440.0, 260.0))
         .with_visible(open)
+        .with_active(false)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
 
