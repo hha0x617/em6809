@@ -1789,6 +1789,8 @@ fn main() {
                                         regview::Command::UiOpenSettings
                                         | regview::Command::UiOpenSettingsExternal => {}
                                         regview::Command::UiOpenImageDialog => {}
+                                        regview::Command::UiToggleBreakpointsWindow
+                                        | regview::Command::UiToggleCallStackWindow => {}
                                         regview::Command::UiSetSettingsBaseline(_, _, _) => {}
                                         regview::Command::UiAckSettings { .. } => {}
                                         regview::Command::CycleBreakpointAtAddr(a) => {
@@ -3402,6 +3404,8 @@ fn main() {
                         regview::Command::UiOpenSettings
                         | regview::Command::UiOpenSettingsExternal => {}
                         regview::Command::UiOpenImageDialog => {}
+                        regview::Command::UiToggleBreakpointsWindow
+                        | regview::Command::UiToggleCallStackWindow => {}
                         regview::Command::OpenImageParsed { path, parsed } => {
                             apply_parsed_image(
                                 bus.as_mut(),
@@ -3671,6 +3675,8 @@ fn main() {
                             regview::Command::UiOpenSettings
                             | regview::Command::UiOpenSettingsExternal => {}
                             regview::Command::UiOpenImageDialog => {}
+                            regview::Command::UiToggleBreakpointsWindow
+                            | regview::Command::UiToggleCallStackWindow => {}
                             regview::Command::OpenImageParsed { path, parsed } => {
                                 apply_parsed_image(
                                     bus.as_mut(),
@@ -4525,6 +4531,8 @@ fn main() {
                         regview::Command::UiOpenSettings
                         | regview::Command::UiOpenSettingsExternal => {}
                         regview::Command::UiOpenImageDialog => {}
+                        regview::Command::UiToggleBreakpointsWindow
+                        | regview::Command::UiToggleCallStackWindow => {}
                         regview::Command::OpenImageParsed { path, parsed } => {
                             apply_parsed_image(
                                 bus.as_mut(),
