@@ -281,3 +281,28 @@ pub(super) fn show_breakpoints_viewport(
         });
     }
 }
+
+/// macOS-only fallback: render the Breakpoints panel as an in-app
+/// `egui::Window` inside the main viewport instead of as a separate
+/// OS-level NSWindow.  In eframe 0.29 with multi-viewport, AppKit's
+/// key-window dispatch interferes with input to the main viewport's
+/// TextEdit / button widgets — even just *having* an auxiliary
+/// NSWindow alive blocks the main window's controls from accepting
+/// keyboard input.  Falling back to an in-app window sidesteps the
+/// bug entirely; the trade-off is that the panel can no longer be
+/// dragged outside the main window.
+#[cfg(target_os = "macos")]
+pub(super) fn show_breakpoints_inapp(
+    ctx: &egui::Context,
+    bp_list: &Arc<Mutex<Vec<BpInfo>>>,
+    cmds: &Arc<Mutex<Vec<Command>>>,
+    open: &mut bool,
+) {
+    egui::Window::new("Breakpoints")
+        .open(open)
+        .default_size(egui::vec2(440.0, 260.0))
+        .resizable(true)
+        .show(ctx, |ui| {
+            render_breakpoints(ui, bp_list, cmds);
+        });
+}

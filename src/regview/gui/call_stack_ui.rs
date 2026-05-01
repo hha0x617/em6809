@@ -211,3 +211,21 @@ pub(super) fn show_call_stack_viewport(
         });
     }
 }
+
+/// macOS-only fallback: render the Call Stack panel in-app instead
+/// of via a separate NSWindow.  See
+/// `breakpoints_ui::show_breakpoints_inapp` for the rationale.
+#[cfg(target_os = "macos")]
+pub(super) fn show_call_stack_inapp(
+    ctx: &egui::Context,
+    call_stack: &Arc<Mutex<Vec<CallFrameInfo>>>,
+    open: &mut bool,
+) {
+    egui::Window::new("Call Stack")
+        .open(open)
+        .default_size(egui::vec2(500.0, 260.0))
+        .resizable(true)
+        .show(ctx, |ui| {
+            render_call_stack(ui, call_stack);
+        });
+}

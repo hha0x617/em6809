@@ -1825,43 +1825,68 @@ pub mod gui {
             // (eframe viewport API — same pattern as the VT100 console).
             // The View-menu checkbox writes `self.bp_window_open`;
             // the OS window's X button is reconciled here by
-            // consuming the module's "closed" flag.
-            if breakpoints_ui::take_closed() {
-                self.bp_window_open = false;
-            }
-            if call_stack_ui::take_closed() {
-                self.call_stack_window_open = false;
-            }
-            // Nudge the deferred BP / Call Stack viewports to repaint
-            // only when the worker actually rewrote their snapshots.
-            // The previous "pump every frame" approach made macOS
-            // AppKit treat these viewports as key-window candidates
-            // and steal input from the main window / VT100 console.
-            if self.bp_window_open {
-                let cur = self.bp_list_rev.load(Ordering::SeqCst);
-                if cur != self.last_bp_list_rev {
-                    ctx.request_repaint_of(breakpoints_ui::breakpoints_viewport_id());
-                    self.last_bp_list_rev = cur;
+            // consuming the module's "closed" flag.  On macOS the BP /
+            // CS panels are rendered as in-app `egui::Window`s instead
+            // of separate NSWindows (eframe 0.29 multi-viewport input
+            // dispatch breaks the main window's TextEdit / button
+            // controls when any auxiliary NSWindow is alive), so the
+            // close-flag plumbing is platform-conditional.
+            #[cfg(not(target_os = "macos"))]
+            {
+                if breakpoints_ui::take_closed() {
+                    self.bp_window_open = false;
                 }
-            }
-            if self.call_stack_window_open {
-                let cur = self.call_stack_rev.load(Ordering::SeqCst);
-                if cur != self.last_call_stack_rev {
-                    ctx.request_repaint_of(call_stack_ui::call_stack_viewport_id());
-                    self.last_call_stack_rev = cur;
+                if call_stack_ui::take_closed() {
+                    self.call_stack_window_open = false;
                 }
+                // Nudge the deferred BP / Call Stack viewports to
+                // repaint only when the worker rewrote their
+                // snapshots.  The previous "pump every frame" approach
+                // burned cycles on Linux and confused AppKit on macOS.
+                if self.bp_window_open {
+                    let cur = self.bp_list_rev.load(Ordering::SeqCst);
+                    if cur != self.last_bp_list_rev {
+                        ctx.request_repaint_of(breakpoints_ui::breakpoints_viewport_id());
+                        self.last_bp_list_rev = cur;
+                    }
+                }
+                if self.call_stack_window_open {
+                    let cur = self.call_stack_rev.load(Ordering::SeqCst);
+                    if cur != self.last_call_stack_rev {
+                        ctx.request_repaint_of(call_stack_ui::call_stack_viewport_id());
+                        self.last_call_stack_rev = cur;
+                    }
+                }
+                breakpoints_ui::show_breakpoints_viewport(
+                    ctx,
+                    Arc::clone(&self.bp_list),
+                    Arc::clone(&self.cmds),
+                    self.bp_window_open,
+                );
+                call_stack_ui::show_call_stack_viewport(
+                    ctx,
+                    Arc::clone(&self.call_stack),
+                    self.call_stack_window_open,
+                );
             }
-            breakpoints_ui::show_breakpoints_viewport(
-                ctx,
-                Arc::clone(&self.bp_list),
-                Arc::clone(&self.cmds),
-                self.bp_window_open,
-            );
-            call_stack_ui::show_call_stack_viewport(
-                ctx,
-                Arc::clone(&self.call_stack),
-                self.call_stack_window_open,
-            );
+            #[cfg(target_os = "macos")]
+            {
+                // egui::Window's `.open(&mut bool)` handles the close
+                // button directly, so the take_closed plumbing isn't
+                // needed.  Repaints come for free along with the rest
+                // of the main viewport.
+                breakpoints_ui::show_breakpoints_inapp(
+                    ctx,
+                    &self.bp_list,
+                    &self.cmds,
+                    &mut self.bp_window_open,
+                );
+                call_stack_ui::show_call_stack_inapp(
+                    ctx,
+                    &self.call_stack,
+                    &mut self.call_stack_window_open,
+                );
+            }
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
             let editing = self.edit_mode;
