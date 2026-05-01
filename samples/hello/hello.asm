@@ -1,15 +1,15 @@
         ORG   $E000
-CONBASE EQU   $FF00       ; 送受信データ
-TDRE    EQU   $01         ; TX ready bit (bit0)
+CONBASE EQU   $FF00       ; MC6850 ACIA: status @ +0, data @ +1
+TDRE    EQU   $02         ; SR bit1: Transmit Data Register Empty
 
 START   LDY   #CONBASE
         LDX   #MSG
 NEXT    LDB   ,X+         ; 文字取得
         BEQ   HALT
-WAIT    LDA   1,Y         ; STATUS = base+1
+WAIT    LDA   ,Y          ; STATUS = base+0
         BITA  #TDRE
         BEQ   WAIT
-        STB   ,Y          ; TX 送信 (base)
+        STB   1,Y         ; TX 送信 (base+1)
         BRA   NEXT
 
 HALT    BRA   HALT

@@ -2,6 +2,17 @@
 
 Options to control the emulator’s console input/output with practical recipes. On Windows/Linux/macOS, stdin is set to raw (immediate) mode; output is buffered internally for UTF‑8.
 
+## Register layout
+
+The console device is a Motorola MC6850 ACIA-compatible UART (base = `--console 0xADDR`):
+
+| Offset | Read | Write |
+| --- | --- | --- |
+| `+0` | Status Register (SR) — bit 0 = RDRF, bit 1 = TDRE, bit 7 = IRQ | Control Register (CR) |
+| `+1` | Receive Data Register | Transmit Data Register |
+
+Compatible out of the box with Hha Forth / Hha Lisp / NetBSD MVME147 boot ROM and similar real-hardware-targeting code. The old custom layout (`Simple`: data@+0, status@+1) has been removed.
+
 ## Main options
 
 - `--console-stdin`: Attach host stdin (keyboard) to the guest

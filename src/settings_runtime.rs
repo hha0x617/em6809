@@ -35,7 +35,6 @@ pub fn apply_settings_runtime(
                 io_mem,
                 settings.use_console,
                 console_base,
-                settings.console_mc6850,
                 console_out_path.as_deref(),
                 settings.console_echo,
                 console_flush_every,
@@ -45,7 +44,6 @@ pub fn apply_settings_runtime(
                 io_mmu,
                 settings.use_console,
                 console_base,
-                settings.console_mc6850,
                 console_out_path.as_deref(),
                 settings.console_echo,
                 console_flush_every,
@@ -57,7 +55,6 @@ pub fn apply_settings_runtime(
             io_mem,
             settings.use_console,
             console_base,
-            settings.console_mc6850,
             console_out_path.as_deref(),
             settings.console_echo,
             console_flush_every,
@@ -67,7 +64,6 @@ pub fn apply_settings_runtime(
             io_mmu,
             settings.use_console,
             console_base,
-            settings.console_mc6850,
             console_out_path.as_deref(),
             settings.console_echo,
             console_flush_every,
@@ -273,7 +269,6 @@ pub fn persist_settings_snapshot(state: &regview::SettingsState, gpio_on_color: 
     p.console = Some(prefs::Console {
         enable: Some(state.use_console),
         base: parse_settings_u16(&state.console_base_hex),
-        mc6850: Some(state.console_mc6850),
         stdin: Some(state.console_stdin),
         echo: Some(state.console_echo),
         out_path: if state.console_out_path.is_empty() {
@@ -576,35 +571,20 @@ fn apply_console_config<B: bus::Bus>(
     iobus: &mut IoBus<B>,
     enable: bool,
     base: u16,
-    mc6850: bool,
     out_path: Option<&str>,
     echo: bool,
     flush_every: Option<usize>,
 ) {
-    iobus.ensure_console_type(enable, base, mc6850);
-    // After ensure_console_type, only one of ConsoleDev / Mc6850Dev is
-    // present (or neither).  Apply output-sink settings to whichever it is.
-    if !mc6850 {
-        iobus.with_console_mut_opt(|c| {
-            if let Some(path) = out_path {
-                c.set_out_file(path);
-            }
-            c.set_local_echo(echo);
-            if let Some(n) = flush_every {
-                c.set_flush_every(n);
-            }
-        });
-    } else {
-        iobus.with_mc6850_mut_opt(|c| {
-            if let Some(path) = out_path {
-                c.set_out_file(path);
-            }
-            c.set_local_echo(echo);
-            if let Some(n) = flush_every {
-                c.set_flush_every(n);
-            }
-        });
-    }
+    iobus.ensure_console(enable, base);
+    iobus.with_console_mut_opt(|c| {
+        if let Some(path) = out_path {
+            c.set_out_file(path);
+        }
+        c.set_local_echo(echo);
+        if let Some(n) = flush_every {
+            c.set_flush_every(n);
+        }
+    });
 }
 
 fn apply_block_config<B: bus::Bus>(

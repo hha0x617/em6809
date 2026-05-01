@@ -1,15 +1,15 @@
                       (        hello.asm):00001                 ORG   $E000
-     FF00             (        hello.asm):00002         CONBASE EQU   $FF00       ; 送受信データ
-     0001             (        hello.asm):00003         TDRE    EQU   $01         ; TX ready bit (bit0)
+     FF00             (        hello.asm):00002         CONBASE EQU   $FF00       ; MC6850 ACIA: status @ +0, data @ +1
+     0002             (        hello.asm):00003         TDRE    EQU   $02         ; SR bit1: Transmit Data Register Empty
                       (        hello.asm):00004         
 E000 108EFF00         (        hello.asm):00005         START   LDY   #CONBASE
 E004 8EE017           (        hello.asm):00006                 LDX   #MSG
 E007 E680             (        hello.asm):00007         NEXT    LDB   ,X+         ; 文字取得
 E009 270A             (        hello.asm):00008                 BEQ   HALT
-E00B A621             (        hello.asm):00009         WAIT    LDA   1,Y         ; STATUS = base+1
-E00D 8501             (        hello.asm):00010                 BITA  #TDRE
+E00B A6A4             (        hello.asm):00009         WAIT    LDA   ,Y          ; STATUS = base+0
+E00D 8502             (        hello.asm):00010                 BITA  #TDRE
 E00F 27FA             (        hello.asm):00011                 BEQ   WAIT
-E011 E7A4             (        hello.asm):00012                 STB   ,Y          ; TX 送信 (base)
+E011 E721             (        hello.asm):00012                 STB   1,Y         ; TX 送信 (base+1)
 E013 20F2             (        hello.asm):00013                 BRA   NEXT
                       (        hello.asm):00014         
 E015 20FE             (        hello.asm):00015         HALT    BRA   HALT

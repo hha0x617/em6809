@@ -5,9 +5,6 @@ pub struct SettingsState {
     pub protect_vectors: bool,
     pub use_console: bool,
     pub console_base_hex: String,
-    /// false = simple ConsoleDev (data @ +0, status @ +1)
-    /// true  = MC6850 ACIA-compatible (status @ +0, data @ +1)
-    pub console_mc6850: bool,
     pub console_stdin: bool,
     pub console_echo: bool,
     pub console_out_path: String,

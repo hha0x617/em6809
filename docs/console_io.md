@@ -2,6 +2,17 @@
 
 エミュレータのコンソール入出力を制御するオプションと使用例をまとめます。Windows / Linux / macOS いずれの環境でも、`--console-stdin` 指定時は標準入力を raw（逐次）モードに設定し、押下ごとにゲストへ転送します。UTF‑8 出力は内部でバッファリングされ、改行または設定に応じてフラッシュされます。
 
+## レジスタ配置
+
+コンソールデバイスは Motorola MC6850 ACIA 互換のレジスタ配置を採用します（base = `--console 0xADDR` で指定）。
+
+| オフセット | 読み出し | 書き込み |
+| --- | --- | --- |
+| `+0` | Status Register (SR) — bit 0 = RDRF, bit 1 = TDRE, bit 7 = IRQ | Control Register (CR) |
+| `+1` | Receive Data Register | Transmit Data Register |
+
+Hha Forth / Hha Lisp / NetBSD MVME147 boot ROM などとそのまま互換です。以前の独自配置（`Simple`: data@+0, status@+1）は廃止されました。
+
 ## 主なオプション
 
 - `--console-stdin`: 標準入力を接続（ユーザーキーボード入力をゲストに送る）

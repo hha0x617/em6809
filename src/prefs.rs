@@ -22,10 +22,6 @@ pub struct General {
 pub struct Console {
     pub enable: Option<bool>,
     pub base: Option<u16>,
-    /// Console flavour: `Some(true)` = MC6850 ACIA-compatible layout
-    /// (status@+0, data@+1).  `Some(false)` / `None` = simple ConsoleDev
-    /// (data@+0, status@+1).
-    pub mc6850: Option<bool>,
     pub stdin: Option<bool>,
     pub echo: Option<bool>,
     pub out_path: Option<String>,
@@ -171,7 +167,6 @@ mod tests {
         p.console = Some(Console {
             enable: Some(true),
             base: Some(0xFF00),
-            mc6850: Some(false),
             stdin: Some(false),
             echo: Some(true),
             out_path: Some("/tmp/out.txt".into()),
