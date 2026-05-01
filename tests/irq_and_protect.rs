@@ -1,5 +1,5 @@
 use em6809::bus::{Bus, Memory};
-use em6809::io::{ConsoleDev, Device, IoBus};
+use em6809::io::{Device, IoBus, Mc6850Dev};
 use em6809::mmu::Mc6829;
 
 #[test]
@@ -20,13 +20,13 @@ fn mmu_write_protect_raises_irq() {
 fn console_rx_irq_line() {
     let mem = Memory::new();
     let mut bus = IoBus::new(mem);
-    let mut con = ConsoleDev::new(0xFF00);
+    let mut con = Mc6850Dev::new(0xFF00);
     con.feed_bytes(b"A");
-    // Enable RX IRQ via CTRL
-    Device::write8(&mut con, 0xFF02, 0x01);
+    // Enable RIE on the MC6850 control register at base+0 (bit 7).
+    Device::write8(&mut con, 0xFF00, 0x80);
     bus.add_device(con);
     let (_n, _f, irq) = bus.irq_lines();
-    assert!(irq, "Console RX should assert IRQ when enabled");
+    assert!(irq, "Console RX should assert IRQ when RIE is set");
 }
 
 #[test]
@@ -42,15 +42,7 @@ fn mmu_noexec_fetch_fault_sets_irq() {
     assert!(irq, "NX fetch should assert IRQ when enabled");
 }
 
-#[test]
-fn console_firq_enable() {
-    let mem = Memory::new();
-    let mut bus = IoBus::new(mem);
-    let mut con = ConsoleDev::new(0xFF00);
-    con.feed_bytes(b"Z");
-    // Enable RX IRQ and FIRQ mode (bit4)
-    Device::write8(&mut con, 0xFF02, 0x11);
-    bus.add_device(con);
-    let (_n, f, irq) = bus.irq_lines();
-    assert!(f && !irq, "FIRQ should be asserted, not IRQ");
-}
+// MC6850 ACIA only routes its single interrupt line to the host's IRQ input
+// — there is no FIRQ mode on the chip.  The Simple console device that used
+// to support FIRQ has been removed, so the matching test was deleted along
+// with it.

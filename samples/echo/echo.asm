@@ -1,8 +1,8 @@
-CONBASE  EQU   $FF00      ; base address for console
-CONDATA  EQU   CONBASE    ; TX write / RX read
-CONSTAT  EQU   CONBASE+1  ; status
-TXRDY    EQU   $01        ; status bit0
-RXRDY    EQU   $02        ; status bit1
+CONBASE  EQU   $FF00      ; base address for MC6850 ACIA console
+CONSTAT  EQU   CONBASE    ; status @ +0 (MC6850 SR)
+CONDATA  EQU   CONBASE+1  ; TX write / RX read @ +1
+RXRDY    EQU   $01        ; SR bit0: RDRF (Receive Data Reg Full)
+TXRDY    EQU   $02        ; SR bit1: TDRE (Transmit Data Reg Empty)
 
         ORG   $E000
 START   LDY   #CONBASE

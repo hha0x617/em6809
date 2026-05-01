@@ -19,24 +19,16 @@ pub trait Device: Send {
 
 // ------------------------------------------------------------
 // Console (UART-like) device
+//
+// Implements the Motorola MC6850 ACIA register layout:
+//   +0: read = Status Register, write = Control Register
+//   +1: read = Receive Data Register, write = Transmit Data Register
+//
+// Required by `Hha Forth`, `Hha Lisp`, the NetBSD MVME147 boot ROM,
+// etc.  An older `Simple` layout (data@+0, status@+1) used to live
+// alongside this one but was removed — it had no real-hardware
+// counterpart and only one or two demo programs depended on it.
 // ------------------------------------------------------------
-
-pub struct ConsoleDev {
-    pub base: u16, // base..base+3 used
-    rx: VecDeque<u8>,
-    ctrl: u8,
-    rx_wm: usize,
-    irq_hold_cycles: u32,
-    irq_countdown: u32,
-    out_file: Option<File>,
-    tee_stderr: bool,
-    flush_every: Option<usize>,
-    flush_on_newline: bool,
-    flush_count: usize,
-    local_echo: bool,
-    utf8_buf: Vec<u8>,
-    utf8_need: usize,
-}
 
 static CONSOLE_LOG: AtomicBool = AtomicBool::new(false);
 pub fn set_console_log(on: bool) {
@@ -93,227 +85,6 @@ static BLOCK_LOG: AtomicBool = AtomicBool::new(false);
 pub fn set_block_log(on: bool) {
     BLOCK_LOG.store(on, Ordering::SeqCst);
 }
-
-impl ConsoleDev {
-    pub fn new(base: u16) -> Self {
-        Self {
-            base,
-            rx: VecDeque::new(),
-            ctrl: 0,
-            rx_wm: 1,
-            irq_hold_cycles: 0,
-            irq_countdown: 0,
-            out_file: None,
-            tee_stderr: false,
-            // Default: flush every byte
-            flush_every: Some(1),
-            flush_on_newline: false,
-            flush_count: 0,
-            local_echo: false,
-            utf8_buf: Vec::with_capacity(8),
-            utf8_need: 0,
-        }
-    }
-    pub fn feed_bytes(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.rx.push_back(b);
-            if CONSOLE_LOG.load(Ordering::SeqCst) {
-                eprintln!("[console-rx] queued ${:02X}", b);
-            }
-        }
-    }
-    pub fn set_rx_watermark(&mut self, wm: usize) {
-        self.rx_wm = wm.max(1);
-    }
-    pub fn set_irq_hold_cycles(&mut self, n: u32) {
-        self.irq_hold_cycles = n;
-    }
-    pub fn set_ctrl(&mut self, v: u8) {
-        self.ctrl = v;
-    }
-    pub fn set_firq(&mut self, on: bool) {
-        if on {
-            self.ctrl |= 0x10;
-        } else {
-            self.ctrl &= !0x10;
-        }
-    }
-    pub fn set_out_file(&mut self, path: &str) {
-        if let Ok(f) = File::create(path) {
-            self.out_file = Some(f);
-        }
-    }
-    pub fn set_tee_stderr(&mut self, on: bool) {
-        self.tee_stderr = on;
-    }
-    pub fn set_flush_every(&mut self, n: usize) {
-        // Cap to a reasonable upper bound to avoid excessive flushing
-        let n = n.min(128);
-        self.flush_every = if n > 0 { Some(n) } else { None };
-        self.flush_count = 0;
-    }
-    pub fn set_flush_on_newline(&mut self, on: bool) {
-        self.flush_on_newline = on;
-    }
-    pub fn set_local_echo(&mut self, on: bool) {
-        self.local_echo = on;
-    }
-
-    fn push_stdout_byte(&mut self, b: u8) {
-        // Mirror raw byte to file (unmodified)
-        if let Some(f) = self.out_file.as_mut() {
-            let _ = f.write_all(&[b]);
-        }
-        // Route to GUI console if enabled
-        if CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst) && CONSOLE_GUI_ENABLED.load(Ordering::SeqCst) {
-            if let Some(m) = CONSOLE_GUI_BUF.get() {
-                if let Ok(mut g) = m.lock() {
-                    g.push(b);
-                }
-            } else {
-                let _ = CONSOLE_GUI_BUF.set(Mutex::new(vec![b]));
-            }
-            if let Some(cb) = CONSOLE_REPAINT_CB.get() {
-                if let Ok(cb) = cb.lock() {
-                    if let Some(cb) = cb.as_ref() {
-                        cb();
-                    }
-                }
-            }
-        }
-        let stdout_enabled = CONSOLE_STDOUT_ENABLED.load(Ordering::SeqCst)
-            || !CONSOLE_GUI_ACTIVE.load(Ordering::SeqCst);
-        // ASCII fast path
-        if stdout_enabled && b < 0x80 && self.utf8_need == 0 {
-            let ch = b as char;
-            print!("{ch}");
-        } else if stdout_enabled {
-            // Determine expected length if starting sequence
-            if self.utf8_need == 0 {
-                self.utf8_need = match b {
-                    0xC0..=0xDF => 2,
-                    0xE0..=0xEF => 3,
-                    0xF0..=0xF7 => 4,
-                    _ => 1,
-                };
-            }
-            self.utf8_buf.push(b);
-            if self.utf8_buf.len() >= self.utf8_need.max(1) {
-                let s = String::from_utf8_lossy(&self.utf8_buf);
-                print!("{s}");
-                self.utf8_buf.clear();
-                self.utf8_need = 0;
-            }
-        }
-        // Flush policy
-        let mut need_flush = self.flush_on_newline && b == b'\n';
-        if let Some(n) = self.flush_every {
-            self.flush_count = self.flush_count.wrapping_add(1);
-            if self.flush_count.is_multiple_of(n) {
-                need_flush = true;
-            }
-        }
-        if need_flush {
-            if stdout_enabled {
-                let _ = std::io::stdout().flush();
-            }
-            if let Some(f) = self.out_file.as_mut() {
-                let _ = f.flush();
-            }
-        }
-    }
-}
-
-impl Device for ConsoleDev {
-    fn contains(&self, addr: u16) -> bool {
-        addr.wrapping_sub(self.base) < 4
-    }
-    fn read8(&mut self, addr: u16) -> u8 {
-        let off = addr.wrapping_sub(self.base);
-        match off {
-            0 => {
-                // RXDATA
-                if let Some(b) = self.rx.pop_front() {
-                    // Optional local echo to TX path
-                    if self.local_echo {
-                        self.push_stdout_byte(b);
-                    }
-                    b
-                } else {
-                    0x00
-                }
-            }
-            1 => {
-                // STATUS
-                let txrdy = 0x01u8; // always ready
-                let rxrdy = if !self.rx.is_empty() { 0x02 } else { 0x00 };
-                txrdy | rxrdy
-            }
-            2 => self.ctrl, // CTRL: bit0 RX IRQ enable, bit1 TX IRQ enable
-            3 => 0x00,      // BAUD/MISC (ignored)
-            _ => 0xFF,
-        }
-    }
-    fn write8(&mut self, addr: u16, data: u8) {
-        let off = addr.wrapping_sub(self.base);
-        match off {
-            0 => {
-                // TXDATA: print ASCII
-                // Print and flush to ensure visibility in buffered consoles
-                if CONSOLE_LOG.load(Ordering::SeqCst) {
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "[console-tx] addr={addr:04X} data={data:02X}"
-                    );
-                }
-                if self.tee_stderr {
-                    let _ = std::io::stderr().write_all(&[data]);
-                }
-                self.push_stdout_byte(data);
-            }
-            2 => {
-                // CTRL
-                self.ctrl = data;
-            }
-            _ => {}
-        }
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-    fn irq_lines(&mut self) -> (bool, bool, bool) {
-        let rx_irq_now = (self.ctrl & 0x01) != 0 && self.rx.len() >= self.rx_wm;
-        let tx_irq_now = (self.ctrl & 0x02) != 0; // always ready
-        let mut on = rx_irq_now || tx_irq_now;
-        if on {
-            self.irq_countdown = self.irq_hold_cycles;
-        } else if self.irq_countdown > 0 {
-            self.irq_countdown -= 1;
-            on = true;
-        }
-        let use_firq = (self.ctrl & 0x10) != 0; // bit4: use FIRQ
-        if use_firq {
-            (false, on, false)
-        } else {
-            (false, false, on)
-        }
-    }
-}
-
-// ------------------------------------------------------------
-// MC6850 ACIA-compatible console device
-//
-// Register layout (base..base+1):
-//   +0: read = Status Register, write = Control Register
-//       SR bits: 0=RDRF, 1=TDRE, 2=DCD, 3=CTS, 4=FE, 5=OVR, 6=PE, 7=IRQ
-//       CR bits: 0-1=CDS, 2-4=WS, 5-6=TC, 7=RIE
-//   +1: read = Receive Data Register, write = Transmit Data Register
-//
-// Used by programs that follow the original Motorola MC6850 convention —
-// e.g. `Hha Forth`, `Hha Lisp`, and the NetBSD MVME147 boot rom.  The
-// plain `ConsoleDev` has a different map (data at +0, status at +1) and
-// is retained for programs that target that simpler layout.
-// ------------------------------------------------------------
 
 pub struct Mc6850Dev {
     pub base: u16,
@@ -415,6 +186,26 @@ impl Mc6850Dev {
     }
     pub fn set_local_echo(&mut self, on: bool) {
         self.local_echo = on;
+    }
+
+    /// Boot-script compatibility shim: write `v` to the Control
+    /// Register the same way the guest would by writing to `base+0`.
+    /// Useful for `Action::ConCtrl` which existed when both Simple and
+    /// MC6850 console devices were supported and is still accepted in
+    /// boot scripts targeting MC6850 (the only flavor that survives).
+    pub fn set_ctrl(&mut self, v: u8) {
+        let base = self.base;
+        Device::write8(self, base, v);
+    }
+
+    /// Boot-script compatibility shim — accepted for backward
+    /// compatibility but a no-op: the real MC6850 ACIA only drives the
+    /// IRQ pin, not FIRQ.  A diagnostic is emitted when the script
+    /// asks for FIRQ-on so the user notices.
+    pub fn set_firq(&mut self, on: bool) {
+        if on {
+            eprintln!("[console] FIRQ requested but MC6850 only routes to IRQ; ignoring");
+        }
     }
 
     /// Host deposits an RX byte (ACCEPT reads land here).
@@ -1171,19 +962,15 @@ impl<B: Bus> IoBus<B> {
     }
     pub fn feed_console_input(&mut self, bytes: &[u8]) {
         for d in self.devices.iter_mut() {
-            if let Some(c) = d.as_any_mut().downcast_mut::<ConsoleDev>() {
-                c.feed_bytes(bytes);
-                return;
-            }
             if let Some(c) = d.as_any_mut().downcast_mut::<Mc6850Dev>() {
                 c.feed_bytes(bytes);
                 return;
             }
         }
     }
-    pub fn with_console_mut<F: FnOnce(&mut ConsoleDev)>(&mut self, f: F) {
+    pub fn with_console_mut<F: FnOnce(&mut Mc6850Dev)>(&mut self, f: F) {
         for d in self.devices.iter_mut() {
-            if let Some(c) = d.as_any_mut().downcast_mut::<ConsoleDev>() {
+            if let Some(c) = d.as_any_mut().downcast_mut::<Mc6850Dev>() {
                 f(c);
                 return;
             }
@@ -1239,45 +1026,19 @@ impl<B: Bus> IoBus<B> {
         false
     }
 
-    // Dynamic device management helpers (used by Settings Apply)
+    // Dynamic device management helpers (used by Settings Apply).
+    /// Ensure exactly one console device (`Mc6850Dev`) exists at `base`,
+    /// or none if `enable` is false.  Any existing console device at a
+    /// different base is removed and replaced.
     pub fn ensure_console(&mut self, enable: bool, base: u16) {
-        // Back-compat alias — defaults to the simple ConsoleDev layout.
-        self.ensure_console_type(enable, base, false);
-    }
-
-    /// Ensure exactly one console device exists (or none, if `enable` is
-    /// false).  `mc6850 == true` swaps in the MC6850 ACIA-compatible
-    /// device; `false` uses the simple ConsoleDev layout.  Any existing
-    /// console device of the wrong flavour is removed and replaced.
-    pub fn ensure_console_type(&mut self, enable: bool, base: u16, mc6850: bool) {
-        let has_console = self
-            .devices
-            .iter_mut()
-            .any(|d| d.as_any_mut().downcast_mut::<ConsoleDev>().is_some());
         let has_mc6850 = self
             .devices
             .iter_mut()
             .any(|d| d.as_any_mut().downcast_mut::<Mc6850Dev>().is_some());
         if CONSOLE_LOG.load(Ordering::SeqCst) {
-            eprintln!(
-                "[console-swap] enable={enable} base=${base:04X} mc6850={mc6850} \
-                 has_console={has_console} has_mc6850={has_mc6850}"
-            );
+            eprintln!("[console-swap] enable={enable} base=${base:04X} has_mc6850={has_mc6850}");
         }
-
-        // Drop any device that is the wrong type (or all, when disabling).
-        let want_console = enable && !mc6850;
-        let want_mc6850 = enable && mc6850;
-        if has_console && !want_console {
-            let mut keep = Vec::with_capacity(self.devices.len());
-            for mut dev in self.devices.drain(..) {
-                if dev.as_any_mut().downcast_mut::<ConsoleDev>().is_none() {
-                    keep.push(dev);
-                }
-            }
-            self.devices = keep;
-        }
-        if has_mc6850 && !want_mc6850 {
+        if !enable && has_mc6850 {
             let mut keep = Vec::with_capacity(self.devices.len());
             for mut dev in self.devices.drain(..) {
                 if dev.as_any_mut().downcast_mut::<Mc6850Dev>().is_none() {
@@ -1286,35 +1047,11 @@ impl<B: Bus> IoBus<B> {
             }
             self.devices = keep;
         }
-
-        // Recompute "does it already have one of the wanted flavour?"
-        // after the drop, so we skip adding a duplicate when the base
-        // address hasn't changed and the flavour was already correct.
-        let has_console_now = self
-            .devices
-            .iter_mut()
-            .any(|d| d.as_any_mut().downcast_mut::<ConsoleDev>().is_some());
-        let has_mc6850_now = self
-            .devices
-            .iter_mut()
-            .any(|d| d.as_any_mut().downcast_mut::<Mc6850Dev>().is_some());
-
-        if want_console && !has_console_now {
-            self.add_device(ConsoleDev::new(base));
-        }
-        if want_mc6850 && !has_mc6850_now {
+        if enable && !has_mc6850 {
             self.add_device(Mc6850Dev::new(base));
         }
     }
-    pub fn with_console_mut_opt<F: FnOnce(&mut ConsoleDev)>(&mut self, f: F) {
-        for d in self.devices.iter_mut() {
-            if let Some(c) = d.as_any_mut().downcast_mut::<ConsoleDev>() {
-                f(c);
-                return;
-            }
-        }
-    }
-    pub fn with_mc6850_mut_opt<F: FnOnce(&mut Mc6850Dev)>(&mut self, f: F) {
+    pub fn with_console_mut_opt<F: FnOnce(&mut Mc6850Dev)>(&mut self, f: F) {
         for d in self.devices.iter_mut() {
             if let Some(c) = d.as_any_mut().downcast_mut::<Mc6850Dev>() {
                 f(c);
