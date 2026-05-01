@@ -225,18 +225,34 @@ pub(super) fn show_breakpoints_viewport(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let bp_list_cl = Arc::clone(&bp_list);
-        let cmds_cl = Arc::clone(&cmds);
-        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_breakpoints(ui, &bp_list_cl, &cmds_cl);
+        // Only declare the deferred viewport while the window is open.
+        // Dropping the declaration on the next frame after `open` flips
+        // false tells egui to close the viewport. Linux/macOS deferred
+        // viewports do not honor `ViewportBuilder::with_visible(false)`,
+        // so without this gate the window pops up at startup despite
+        // the menu showing it hidden.
+        if open {
+            // Pump repaints so the deferred viewport reflects parent-side
+            // updates (worker-side bp_list mutations from listing-pane
+            // double-clicks etc.) without requiring the user to focus
+            // the child window first. Mirrors what console_ui does for
+            // its own deferred viewport.
+            ctx.request_repaint_of(id);
+            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
+
+            let bp_list_cl = Arc::clone(&bp_list);
+            let cmds_cl = Arc::clone(&cmds);
+            ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_breakpoints(ui, &bp_list_cl, &cmds_cl);
+                });
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    update_visible(false);
+                    note_closed();
+                }
             });
-            if ctx.input(|i| i.viewport().close_requested()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                update_visible(false);
-                note_closed();
-            }
-        });
+        }
     }
 }

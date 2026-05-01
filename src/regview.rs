@@ -822,6 +822,14 @@ pub mod gui {
         UiOpenSettings,
         /// Request opening Settings in an external top-level OS window
         UiOpenSettingsExternal,
+        /// macOS: View → Breakpoints menu item clicked. Flips
+        /// `bp_window_open` in the GUI thread. Carried as a command
+        /// instead of mutating the flag directly because the NSMenu
+        /// callback fires on the AppKit main thread.
+        UiToggleBreakpointsWindow,
+        /// macOS: View → Call Stack menu item clicked. See
+        /// [`UiToggleBreakpointsWindow`].
+        UiToggleCallStackWindow,
         /// Set baseline settings + origins (0=Default,1=Saved,2=CLI) and optional GPIO color
         UiSetSettingsBaseline(SettingsState, Vec<(String, u8)>, Option<u32>),
         /// Worker acknowledgement that Apply/Save completed for a dialog instance
@@ -1234,6 +1242,12 @@ pub mod gui {
                     Command::UiOpenSettingsExternal => {
                         self.open_in_app_settings();
                     }
+                    Command::UiToggleBreakpointsWindow => {
+                        self.bp_window_open = !self.bp_window_open;
+                    }
+                    Command::UiToggleCallStackWindow => {
+                        self.call_stack_window_open = !self.call_stack_window_open;
+                    }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
                         let prev_console_gui = self.settings_baseline.console_gui;
                         self.settings_baseline = s.clone();
@@ -1512,8 +1526,43 @@ pub mod gui {
                         ctx.request_repaint_after(Duration::from_millis(10));
                     }
                 }));
+                let cmds_bp = self.cmds.clone();
+                let cmds_cs = self.cmds.clone();
+                em6809::platform::macos::install_view_menu_once(
+                    Box::new(move || {
+                        if let Ok(mut q) = cmds_bp.lock() {
+                            q.push(Command::UiToggleBreakpointsWindow);
+                        } else {
+                            let _ = crate::regview::push_global_command(
+                                Command::UiToggleBreakpointsWindow,
+                            );
+                        }
+                        if let Some(ctx) = super::GUI_CTX.get() {
+                            ctx.request_repaint();
+                        }
+                    }),
+                    Box::new(move || {
+                        if let Ok(mut q) = cmds_cs.lock() {
+                            q.push(Command::UiToggleCallStackWindow);
+                        } else {
+                            let _ = crate::regview::push_global_command(
+                                Command::UiToggleCallStackWindow,
+                            );
+                        }
+                        if let Some(ctx) = super::GUI_CTX.get() {
+                            ctx.request_repaint();
+                        }
+                    }),
+                );
                 self.menu_fixed = true;
             }
+            // macOS: keep View menu checkmarks in sync with the actual
+            // window-open flags. Cheap and idempotent.
+            #[cfg(target_os = "macos")]
+            em6809::platform::macos::set_view_menu_check_states(
+                self.bp_window_open,
+                self.call_stack_window_open,
+            );
 
             // (timer indicator top strip removed; shown below MMU panel)
 
@@ -2175,13 +2224,20 @@ pub mod gui {
             let call_stack_thread = Arc::clone(&call_stack);
             let handle = std::thread::spawn(move || {
                 let mut native_options = eframe::NativeOptions::default();
-                // Make the window compact and appropriate for the register grid.
-                // Width 1620 = 600 (listing) + 440 (memory) + 580 (registers
-                // central panel headroom for the Resume/Step/StepOver/StepOut/|/
-                // Apply/Cancel toolbar row in either en-US or ja-JP).
+                // Locale-aware default width: ja-JP toolbar labels
+                // (ステップオーバー / 適用 / …) need ~580 px on the
+                // registers central panel; en-US fits in ~420. Memory
+                // (440) + Listing (600) are constant, so the window
+                // total swings by ~120 px.
+                let init_w = match (use_japanese, cfg!(windows)) {
+                    (true, true) => 1600.0,
+                    (true, false) => 1540.0,
+                    (false, true) => 1500.0,
+                    (false, false) => 1440.0,
+                };
                 let base = eframe::egui::ViewportBuilder::default()
-                    .with_inner_size(eframe::egui::vec2(1620.0, 700.0))
-                    .with_min_inner_size(eframe::egui::vec2(1620.0, 700.0))
+                    .with_inner_size(eframe::egui::vec2(init_w, 700.0))
+                    .with_min_inner_size(eframe::egui::vec2(init_w, 700.0))
                     .with_resizable(true);
                 #[cfg(all(unix, not(target_os = "macos")))]
                 let vp = {
@@ -2618,11 +2674,14 @@ pub mod gui {
             let use_japanese = Self::is_japanese_locale();
 
             let mut native_options = eframe::NativeOptions::default();
-            // Width 1720 leaves the registers central panel ~680 px,
-            // enough for the toolbar row at all combinations of
-            // paused/running + Edit/non-Edit in either locale.
+            // Width is locale-aware so the registers central panel
+            // doesn't end up needlessly wide in en-US: ja-JP labels
+            // (ステップオーバー / 適用 / …) need ~520 px of toolbar
+            // headroom, en-US needs ~420. Memory (440) + Listing (600)
+            // are constant, so the window total swings by ~100 px.
+            let init_w = if use_japanese { 1540.0 } else { 1440.0 };
             let base = eframe::egui::ViewportBuilder::default()
-                .with_inner_size(eframe::egui::vec2(1720.0, 700.0))
+                .with_inner_size(eframe::egui::vec2(init_w, 700.0))
                 .with_min_inner_size(eframe::egui::vec2(1100.0, 400.0))
                 .with_resizable(false);
             #[cfg(all(unix, not(target_os = "macos")))]
@@ -3174,6 +3233,29 @@ pub mod gui {
         pub fn auto_hex_on_edit(&self) -> bool {
             self.auto_hex_on_edit.load(Ordering::SeqCst)
         }
+        /// Worker-side: pop only breakpoint-class commands so the
+        /// running CPU loop on Linux/macOS can apply BP set/toggle/
+        /// remove/condition edits without first requiring the user to
+        /// pause. Mirrors the Windows behavior (where the main CPU
+        /// loop drains *all* commands every iteration via
+        /// [`take_command_worker`]). Order-preserving: returns the
+        /// oldest matching command and leaves all others queued.
+        pub fn take_breakpoint_command_eager(&self) -> Option<Command> {
+            if let Ok(mut q) = self.cmds.lock() {
+                if let Some(idx) = q.iter().position(|c| {
+                    matches!(
+                        c,
+                        Command::CycleBreakpointAtAddr(..)
+                            | Command::SetBreakpointEnabled(..)
+                            | Command::RemoveBreakpoint(..)
+                            | Command::SetBreakpointCondition(..)
+                    )
+                }) {
+                    return Some(q.remove(idx));
+                }
+            }
+            None
+        }
         /// Worker-side: pop only non-UI commands that must be handled by the worker.
         /// Leave UiSet* and UI-only commands (e.g., prompts, LST load) for the GUI thread.
         pub fn take_command_worker(&self) -> Option<Command> {
@@ -3193,6 +3275,8 @@ pub mod gui {
                             | Command::UiPromptBinBase(..)
                             | Command::UiLoadLst(..)
                             | Command::UiOpenImageDialog
+                            | Command::UiToggleBreakpointsWindow
+                            | Command::UiToggleCallStackWindow
                     )
                 }) {
                     return Some(q.remove(idx));

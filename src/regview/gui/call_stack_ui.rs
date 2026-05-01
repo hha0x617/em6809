@@ -172,17 +172,29 @@ pub(super) fn show_call_stack_viewport(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let cs_cl = Arc::clone(&call_stack);
-        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_call_stack(ui, &cs_cl);
+        // Only declare the deferred viewport while the window is open.
+        // See breakpoints_ui::show_breakpoints_viewport for the full
+        // rationale — deferred viewports on Linux/macOS ignore
+        // `with_visible(false)`, so we gate declaration instead.
+        if open {
+            // Pump repaints so the deferred viewport picks up worker-side
+            // call-stack mutations (BSR/JSR/RTS, IRQ entry, …) without
+            // requiring the user to focus the child window first.
+            ctx.request_repaint_of(id);
+            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
+
+            let cs_cl = Arc::clone(&call_stack);
+            ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_call_stack(ui, &cs_cl);
+                });
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    update_visible(false);
+                    note_closed();
+                }
             });
-            if ctx.input(|i| i.viewport().close_requested()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                update_visible(false);
-                note_closed();
-            }
-        });
+        }
     }
 }
