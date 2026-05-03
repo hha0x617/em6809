@@ -644,6 +644,201 @@ pub fn mark_window_non_activating(title: &str) {
     }
 }
 
+/// macOS: install a "click-activated" subclass on an auxiliary
+/// NSWindow that needs keyboard focus only when the user explicitly
+/// clicks on it.  Designed for the VT100 Console window: the user
+/// types into Console, so Console must be able to become key — but
+/// without this hook, eframe's paint cycle on the Console viewport
+/// keeps stealing key status back from the main window during normal
+/// emulator activity.
+///
+/// Mechanism: subclass overrides four methods —
+///   * `canBecomeKeyWindow` returns the value of a flag (initially YES).
+///   * `canBecomeMainWindow` returns NO (auxiliary windows shouldn't
+///     be tracked as the app's main window).
+///   * `sendEvent:` watches for left/right mouse-down and, on a click,
+///     sets the flag to YES then calls `makeKeyAndOrderFront:` before
+///     forwarding to super.  This is the only path that flips the
+///     flag back on after the main window has stolen key status.
+///   * `resignKeyWindow` clears the flag, then calls super.  Once the
+///     main window takes key (e.g., user clicks main), the flag drops
+///     to NO and any subsequent eframe-driven `makeKey` on Console
+///     fails silently — main keeps key, Console stays merely visible.
+///
+/// Idempotent — safe to call every frame.
+#[cfg(target_os = "macos")]
+pub fn mark_window_click_activated(title: &str) {
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Object as ObjcObject, BOOL, NO, YES};
+    use std::collections::{HashMap, HashSet};
+    use std::os::raw::c_void;
+    use std::sync::Mutex;
+
+    #[repr(C)]
+    struct ObjcSuper {
+        receiver: *mut ObjcObject,
+        super_class: *const Class,
+    }
+
+    extern "C" {
+        fn object_setClass(obj: *mut ObjcObject, cls: *const Class) -> *const Class;
+        fn class_getSuperclass(cls: *const Class) -> *const Class;
+        // Treated as variadic in C; we cast to a typed signature at
+        // each call site below.  Safe on macOS as long as no float
+        // args participate (true here — all args are pointers).
+        fn objc_msgSendSuper();
+    }
+
+    // YES initially so the first time the app is shown Console can
+    // pick up keystrokes without an explicit user click.  Drops to
+    // NO via `resign_key` as soon as another window (typically main)
+    // becomes key; flips back to YES via `send_event` on the next
+    // mouse-down inside Console.
+    static CONSOLE_CAN_BE_KEY: AtomicBool = AtomicBool::new(true);
+
+    extern "C" fn can_become_key(_this: &ObjcObject, _sel: Sel) -> BOOL {
+        if CONSOLE_CAN_BE_KEY.load(Ordering::SeqCst) {
+            YES
+        } else {
+            NO
+        }
+    }
+
+    extern "C" fn can_become_main(_this: &ObjcObject, _sel: Sel) -> BOOL {
+        NO
+    }
+
+    extern "C" fn send_event(this: &ObjcObject, _sel: Sel, event: *mut ObjcObject) {
+        unsafe {
+            // NSEventTypeLeftMouseDown = 1, NSEventTypeRightMouseDown = 3.
+            let evt_type: i64 = msg_send![event, type];
+            if evt_type == 1 || evt_type == 3 {
+                CONSOLE_CAN_BE_KEY.store(true, Ordering::SeqCst);
+                let nil: *const ObjcObject = core::ptr::null();
+                let recv: *mut ObjcObject = this as *const ObjcObject as *mut ObjcObject;
+                let _: () = msg_send![recv, makeKeyAndOrderFront: nil];
+            }
+            let recv: *mut ObjcObject = this as *const ObjcObject as *mut ObjcObject;
+            let cls: *const Class = msg_send![recv, class];
+            let super_cls = class_getSuperclass(cls);
+            let super_struct = ObjcSuper {
+                receiver: recv,
+                super_class: super_cls,
+            };
+            type Sig = extern "C" fn(*const ObjcSuper, Sel, *mut ObjcObject);
+            let f: Sig =
+                std::mem::transmute::<*const c_void, Sig>(objc_msgSendSuper as *const c_void);
+            f(&super_struct, sel!(sendEvent:), event);
+        }
+    }
+
+    extern "C" fn resign_key(this: &ObjcObject, _sel: Sel) {
+        CONSOLE_CAN_BE_KEY.store(false, Ordering::SeqCst);
+        unsafe {
+            let recv: *mut ObjcObject = this as *const ObjcObject as *mut ObjcObject;
+            let cls: *const Class = msg_send![recv, class];
+            let super_cls = class_getSuperclass(cls);
+            let super_struct = ObjcSuper {
+                receiver: recv,
+                super_class: super_cls,
+            };
+            type Sig = extern "C" fn(*const ObjcSuper, Sel);
+            let f: Sig =
+                std::mem::transmute::<*const c_void, Sig>(objc_msgSendSuper as *const c_void);
+            f(&super_struct, sel!(resignKeyWindow));
+        }
+    }
+
+    static MARKED: OnceCell<Mutex<HashSet<usize>>> = OnceCell::new();
+    static SUBCLASSES: OnceCell<Mutex<HashMap<usize, usize>>> = OnceCell::new();
+
+    unsafe fn ensure_subclass(parent: *const Class) -> *const Class {
+        let map = SUBCLASSES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut g = map.lock().unwrap();
+        let key = parent as usize;
+        if let Some(&v) = g.get(&key) {
+            return v as *const Class;
+        }
+        let parent_ref: &Class = &*parent;
+        let unique = format!("Em6809ClickActivatedNSWindow_{:x}", key);
+        let cls: *const Class = if let Some(mut decl) = ClassDecl::new(&unique, parent_ref) {
+            decl.add_method(
+                sel!(canBecomeKeyWindow),
+                can_become_key as extern "C" fn(&ObjcObject, Sel) -> BOOL,
+            );
+            decl.add_method(
+                sel!(canBecomeMainWindow),
+                can_become_main as extern "C" fn(&ObjcObject, Sel) -> BOOL,
+            );
+            decl.add_method(
+                sel!(sendEvent:),
+                send_event as extern "C" fn(&ObjcObject, Sel, *mut ObjcObject),
+            );
+            decl.add_method(
+                sel!(resignKeyWindow),
+                resign_key as extern "C" fn(&ObjcObject, Sel),
+            );
+            decl.register() as *const Class
+        } else if let Some(existing) = Class::get(&unique) {
+            existing as *const Class
+        } else {
+            std::ptr::null()
+        };
+        if !cls.is_null() {
+            g.insert(key, cls as usize);
+        }
+        cls
+    }
+
+    unsafe {
+        let app: *mut ObjcObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: *mut ObjcObject = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: i64 = msg_send![windows, count];
+        for i in 0..count {
+            let w: *mut ObjcObject = msg_send![windows, objectAtIndex: i];
+            if w.is_null() {
+                continue;
+            }
+            let wt: *mut ObjcObject = msg_send![w, title];
+            if wt.is_null() {
+                continue;
+            }
+            let utf8: *const i8 = msg_send![wt, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let cur = std::ffi::CStr::from_ptr(utf8).to_string_lossy().to_string();
+            if cur != title {
+                continue;
+            }
+            let key_id = w as usize;
+            let marked = MARKED.get_or_init(|| Mutex::new(HashSet::new()));
+            {
+                let g = marked.lock().unwrap();
+                if g.contains(&key_id) {
+                    continue;
+                }
+            }
+            let parent: *const Class = msg_send![w, class];
+            if parent.is_null() {
+                continue;
+            }
+            let new_cls = ensure_subclass(parent);
+            if new_cls.is_null() {
+                continue;
+            }
+            let _: *const Class = object_setClass(w, new_cls);
+            marked.lock().unwrap().insert(key_id);
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn disable_minimize_zoom_for_title(title: &str) {
     use objc::runtime::Object as ObjcObject;
