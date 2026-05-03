@@ -124,14 +124,21 @@ fn render_breakpoints(
                     }
                     // Address cell — clickable so a double-click
                     // recentres the listing pane on this BP's
-                    // address.  Hover hint: "double-click to jump".
+                    // address.  Use a frameless `Button` rather than
+                    // a `Label.sense(click())` because Label allocates
+                    // the response rect to the text galley only, so
+                    // clicks landing in the padding around the text
+                    // (very common in a 60-px wide cell) wouldn't
+                    // register.  Button covers the entire allocated
+                    // rect.  `frame(false)` keeps the visual identical
+                    // to the surrounding read-only labels.
                     let addr_resp = ui
                         .add_sized(
                             [60.0, 0.0],
-                            egui::Label::new(
+                            egui::Button::new(
                                 egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
                             )
-                            .sense(egui::Sense::click()),
+                            .frame(false),
                         )
                         .on_hover_text("Double-click to jump listing pane to this address");
                     if addr_resp.double_clicked() {
