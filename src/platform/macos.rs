@@ -552,10 +552,17 @@ pub fn install_native_settings_handler_once(open_native_cb: Box<dyn Fn() + Send 
 // for unmarked instances, so the main window's behaviour is identical
 // to a clean winit run.
 
+/// Per-window focus behaviour.  `ClickActivated` carries a leaked
+/// `&'static AtomicBool` so each click-activated window has an
+/// independent flag — sharing one global flag across multiple windows
+/// (e.g., Console + Breakpoints) would let them flip each other's
+/// key-window eligibility, breaking the per-window UX.
 #[cfg(target_os = "macos")]
-const FOCUS_MARK_NON_ACTIVATING: u8 = 1;
-#[cfg(target_os = "macos")]
-const FOCUS_MARK_CLICK_ACTIVATED: u8 = 2;
+#[derive(Clone, Copy)]
+enum FocusMarker {
+    NonActivating,
+    ClickActivated(&'static AtomicBool),
+}
 
 // Type encoding strings for the four selectors we override.
 // `BOOL` is `_Bool` (encoding "B") on aarch64 and `signed char` ("c")
@@ -579,21 +586,18 @@ struct FocusOrigImps {
 }
 
 #[cfg(target_os = "macos")]
-static FOCUS_MARKERS: OnceCell<std::sync::Mutex<std::collections::HashMap<usize, u8>>> =
+static FOCUS_MARKERS: OnceCell<std::sync::Mutex<std::collections::HashMap<usize, FocusMarker>>> =
     OnceCell::new();
 #[cfg(target_os = "macos")]
 static FOCUS_SWIZZLE_ORIGS: OnceCell<
     std::sync::Mutex<std::collections::HashMap<usize, FocusOrigImps>>,
 > = OnceCell::new();
-#[cfg(target_os = "macos")]
-static CONSOLE_CAN_BE_KEY: AtomicBool = AtomicBool::new(true);
 
 #[cfg(target_os = "macos")]
-fn focus_marker_of(ptr: usize) -> u8 {
+fn focus_marker_of(ptr: usize) -> Option<FocusMarker> {
     FOCUS_MARKERS
         .get()
-        .and_then(|m| m.lock().ok().map(|g| g.get(&ptr).copied().unwrap_or(0)))
-        .unwrap_or(0)
+        .and_then(|m| m.lock().ok().and_then(|g| g.get(&ptr).copied()))
 }
 
 /// Walk up the class hierarchy from `cls` to find the first class for
@@ -621,16 +625,12 @@ unsafe fn focus_origs_for(mut cls: *const Class) -> Option<FocusOrigImps> {
 extern "C" fn focus_can_become_key_swizzled(this: &Object, sel: Sel) -> objc::runtime::BOOL {
     use objc::runtime::{BOOL, NO, YES};
     let ptr = this as *const Object as usize;
-    let mark = focus_marker_of(ptr);
-    if mark == FOCUS_MARK_NON_ACTIVATING {
-        return NO;
-    }
-    if mark == FOCUS_MARK_CLICK_ACTIVATED {
-        return if CONSOLE_CAN_BE_KEY.load(Ordering::SeqCst) {
-            YES
-        } else {
-            NO
-        };
+    match focus_marker_of(ptr) {
+        Some(FocusMarker::NonActivating) => return NO,
+        Some(FocusMarker::ClickActivated(flag)) => {
+            return if flag.load(Ordering::SeqCst) { YES } else { NO };
+        }
+        None => {}
     }
     unsafe {
         let cls: *const Class = msg_send![this as *const Object as *mut Object, class];
@@ -649,8 +649,7 @@ extern "C" fn focus_can_become_key_swizzled(this: &Object, sel: Sel) -> objc::ru
 extern "C" fn focus_can_become_main_swizzled(this: &Object, sel: Sel) -> objc::runtime::BOOL {
     use objc::runtime::{BOOL, NO};
     let ptr = this as *const Object as usize;
-    let mark = focus_marker_of(ptr);
-    if mark == FOCUS_MARK_NON_ACTIVATING || mark == FOCUS_MARK_CLICK_ACTIVATED {
+    if focus_marker_of(ptr).is_some() {
         return NO;
     }
     unsafe {
@@ -669,13 +668,12 @@ extern "C" fn focus_can_become_main_swizzled(this: &Object, sel: Sel) -> objc::r
 #[cfg(target_os = "macos")]
 extern "C" fn focus_send_event_swizzled(this: &Object, sel: Sel, event: *mut Object) {
     let ptr = this as *const Object as usize;
-    let mark = focus_marker_of(ptr);
-    if mark == FOCUS_MARK_CLICK_ACTIVATED {
+    if let Some(FocusMarker::ClickActivated(flag)) = focus_marker_of(ptr) {
         unsafe {
             // NSEventTypeLeftMouseDown = 1, NSEventTypeRightMouseDown = 3.
             let evt_type: i64 = msg_send![event, type];
             if evt_type == 1 || evt_type == 3 {
-                CONSOLE_CAN_BE_KEY.store(true, Ordering::SeqCst);
+                flag.store(true, Ordering::SeqCst);
                 let nil: *const Object = core::ptr::null();
                 let recv: *mut Object = this as *const Object as *mut Object;
                 let _: () = msg_send![recv, makeKeyAndOrderFront: nil];
@@ -697,8 +695,8 @@ extern "C" fn focus_send_event_swizzled(this: &Object, sel: Sel, event: *mut Obj
 #[cfg(target_os = "macos")]
 extern "C" fn focus_resign_key_swizzled(this: &Object, sel: Sel) {
     let ptr = this as *const Object as usize;
-    if focus_marker_of(ptr) == FOCUS_MARK_CLICK_ACTIVATED {
-        CONSOLE_CAN_BE_KEY.store(false, Ordering::SeqCst);
+    if let Some(FocusMarker::ClickActivated(flag)) = focus_marker_of(ptr) {
+        flag.store(false, Ordering::SeqCst);
     }
     unsafe {
         let cls: *const Class = msg_send![this as *const Object as *mut Object, class];
@@ -812,7 +810,10 @@ unsafe fn ensure_focus_swizzle_installed(target_cls: *const Class) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn focus_mark_window(title: &str, marker: u8) {
+fn focus_mark_window<F>(title: &str, make_marker: F)
+where
+    F: Fn() -> FocusMarker,
+{
     use objc::runtime::Object as ObjcObject;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -859,7 +860,15 @@ fn focus_mark_window(title: &str, marker: u8) {
                 continue;
             }
             let markers = FOCUS_MARKERS.get_or_init(|| Mutex::new(HashMap::new()));
-            markers.lock().unwrap().insert(w as usize, marker);
+            // `or_insert_with` skips the maker closure (and any
+            // per-instance allocation it does for ClickActivated)
+            // when the entry already exists — keeping every-frame
+            // calls cheap and idempotent.
+            markers
+                .lock()
+                .unwrap()
+                .entry(w as usize)
+                .or_insert_with(|| make_marker());
         }
     }
 }
@@ -889,13 +898,13 @@ unsafe fn focus_target_class(mut cls: *const Class) -> *const Class {
 }
 
 /// macOS: prevent an auxiliary NSWindow (matched by exact title) from
-/// ever becoming the key / main window.  Used for the read-only BP /
-/// Call Stack panels — they accept clicks but never need keystrokes.
+/// ever becoming the key / main window.  Used for the read-only Call
+/// Stack panel — it accepts clicks but never needs keystrokes.
 ///
 /// Idempotent — safe to call every frame.
 #[cfg(target_os = "macos")]
 pub fn mark_window_non_activating(title: &str) {
-    focus_mark_window(title, FOCUS_MARK_NON_ACTIVATING);
+    focus_mark_window(title, || FocusMarker::NonActivating);
     // Best-effort: if AppKit had already promoted this window to key
     // before the marker was registered, push key status back to main.
     use objc::runtime::Object as ObjcObject;
@@ -939,15 +948,26 @@ pub fn mark_window_non_activating(title: &str) {
 }
 
 /// macOS: install a "click-activated" marker on an NSWindow that needs
-/// keystrokes but only when the user has explicitly clicked it.
-/// Designed for the VT100 Console window: keystrokes flow into the
-/// running em6809 program when Console is key, but Console must not
-/// reclaim key from main during normal eframe paint cycles.
+/// keystrokes only when the user has explicitly clicked it.  Used for:
 ///
-/// Idempotent — safe to call every frame.
+///   * VT100 Console — typing flows into the running em6809 program
+///     when Console is key.
+///   * Breakpoints — the per-row condition `TextEdit` needs keystrokes
+///     when the user is editing a condition; otherwise BP must not
+///     reclaim key from main during eframe paint cycles.
+///
+/// Each marked window gets its own leaked `AtomicBool` so multiple
+/// click-activated windows are independent (clicking one doesn't make
+/// another eligible to become key).
+///
+/// Idempotent — safe to call every frame.  Per-instance allocation
+/// only happens on the first call for each NSWindow.
 #[cfg(target_os = "macos")]
 pub fn mark_window_click_activated(title: &str) {
-    focus_mark_window(title, FOCUS_MARK_CLICK_ACTIVATED);
+    focus_mark_window(title, || {
+        let flag: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(true)));
+        FocusMarker::ClickActivated(flag)
+    });
 }
 
 #[cfg(target_os = "macos")]

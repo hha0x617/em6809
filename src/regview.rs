@@ -1867,20 +1867,22 @@ pub mod gui {
             // otherwise monopolise keyboard input from the main
             // window.  Two flavours:
             //
-            //   * BP / Call Stack — read-only with click-only
-            //     controls.  `mark_window_non_activating` makes them
+            //   * Call Stack — read-only labels, never needs
+            //     keystrokes.  `mark_window_non_activating` makes it
             //     unconditionally non-key.
-            //   * Console — has to receive keystrokes (the user types
-            //     into the running em6809 program), so a plain block
-            //     would break input.  `mark_window_click_activated`
-            //     drops it to non-key on resign and bumps it back to
-            //     key on user mouse-down inside the Console NSWindow.
+            //   * Breakpoints + Console — both have `TextEdit`s
+            //     (BP condition / Console terminal input) that need
+            //     keystrokes when the user is editing them.
+            //     `mark_window_click_activated` drops them to non-key
+            //     on resign and bumps them back to key on a user
+            //     mouse-down inside the window.  Each gets its own
+            //     internal flag so they don't influence each other.
             //
             // Idempotent — safe to call every frame, only marks each
             // NSWindow once.
             #[cfg(target_os = "macos")]
             {
-                em6809::platform::macos::mark_window_non_activating("em6809 Breakpoints");
+                em6809::platform::macos::mark_window_click_activated("em6809 Breakpoints");
                 em6809::platform::macos::mark_window_non_activating("em6809 Call Stack");
                 let console_title_for_swizzle =
                     if self.settings_baseline.console_gui_title.trim().is_empty() {
