@@ -113,67 +113,67 @@ fn render_call_stack(
                     );
                     // Each address cell is clickable so a double-click
                     // recentres the listing pane on the corresponding
-                    // address.  Manually allocate response rects with
-                    // `Sense::click()` so the click region is the
-                    // full 62-px column.  See
-                    // `breakpoints_ui::render_breakpoints` for why
-                    // `add_sized` + `Button` was unreliable here.
-                    let row_h = ui.spacing().interact_size.y;
-                    let mono_size = ui.style().text_styles[&egui::TextStyle::Monospace].size;
-                    let font_id = egui::FontId::new(mono_size, egui::FontFamily::Monospace);
-                    let text_color = ui.visuals().text_color();
-
-                    let (call_rect, call_resp) =
-                        ui.allocate_exact_size(egui::vec2(62.0, row_h), egui::Sense::click());
-                    ui.painter().text(
-                        call_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("${:04X}", frame.call_site),
-                        font_id.clone(),
-                        text_color,
-                    );
-                    let call_resp =
-                        call_resp.on_hover_text("Double-click to jump listing pane to call site");
+                    // address.  Same `ui.add(Label.sense(click()))`
+                    // pattern as `breakpoints_ui` — see that file for
+                    // the rationale (it's the only widget shape we
+                    // have empirical evidence works for double-click
+                    // across Windows / macOS / Linux).
+                    let call_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", frame.call_site))
+                                    .monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Double-click to jump listing pane to call site");
                     if call_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::UiCenterListingAt(frame.call_site));
                         }
                     }
+                    let pad = (62.0 - call_resp.rect.width()).max(0.0);
+                    if pad > 0.0 {
+                        ui.add_space(pad);
+                    }
 
                     ui.add_sized([22.0, 0.0], egui::Label::new("→"));
 
-                    let (target_rect, target_resp) =
-                        ui.allocate_exact_size(egui::vec2(62.0, row_h), egui::Sense::click());
-                    ui.painter().text(
-                        target_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("${:04X}", frame.target),
-                        font_id.clone(),
-                        text_color,
-                    );
-                    let target_resp = target_resp
+                    let target_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
                         .on_hover_text("Double-click to jump listing pane to call target");
                     if target_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::UiCenterListingAt(frame.target));
                         }
                     }
+                    let pad = (62.0 - target_resp.rect.width()).max(0.0);
+                    if pad > 0.0 {
+                        ui.add_space(pad);
+                    }
 
-                    let (ret_rect, ret_resp) =
-                        ui.allocate_exact_size(egui::vec2(62.0, row_h), egui::Sense::click());
-                    ui.painter().text(
-                        ret_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("${:04X}", frame.return_addr),
-                        font_id,
-                        text_color,
-                    );
-                    let ret_resp = ret_resp
+                    let ret_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", frame.return_addr))
+                                    .monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
                         .on_hover_text("Double-click to jump listing pane to return address");
                     if ret_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::UiCenterListingAt(frame.return_addr));
                         }
+                    }
+                    let pad = (62.0 - ret_resp.rect.width()).max(0.0);
+                    if pad > 0.0 {
+                        ui.add_space(pad);
                     }
                     ui.add_sized(
                         [62.0, 0.0],

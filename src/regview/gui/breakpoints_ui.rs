@@ -124,35 +124,40 @@ fn render_breakpoints(
                     }
                     // Address cell — clickable so a double-click
                     // recentres the listing pane on this BP's
-                    // address.  Manually allocate the response rect
-                    // with `Sense::click()` and paint the text into
-                    // it; egui's higher-level widgets (`Label`,
-                    // `Button.frame(false)`, `Button.min_size`,
-                    // `SelectableLabel`) all end up with a response
-                    // rect smaller than the visible cell because
-                    // `add_sized` centres them inside a sub-layout,
-                    // so most of the 60-px cell silently swallowed
-                    // double-clicks.  Doing the allocation ourselves
-                    // guarantees the click region is the full 60×
-                    // row_h rect.
-                    let row_h = ui.spacing().interact_size.y;
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(60.0, row_h), egui::Sense::click());
-                    let mono_size = ui.style().text_styles[&egui::TextStyle::Monospace].size;
-                    let font_id = egui::FontId::new(mono_size, egui::FontFamily::Monospace);
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("${:04X}", bp.addr),
-                        font_id,
-                        ui.visuals().text_color(),
-                    );
-                    let addr_resp =
-                        resp.on_hover_text("Double-click to jump listing pane to this address");
+                    // address.  Replicates the working
+                    // `list_ui::render_listing_lines` pattern:
+                    // `ui.add(Label::new(...).sense(click()))`.
+                    // Earlier attempts using `add_sized` plus
+                    // `Button.frame(false)` / `Button.min_size` /
+                    // `allocate_exact_size + painter.text` all
+                    // failed silently on Windows / macOS while
+                    // working partially on Linux — `ui.add` of a
+                    // Label with sense is the only pattern we have
+                    // empirical confirmation works for double-click
+                    // on every platform.  The cell loses its fixed
+                    // 60-px width as a result; column alignment with
+                    // adjacent rows is best-effort, but the click
+                    // is reliable.
+                    let addr_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Double-click to jump listing pane to this address");
                     if addr_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::UiCenterListingAt(bp.addr));
                         }
+                    }
+                    // Pad to keep approximate column alignment with
+                    // the 60-px header cell; `bp.addr` is always
+                    // 5 monospace characters so the actual text width
+                    // is roughly constant across rows.
+                    let pad = (60.0 - addr_resp.rect.width()).max(0.0);
+                    if pad > 0.0 {
+                        ui.add_space(pad);
                     }
                     ui.add_sized(
                         [60.0, 0.0],
