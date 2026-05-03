@@ -2509,34 +2509,58 @@ pub mod gui {
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
                 {
                     use std::panic::{catch_unwind, AssertUnwindSafe};
-                    // Suppress panic noise only during GUI bootstrap on Unix
+                    // Capture panic info via a custom hook so the
+                    // headless fallback message can include the real
+                    // reason (eframe / winit / EGL panics here are
+                    // hard to diagnose otherwise).  The previous
+                    // hook is restored after this block.
                     let prev_hook = std::panic::take_hook();
-                    std::panic::set_hook(Box::new(|_| {}));
+                    let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+                    let captured_w = Arc::clone(&captured);
+                    std::panic::set_hook(Box::new(move |info| {
+                        let loc = info
+                            .location()
+                            .map(|l| format!("{}:{}", l.file(), l.line()))
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        let payload = info
+                            .payload()
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "<non-string panic>".to_string());
+                        if let Ok(mut g) = captured_w.lock() {
+                            *g = Some(format!("{payload} at {loc}"));
+                        }
+                    }));
                     started_flag_thread.store(true, Ordering::SeqCst);
                     alive_flag_thread.store(true, Ordering::SeqCst);
                     let _ = catch_unwind(AssertUnwindSafe(|| {
-                            let _ = eframe::run_native(
-                                &title,
-                                native_options,
-                                Box::new(|cc| {
-                                    #[cfg(target_os = "macos")]
-                                    {
-                                        if GUI_CTX.set(cc.egui_ctx.clone()).is_ok() {
-                                            eprintln!("[macos-debug] GUI_CTX set from CreationContext");
-                                        }
+                        let _ = eframe::run_native(
+                            &title,
+                            native_options,
+                            Box::new(|cc| {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    if GUI_CTX.set(cc.egui_ctx.clone()).is_ok() {
+                                        eprintln!("[macos-debug] GUI_CTX set from CreationContext");
                                     }
-                                    #[cfg(not(target_os = "macos"))]
-                                    {
-                                        let _ = cc;
-                                    }
-                                    Ok(Box::new(app))
-                                }),
-                            );
+                                }
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    let _ = cc;
+                                }
+                                Ok(Box::new(app))
+                            }),
+                        );
                     }))
                     .map_err(|_| {
-                        eprintln!(
-                            "[regview] GUI failed to start on this platform/thread. Running headless."
-                        );
+                        let info = captured
+                            .lock()
+                            .ok()
+                            .and_then(|g| g.clone())
+                            .unwrap_or_else(|| "(no panic info captured)".to_string());
+                        eprintln!("[regview] GUI failed to start on this platform/thread: {info}");
+                        eprintln!("[regview] Running headless.");
                     });
                     std::panic::set_hook(prev_hook);
                     alive_flag_thread.store(false, Ordering::SeqCst);
