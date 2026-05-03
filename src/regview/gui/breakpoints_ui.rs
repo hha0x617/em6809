@@ -124,25 +124,31 @@ fn render_breakpoints(
                     }
                     // Address cell — clickable so a double-click
                     // recentres the listing pane on this BP's
-                    // address.  Frameless `Button` *with `min_size`
-                    // matching the column* — without `min_size` the
-                    // Button's response rect collapses back to the
-                    // text galley size and only the inner ~50 px of
-                    // the 60-px column is actually clickable.  The
-                    // outer `add_sized` reserves the column width in
-                    // the parent layout so adjacent rows stay aligned
-                    // even when the button is wider than the text.
+                    // address.  Manually allocate the response rect
+                    // with `Sense::click()` and paint the text into
+                    // it; egui's higher-level widgets (`Label`,
+                    // `Button.frame(false)`, `Button.min_size`,
+                    // `SelectableLabel`) all end up with a response
+                    // rect smaller than the visible cell because
+                    // `add_sized` centres them inside a sub-layout,
+                    // so most of the 60-px cell silently swallowed
+                    // double-clicks.  Doing the allocation ourselves
+                    // guarantees the click region is the full 60×
+                    // row_h rect.
                     let row_h = ui.spacing().interact_size.y;
-                    let addr_resp = ui
-                        .add_sized(
-                            [60.0, 0.0],
-                            egui::Button::new(
-                                egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
-                            )
-                            .frame(false)
-                            .min_size(egui::vec2(60.0, row_h)),
-                        )
-                        .on_hover_text("Double-click to jump listing pane to this address");
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(60.0, row_h), egui::Sense::click());
+                    let mono_size = ui.style().text_styles[&egui::TextStyle::Monospace].size;
+                    let font_id = egui::FontId::new(mono_size, egui::FontFamily::Monospace);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        format!("${:04X}", bp.addr),
+                        font_id,
+                        ui.visuals().text_color(),
+                    );
+                    let addr_resp =
+                        resp.on_hover_text("Double-click to jump listing pane to this address");
                     if addr_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::UiCenterListingAt(bp.addr));
