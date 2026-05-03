@@ -112,13 +112,12 @@ fn render_call_stack(
                         ),
                     );
                     // Each address cell is clickable so a double-click
-                    // recentres the listing pane on the corresponding
-                    // address.  Each cell wraps the sensed Label in
-                    // `ui.push_id(...)` with a salt that's stable
-                    // across paints (frame depth + which-column tag),
-                    // so egui matches the two halves of a double-click
-                    // against the same widget id.  See
-                    // `breakpoints_ui` for the broader rationale.
+                    // recentres the listing pane.  Manual
+                    // `clicked()` + timestamp double-click detection
+                    // (see `breakpoints_ui` for the rationale).
+                    let dc_threshold = 0.4_f64; // seconds
+                    let now = ui.input(|i| i.time);
+
                     let call_resp = ui
                         .push_id(("cs_call", depth), |ui| {
                             ui.add(
@@ -131,9 +130,16 @@ fn render_call_stack(
                         })
                         .inner
                         .on_hover_text("Double-click to jump listing pane to call site");
-                    if call_resp.double_clicked() {
-                        if let Ok(mut q) = cmds.lock() {
-                            q.push(Command::UiCenterListingAt(frame.call_site));
+                    if call_resp.clicked() {
+                        let mem_id = egui::Id::new(("cs_call_dc", depth));
+                        let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
+                        if prev > 0.0 && now - prev < dc_threshold {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(frame.call_site));
+                            }
+                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, 0.0_f64));
+                        } else {
+                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
                         }
                     }
                     let pad = (62.0 - call_resp.rect.width()).max(0.0);
@@ -155,9 +161,16 @@ fn render_call_stack(
                         })
                         .inner
                         .on_hover_text("Double-click to jump listing pane to call target");
-                    if target_resp.double_clicked() {
-                        if let Ok(mut q) = cmds.lock() {
-                            q.push(Command::UiCenterListingAt(frame.target));
+                    if target_resp.clicked() {
+                        let mem_id = egui::Id::new(("cs_target_dc", depth));
+                        let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
+                        if prev > 0.0 && now - prev < dc_threshold {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(frame.target));
+                            }
+                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, 0.0_f64));
+                        } else {
+                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
                         }
                     }
                     let pad = (62.0 - target_resp.rect.width()).max(0.0);
@@ -177,9 +190,16 @@ fn render_call_stack(
                         })
                         .inner
                         .on_hover_text("Double-click to jump listing pane to return address");
-                    if ret_resp.double_clicked() {
-                        if let Ok(mut q) = cmds.lock() {
-                            q.push(Command::UiCenterListingAt(frame.return_addr));
+                    if ret_resp.clicked() {
+                        let mem_id = egui::Id::new(("cs_return_dc", depth));
+                        let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
+                        if prev > 0.0 && now - prev < dc_threshold {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(frame.return_addr));
+                            }
+                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, 0.0_f64));
+                        } else {
+                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
                         }
                     }
                     let pad = (62.0 - ret_resp.rect.width()).max(0.0);

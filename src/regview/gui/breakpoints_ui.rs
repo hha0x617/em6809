@@ -124,16 +124,17 @@ fn render_breakpoints(
                     }
                     // Address cell — clickable so a double-click
                     // recentres the listing pane on this BP's
-                    // address.  Wrapped in `ui.push_id(bp.id)` so
-                    // egui can match the second click of a double-
-                    // click against the same widget identity even if
-                    // the auto-generated id would otherwise drift
-                    // between frames.  Empirically a plain
-                    // `ui.add(Label.sense(click()))` fired only on
-                    // the first row and only "very rarely" on
-                    // Windows / macOS — consistent with widget id
-                    // instability across the worker-pushed bp_list
-                    // updates that arrive between paints.
+                    // address.  egui's built-in `double_clicked()`
+                    // proved unreliable across platforms (Windows:
+                    // never fired; macOS: fired once per
+                    // window-open then stopped; Linux: only the
+                    // middle CS column fired).  Implement double-
+                    // click detection manually: track the timestamp
+                    // of the previous `clicked()` per row and treat
+                    // two clicks within `multi_click_time` as a
+                    // double-click.  `ui.input(|i| i.time)` is the
+                    // egui frame time, so timing is consistent
+                    // regardless of platform double-click semantics.
                     let addr_resp = ui
                         .push_id(("bp_addr_click", bp.id), |ui| {
                             ui.add(
@@ -145,9 +146,23 @@ fn render_breakpoints(
                         })
                         .inner
                         .on_hover_text("Double-click to jump listing pane to this address");
-                    if addr_resp.double_clicked() {
-                        if let Ok(mut q) = cmds.lock() {
-                            q.push(Command::UiCenterListingAt(bp.addr));
+                    if addr_resp.clicked() {
+                        // 400 ms threshold matches egui's own
+                        // multi_click_time default.
+                        let now = ui.input(|i| i.time);
+                        let click_mem_id = egui::Id::new(("bp_addr_dc", bp.id));
+                        let prev: f64 = ui
+                            .ctx()
+                            .memory(|m| m.data.get_temp(click_mem_id).unwrap_or(0.0));
+                        if prev > 0.0 && now - prev < 0.4 {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(bp.addr));
+                            }
+                            ui.ctx()
+                                .memory_mut(|m| m.data.insert_temp(click_mem_id, 0.0_f64));
+                        } else {
+                            ui.ctx()
+                                .memory_mut(|m| m.data.insert_temp(click_mem_id, now));
                         }
                     }
                     // Pad to keep approximate column alignment with
