@@ -1281,10 +1281,11 @@ pub mod gui {
                         // Recentre listing on `addr`. We park it as
                         // `pending_listing_center`; list_ui.rs reads
                         // it on the next paint, scrolls there, and
-                        // clears the field.  Re-enabling Follow PC
-                        // would fight this jump on the next pause
-                        // edge, so leave it untouched — the user
-                        // can re-arm it from the toolbar.
+                        // clears the field.
+                        eprintln!(
+                            "[drain] UiCenterListingAt(${:04X}) -> pending_listing_center",
+                            addr
+                        );
                         self.pending_listing_center = Some(addr);
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {

@@ -146,13 +146,19 @@ fn render_breakpoints(
                         ),
                     );
                     if addr_resp.clicked() {
-                        eprintln!("[bp-click] addr=${:04X} id={}", bp.addr, bp.id);
                         let now = ui.input(|i| i.time);
                         let click_mem_id = egui::Id::new(("bp_addr_dc", bp.id));
                         let prev: f64 = ui
                             .ctx()
                             .memory(|m| m.data.get_temp(click_mem_id).unwrap_or(0.0));
-                        if prev > 0.0 && now - prev < 0.4 {
+                        let dt = now - prev;
+                        let is_dc = prev > 0.0 && dt < 0.4;
+                        eprintln!(
+                            "[bp-click] addr=${:04X} id={} now={:.3} prev={:.3} dt={:.3} dc={}",
+                            bp.addr, bp.id, now, prev, dt, is_dc
+                        );
+                        if is_dc {
+                            eprintln!("[bp-click]   -> push UiCenterListingAt(${:04X})", bp.addr);
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(bp.addr));
                             }

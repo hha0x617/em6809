@@ -263,7 +263,8 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             // the address isn't in the listing
                             // (e.g., outside loaded ROM), retrying
                             // every frame would just spin.
-                            if pending_center.is_some() {
+                            if let Some(pc) = pending_center {
+                                eprintln!("[list_ui] consume pending_listing_center=${:04X}", pc);
                                 app.pending_listing_center = None;
                             }
                             // `inner_rect` and `row_height_with_spacing` are
