@@ -517,73 +517,305 @@ pub fn install_native_settings_handler_once(open_native_cb: Box<dyn Fn() + Send 
     }
 }
 
-/// macOS: prevent an auxiliary NSWindow (matched by exact title) from
-/// ever becoming the key / main window.  Required because eframe 0.29's
-/// multi-viewport support creates auxiliary NSWindows that AppKit
-/// happily promotes to key window on every paint or interaction —
-/// monopolising keyboard input from the main window's TextEdit and
-/// register-edit controls.
-///
-/// Mechanism: `object_setClass:` swaps the existing NSWindow instance
-/// into a dynamically generated subclass (one per distinct parent
-/// class) whose `canBecomeKeyWindow` and `canBecomeMainWindow` return
-/// NO.  Click events still reach inner widgets (so checkboxes / buttons
-/// inside aux windows continue to work) — only key-window-dependent
-/// keyboard dispatch is blocked.
-///
-/// Idempotent: marked NSWindow pointers are recorded so repeated calls
-/// (every frame from `RegApp::update`) are no-ops after the first
-/// successful swap.
+// ---------------------------------------------------------------
+// macOS focus management for eframe 0.29 multi-viewport
+// ---------------------------------------------------------------
+//
+// Two related symptoms with auxiliary NSWindows:
+//
+//   1. Read-only panels (Breakpoints / Call Stack) keep promoting
+//      themselves to key window during paint cycles, blocking the main
+//      window's TextEdit / register-edit controls from receiving keys.
+//
+//   2. Console needs to receive keystrokes (the user types into the
+//      running em6809 program), but its paint cycle also pulls key
+//      window status away from main during normal emulator output.
+//
+// Approach: install class-level method swizzles on the winit NSWindow
+// class and consult a per-instance marker in the swizzled methods.
+//
+//   marker == NON_ACTIVATING   → `canBecomeKeyWindow` returns NO,
+//                                 `canBecomeMainWindow` returns NO.
+//   marker == CLICK_ACTIVATED  → flag-driven; flips on mouse-down via
+//                                 `sendEvent:`, drops on `resignKeyWindow`.
+//   marker absent (main, etc.) → fall through to the original IMP.
+//
+// Why method swizzling and not `object_setClass:` to a custom subclass?
+// winit registers a `effectiveAppearance` KVO observer on each NSWindow
+// for theme tracking.  KVO uses isa-swizzling internally to install its
+// notify-on-set subclass; if we swap isa AFTER KVO has set it up, the
+// observer registration becomes invisible and `removeObserver:forKeyPath:`
+// raises NSRangeException at app shutdown.  Modifying the class itself
+// (rather than the per-instance isa) leaves KVO bookkeeping untouched.
+//
+// All swizzled IMPs delegate to the original (saved BEFORE replacement)
+// for unmarked instances, so the main window's behaviour is identical
+// to a clean winit run.
+
 #[cfg(target_os = "macos")]
-pub fn mark_window_non_activating(title: &str) {
-    use objc::declare::ClassDecl;
-    use objc::runtime::{Object as ObjcObject, BOOL, NO};
-    use std::collections::{HashMap, HashSet};
+const FOCUS_MARK_NON_ACTIVATING: u8 = 1;
+#[cfg(target_os = "macos")]
+const FOCUS_MARK_CLICK_ACTIVATED: u8 = 2;
+
+// Type encoding strings for the four selectors we override.
+// `BOOL` is `_Bool` (encoding "B") on aarch64 and `signed char` ("c")
+// on x86_64 macOS, so we pick at compile time.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const FOCUS_ENC_BOOL_NO_ARGS: &[u8] = b"B@:\0";
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+const FOCUS_ENC_BOOL_NO_ARGS: &[u8] = b"c@:\0";
+#[cfg(target_os = "macos")]
+const FOCUS_ENC_VOID_ID: &[u8] = b"v@:@\0";
+#[cfg(target_os = "macos")]
+const FOCUS_ENC_VOID_NO_ARGS: &[u8] = b"v@:\0";
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct FocusOrigImps {
+    can_become_key: usize,
+    can_become_main: usize,
+    send_event: usize,
+    resign_key: usize,
+}
+
+#[cfg(target_os = "macos")]
+static FOCUS_MARKERS: OnceCell<std::sync::Mutex<std::collections::HashMap<usize, u8>>> =
+    OnceCell::new();
+#[cfg(target_os = "macos")]
+static FOCUS_SWIZZLE_ORIGS: OnceCell<
+    std::sync::Mutex<std::collections::HashMap<usize, FocusOrigImps>>,
+> = OnceCell::new();
+#[cfg(target_os = "macos")]
+static CONSOLE_CAN_BE_KEY: AtomicBool = AtomicBool::new(true);
+
+#[cfg(target_os = "macos")]
+fn focus_marker_of(ptr: usize) -> u8 {
+    FOCUS_MARKERS
+        .get()
+        .and_then(|m| m.lock().ok().map(|g| g.get(&ptr).copied().unwrap_or(0)))
+        .unwrap_or(0)
+}
+
+/// Walk up the class hierarchy from `cls` to find the first class for
+/// which we have stored swizzle originals.  Needed because KVO can
+/// produce dynamic subclasses (NSKVONotifying_*) whose actual class
+/// pointer differs from the one we swizzled — but the class chain
+/// still includes the winit NSWindow class we modified.
+#[cfg(target_os = "macos")]
+unsafe fn focus_origs_for(mut cls: *const Class) -> Option<FocusOrigImps> {
+    extern "C" {
+        fn class_getSuperclass(cls: *const Class) -> *const Class;
+    }
+    let map = FOCUS_SWIZZLE_ORIGS.get()?;
+    let g = map.lock().ok()?;
+    while !cls.is_null() {
+        if let Some(imps) = g.get(&(cls as usize)) {
+            return Some(*imps);
+        }
+        cls = class_getSuperclass(cls);
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn focus_can_become_key_swizzled(this: &Object, sel: Sel) -> objc::runtime::BOOL {
+    use objc::runtime::{BOOL, NO, YES};
+    let ptr = this as *const Object as usize;
+    let mark = focus_marker_of(ptr);
+    if mark == FOCUS_MARK_NON_ACTIVATING {
+        return NO;
+    }
+    if mark == FOCUS_MARK_CLICK_ACTIVATED {
+        return if CONSOLE_CAN_BE_KEY.load(Ordering::SeqCst) {
+            YES
+        } else {
+            NO
+        };
+    }
+    unsafe {
+        let cls: *const Class = msg_send![this as *const Object as *mut Object, class];
+        if let Some(imps) = focus_origs_for(cls) {
+            type Sig = extern "C" fn(&Object, Sel) -> BOOL;
+            let f: Sig = std::mem::transmute::<*const std::os::raw::c_void, Sig>(
+                imps.can_become_key as *const std::os::raw::c_void,
+            );
+            return f(this, sel);
+        }
+        YES
+    }
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn focus_can_become_main_swizzled(this: &Object, sel: Sel) -> objc::runtime::BOOL {
+    use objc::runtime::{BOOL, NO};
+    let ptr = this as *const Object as usize;
+    let mark = focus_marker_of(ptr);
+    if mark == FOCUS_MARK_NON_ACTIVATING || mark == FOCUS_MARK_CLICK_ACTIVATED {
+        return NO;
+    }
+    unsafe {
+        let cls: *const Class = msg_send![this as *const Object as *mut Object, class];
+        if let Some(imps) = focus_origs_for(cls) {
+            type Sig = extern "C" fn(&Object, Sel) -> BOOL;
+            let f: Sig = std::mem::transmute::<*const std::os::raw::c_void, Sig>(
+                imps.can_become_main as *const std::os::raw::c_void,
+            );
+            return f(this, sel);
+        }
+        objc::runtime::YES
+    }
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn focus_send_event_swizzled(this: &Object, sel: Sel, event: *mut Object) {
+    let ptr = this as *const Object as usize;
+    let mark = focus_marker_of(ptr);
+    if mark == FOCUS_MARK_CLICK_ACTIVATED {
+        unsafe {
+            // NSEventTypeLeftMouseDown = 1, NSEventTypeRightMouseDown = 3.
+            let evt_type: i64 = msg_send![event, type];
+            if evt_type == 1 || evt_type == 3 {
+                CONSOLE_CAN_BE_KEY.store(true, Ordering::SeqCst);
+                let nil: *const Object = core::ptr::null();
+                let recv: *mut Object = this as *const Object as *mut Object;
+                let _: () = msg_send![recv, makeKeyAndOrderFront: nil];
+            }
+        }
+    }
+    unsafe {
+        let cls: *const Class = msg_send![this as *const Object as *mut Object, class];
+        if let Some(imps) = focus_origs_for(cls) {
+            type Sig = extern "C" fn(&Object, Sel, *mut Object);
+            let f: Sig = std::mem::transmute::<*const std::os::raw::c_void, Sig>(
+                imps.send_event as *const std::os::raw::c_void,
+            );
+            f(this, sel, event);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn focus_resign_key_swizzled(this: &Object, sel: Sel) {
+    let ptr = this as *const Object as usize;
+    if focus_marker_of(ptr) == FOCUS_MARK_CLICK_ACTIVATED {
+        CONSOLE_CAN_BE_KEY.store(false, Ordering::SeqCst);
+    }
+    unsafe {
+        let cls: *const Class = msg_send![this as *const Object as *mut Object, class];
+        if let Some(imps) = focus_origs_for(cls) {
+            type Sig = extern "C" fn(&Object, Sel);
+            let f: Sig = std::mem::transmute::<*const std::os::raw::c_void, Sig>(
+                imps.resign_key as *const std::os::raw::c_void,
+            );
+            f(this, sel);
+        }
+    }
+}
+
+/// Install canBecomeKeyWindow / canBecomeMainWindow / sendEvent: /
+/// resignKeyWindow swizzles on `target_cls` if not already installed.
+/// Returns true if the swizzle is in effect for this class chain.
+#[cfg(target_os = "macos")]
+unsafe fn ensure_focus_swizzle_installed(target_cls: *const Class) -> bool {
+    use std::collections::HashMap;
+    use std::os::raw::{c_char, c_void};
     use std::sync::Mutex;
 
     extern "C" {
-        fn object_setClass(obj: *mut ObjcObject, cls: *const Class) -> *const Class;
+        fn class_getInstanceMethod(cls: *const Class, sel: Sel) -> *mut c_void;
+        fn class_addMethod(
+            cls: *mut Class,
+            sel: Sel,
+            imp: *const c_void,
+            types: *const c_char,
+        ) -> objc::runtime::BOOL;
+        fn method_getImplementation(method: *mut c_void) -> *const c_void;
+        fn method_setImplementation(method: *mut c_void, imp: *const c_void) -> *const c_void;
     }
 
-    // Use objc::runtime::BOOL (alias for c_schar on x86_64 macOS,
-    // bool on aarch64) so the encoding matches platform ABI.
-    extern "C" fn return_no(_this: &ObjcObject, _sel: Sel) -> BOOL {
-        NO
-    }
-
-    static MARKED: OnceCell<Mutex<HashSet<usize>>> = OnceCell::new();
-    static SUBCLASSES: OnceCell<Mutex<HashMap<usize, usize>>> = OnceCell::new();
-
-    unsafe fn ensure_subclass(parent: *const Class) -> *const Class {
-        let map = SUBCLASSES.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut g = map.lock().unwrap();
-        let key = parent as usize;
-        if let Some(&v) = g.get(&key) {
-            return v as *const Class;
+    let key = target_cls as usize;
+    let map = FOCUS_SWIZZLE_ORIGS.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let g = map.lock().unwrap();
+        if g.contains_key(&key) {
+            return true;
         }
-        let parent_ref: &Class = &*parent;
-        let unique = format!("Em6809AccessoryNSWindow_{:x}", key);
-        let cls: *const Class = if let Some(mut decl) = ClassDecl::new(&unique, parent_ref) {
-            decl.add_method(
-                sel!(canBecomeKeyWindow),
-                return_no as extern "C" fn(&ObjcObject, Sel) -> BOOL,
-            );
-            decl.add_method(
-                sel!(canBecomeMainWindow),
-                return_no as extern "C" fn(&ObjcObject, Sel) -> BOOL,
-            );
-            decl.register() as *const Class
-        } else if let Some(existing) = Class::get(&unique) {
-            existing as *const Class
+    }
+
+    // Helper: install one method, returning the IMP that was effective
+    // for this class before our replacement (either inherited from a
+    // superclass or directly on target_cls).
+    unsafe fn install_one(
+        target_cls: *const Class,
+        sel: Sel,
+        new_imp: *const c_void,
+        types: *const c_char,
+    ) -> *const c_void {
+        let added = class_addMethod(target_cls as *mut Class, sel, new_imp, types);
+        if added != objc::runtime::NO {
+            // Method didn't exist on target_cls — was inherited.  The
+            // pre-existing effective IMP is on a superclass.
+            let m = class_getInstanceMethod(class_getSuperclass(target_cls), sel);
+            if m.is_null() {
+                core::ptr::null()
+            } else {
+                method_getImplementation(m)
+            }
         } else {
-            std::ptr::null()
-        };
-        if !cls.is_null() {
-            g.insert(key, cls as usize);
+            // Already on target_cls; replace and capture old IMP.
+            let m = class_getInstanceMethod(target_cls, sel);
+            if m.is_null() {
+                core::ptr::null()
+            } else {
+                method_setImplementation(m, new_imp)
+            }
         }
-        cls
     }
 
+    extern "C" {
+        fn class_getSuperclass(cls: *const Class) -> *const Class;
+    }
+
+    let can_key_orig = install_one(
+        target_cls,
+        sel!(canBecomeKeyWindow),
+        focus_can_become_key_swizzled as *const c_void,
+        FOCUS_ENC_BOOL_NO_ARGS.as_ptr() as *const c_char,
+    );
+    let can_main_orig = install_one(
+        target_cls,
+        sel!(canBecomeMainWindow),
+        focus_can_become_main_swizzled as *const c_void,
+        FOCUS_ENC_BOOL_NO_ARGS.as_ptr() as *const c_char,
+    );
+    let send_event_orig = install_one(
+        target_cls,
+        sel!(sendEvent:),
+        focus_send_event_swizzled as *const c_void,
+        FOCUS_ENC_VOID_ID.as_ptr() as *const c_char,
+    );
+    let resign_orig = install_one(
+        target_cls,
+        sel!(resignKeyWindow),
+        focus_resign_key_swizzled as *const c_void,
+        FOCUS_ENC_VOID_NO_ARGS.as_ptr() as *const c_char,
+    );
+
+    let imps = FocusOrigImps {
+        can_become_key: can_key_orig as usize,
+        can_become_main: can_main_orig as usize,
+        send_event: send_event_orig as usize,
+        resign_key: resign_orig as usize,
+    };
+    map.lock().unwrap().insert(key, imps);
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn focus_mark_window(title: &str, marker: u8) {
+    use objc::runtime::Object as ObjcObject;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
     unsafe {
         let app: *mut ObjcObject = msg_send![class!(NSApplication), sharedApplication];
         if app.is_null() {
@@ -611,26 +843,89 @@ pub fn mark_window_non_activating(title: &str) {
             if cur != title {
                 continue;
             }
-            let key_id = w as usize;
-            let marked = MARKED.get_or_init(|| Mutex::new(HashSet::new()));
-            {
-                let g = marked.lock().unwrap();
-                if g.contains(&key_id) {
-                    continue;
-                }
-            }
-            let parent: *const Class = msg_send![w, class];
-            if parent.is_null() {
+            let cls: *const Class = msg_send![w, class];
+            if cls.is_null() {
                 continue;
             }
-            let new_cls = ensure_subclass(parent);
-            if new_cls.is_null() {
+            // The actual class might be NSKVONotifying_<X>; the swizzle
+            // needs to land on <X> so KVO's lookup chain still finds
+            // our IMP via inheritance.  Walk up to the first non-KVO
+            // class.
+            let target = focus_target_class(cls);
+            if target.is_null() {
                 continue;
             }
-            let _: *const Class = object_setClass(w, new_cls);
-            // If AppKit had already promoted this window to key
-            // before we swapped its class, push key status back to
-            // the main window.
+            if !ensure_focus_swizzle_installed(target) {
+                continue;
+            }
+            let markers = FOCUS_MARKERS.get_or_init(|| Mutex::new(HashMap::new()));
+            markers.lock().unwrap().insert(w as usize, marker);
+        }
+    }
+}
+
+/// Return the non-KVO class for an NSWindow instance: walks up while
+/// the class name starts with "NSKVONotifying_".  KVO's dynamic
+/// subclasses derive from the real class, so the first non-KVO ancestor
+/// is the class winit actually instantiated.
+#[cfg(target_os = "macos")]
+unsafe fn focus_target_class(mut cls: *const Class) -> *const Class {
+    extern "C" {
+        fn class_getSuperclass(cls: *const Class) -> *const Class;
+        fn class_getName(cls: *const Class) -> *const i8;
+    }
+    while !cls.is_null() {
+        let name_ptr = class_getName(cls);
+        if name_ptr.is_null() {
+            return cls;
+        }
+        let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
+        if !name.starts_with("NSKVONotifying_") {
+            return cls;
+        }
+        cls = class_getSuperclass(cls);
+    }
+    cls
+}
+
+/// macOS: prevent an auxiliary NSWindow (matched by exact title) from
+/// ever becoming the key / main window.  Used for the read-only BP /
+/// Call Stack panels — they accept clicks but never need keystrokes.
+///
+/// Idempotent — safe to call every frame.
+#[cfg(target_os = "macos")]
+pub fn mark_window_non_activating(title: &str) {
+    focus_mark_window(title, FOCUS_MARK_NON_ACTIVATING);
+    // Best-effort: if AppKit had already promoted this window to key
+    // before the marker was registered, push key status back to main.
+    use objc::runtime::Object as ObjcObject;
+    unsafe {
+        let app: *mut ObjcObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: *mut ObjcObject = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: i64 = msg_send![windows, count];
+        for i in 0..count {
+            let w: *mut ObjcObject = msg_send![windows, objectAtIndex: i];
+            if w.is_null() {
+                continue;
+            }
+            let wt: *mut ObjcObject = msg_send![w, title];
+            if wt.is_null() {
+                continue;
+            }
+            let utf8: *const i8 = msg_send![wt, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let cur = std::ffi::CStr::from_ptr(utf8).to_string_lossy().to_string();
+            if cur != title {
+                continue;
+            }
             let key_window: *mut ObjcObject = msg_send![app, keyWindow];
             if key_window == w {
                 let main_window: *mut ObjcObject = msg_send![app, mainWindow];
@@ -639,204 +934,20 @@ pub fn mark_window_non_activating(title: &str) {
                         msg_send![main_window, makeKeyAndOrderFront: core::ptr::null::<()>()];
                 }
             }
-            marked.lock().unwrap().insert(key_id);
         }
     }
 }
 
-/// macOS: install a "click-activated" subclass on an auxiliary
-/// NSWindow that needs keyboard focus only when the user explicitly
-/// clicks on it.  Designed for the VT100 Console window: the user
-/// types into Console, so Console must be able to become key — but
-/// without this hook, eframe's paint cycle on the Console viewport
-/// keeps stealing key status back from the main window during normal
-/// emulator activity.
-///
-/// Mechanism: subclass overrides four methods —
-///   * `canBecomeKeyWindow` returns the value of a flag (initially YES).
-///   * `canBecomeMainWindow` returns NO (auxiliary windows shouldn't
-///     be tracked as the app's main window).
-///   * `sendEvent:` watches for left/right mouse-down and, on a click,
-///     sets the flag to YES then calls `makeKeyAndOrderFront:` before
-///     forwarding to super.  This is the only path that flips the
-///     flag back on after the main window has stolen key status.
-///   * `resignKeyWindow` clears the flag, then calls super.  Once the
-///     main window takes key (e.g., user clicks main), the flag drops
-///     to NO and any subsequent eframe-driven `makeKey` on Console
-///     fails silently — main keeps key, Console stays merely visible.
+/// macOS: install a "click-activated" marker on an NSWindow that needs
+/// keystrokes but only when the user has explicitly clicked it.
+/// Designed for the VT100 Console window: keystrokes flow into the
+/// running em6809 program when Console is key, but Console must not
+/// reclaim key from main during normal eframe paint cycles.
 ///
 /// Idempotent — safe to call every frame.
 #[cfg(target_os = "macos")]
 pub fn mark_window_click_activated(title: &str) {
-    use objc::declare::ClassDecl;
-    use objc::runtime::{Object as ObjcObject, BOOL, NO, YES};
-    use std::collections::{HashMap, HashSet};
-    use std::os::raw::c_void;
-    use std::sync::Mutex;
-
-    #[repr(C)]
-    struct ObjcSuper {
-        receiver: *mut ObjcObject,
-        super_class: *const Class,
-    }
-
-    extern "C" {
-        fn object_setClass(obj: *mut ObjcObject, cls: *const Class) -> *const Class;
-        fn class_getSuperclass(cls: *const Class) -> *const Class;
-        // Treated as variadic in C; we cast to a typed signature at
-        // each call site below.  Safe on macOS as long as no float
-        // args participate (true here — all args are pointers).
-        fn objc_msgSendSuper();
-    }
-
-    // YES initially so the first time the app is shown Console can
-    // pick up keystrokes without an explicit user click.  Drops to
-    // NO via `resign_key` as soon as another window (typically main)
-    // becomes key; flips back to YES via `send_event` on the next
-    // mouse-down inside Console.
-    static CONSOLE_CAN_BE_KEY: AtomicBool = AtomicBool::new(true);
-
-    extern "C" fn can_become_key(_this: &ObjcObject, _sel: Sel) -> BOOL {
-        if CONSOLE_CAN_BE_KEY.load(Ordering::SeqCst) {
-            YES
-        } else {
-            NO
-        }
-    }
-
-    extern "C" fn can_become_main(_this: &ObjcObject, _sel: Sel) -> BOOL {
-        NO
-    }
-
-    extern "C" fn send_event(this: &ObjcObject, _sel: Sel, event: *mut ObjcObject) {
-        unsafe {
-            // NSEventTypeLeftMouseDown = 1, NSEventTypeRightMouseDown = 3.
-            let evt_type: i64 = msg_send![event, type];
-            if evt_type == 1 || evt_type == 3 {
-                CONSOLE_CAN_BE_KEY.store(true, Ordering::SeqCst);
-                let nil: *const ObjcObject = core::ptr::null();
-                let recv: *mut ObjcObject = this as *const ObjcObject as *mut ObjcObject;
-                let _: () = msg_send![recv, makeKeyAndOrderFront: nil];
-            }
-            let recv: *mut ObjcObject = this as *const ObjcObject as *mut ObjcObject;
-            let cls: *const Class = msg_send![recv, class];
-            let super_cls = class_getSuperclass(cls);
-            let super_struct = ObjcSuper {
-                receiver: recv,
-                super_class: super_cls,
-            };
-            type Sig = extern "C" fn(*const ObjcSuper, Sel, *mut ObjcObject);
-            let f: Sig =
-                std::mem::transmute::<*const c_void, Sig>(objc_msgSendSuper as *const c_void);
-            f(&super_struct, sel!(sendEvent:), event);
-        }
-    }
-
-    extern "C" fn resign_key(this: &ObjcObject, _sel: Sel) {
-        CONSOLE_CAN_BE_KEY.store(false, Ordering::SeqCst);
-        unsafe {
-            let recv: *mut ObjcObject = this as *const ObjcObject as *mut ObjcObject;
-            let cls: *const Class = msg_send![recv, class];
-            let super_cls = class_getSuperclass(cls);
-            let super_struct = ObjcSuper {
-                receiver: recv,
-                super_class: super_cls,
-            };
-            type Sig = extern "C" fn(*const ObjcSuper, Sel);
-            let f: Sig =
-                std::mem::transmute::<*const c_void, Sig>(objc_msgSendSuper as *const c_void);
-            f(&super_struct, sel!(resignKeyWindow));
-        }
-    }
-
-    static MARKED: OnceCell<Mutex<HashSet<usize>>> = OnceCell::new();
-    static SUBCLASSES: OnceCell<Mutex<HashMap<usize, usize>>> = OnceCell::new();
-
-    unsafe fn ensure_subclass(parent: *const Class) -> *const Class {
-        let map = SUBCLASSES.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut g = map.lock().unwrap();
-        let key = parent as usize;
-        if let Some(&v) = g.get(&key) {
-            return v as *const Class;
-        }
-        let parent_ref: &Class = &*parent;
-        let unique = format!("Em6809ClickActivatedNSWindow_{:x}", key);
-        let cls: *const Class = if let Some(mut decl) = ClassDecl::new(&unique, parent_ref) {
-            decl.add_method(
-                sel!(canBecomeKeyWindow),
-                can_become_key as extern "C" fn(&ObjcObject, Sel) -> BOOL,
-            );
-            decl.add_method(
-                sel!(canBecomeMainWindow),
-                can_become_main as extern "C" fn(&ObjcObject, Sel) -> BOOL,
-            );
-            decl.add_method(
-                sel!(sendEvent:),
-                send_event as extern "C" fn(&ObjcObject, Sel, *mut ObjcObject),
-            );
-            decl.add_method(
-                sel!(resignKeyWindow),
-                resign_key as extern "C" fn(&ObjcObject, Sel),
-            );
-            decl.register() as *const Class
-        } else if let Some(existing) = Class::get(&unique) {
-            existing as *const Class
-        } else {
-            std::ptr::null()
-        };
-        if !cls.is_null() {
-            g.insert(key, cls as usize);
-        }
-        cls
-    }
-
-    unsafe {
-        let app: *mut ObjcObject = msg_send![class!(NSApplication), sharedApplication];
-        if app.is_null() {
-            return;
-        }
-        let windows: *mut ObjcObject = msg_send![app, windows];
-        if windows.is_null() {
-            return;
-        }
-        let count: i64 = msg_send![windows, count];
-        for i in 0..count {
-            let w: *mut ObjcObject = msg_send![windows, objectAtIndex: i];
-            if w.is_null() {
-                continue;
-            }
-            let wt: *mut ObjcObject = msg_send![w, title];
-            if wt.is_null() {
-                continue;
-            }
-            let utf8: *const i8 = msg_send![wt, UTF8String];
-            if utf8.is_null() {
-                continue;
-            }
-            let cur = std::ffi::CStr::from_ptr(utf8).to_string_lossy().to_string();
-            if cur != title {
-                continue;
-            }
-            let key_id = w as usize;
-            let marked = MARKED.get_or_init(|| Mutex::new(HashSet::new()));
-            {
-                let g = marked.lock().unwrap();
-                if g.contains(&key_id) {
-                    continue;
-                }
-            }
-            let parent: *const Class = msg_send![w, class];
-            if parent.is_null() {
-                continue;
-            }
-            let new_cls = ensure_subclass(parent);
-            if new_cls.is_null() {
-                continue;
-            }
-            let _: *const Class = object_setClass(w, new_cls);
-            marked.lock().unwrap().insert(key_id);
-        }
-    }
+    focus_mark_window(title, FOCUS_MARK_CLICK_ACTIVATED);
 }
 
 #[cfg(target_os = "macos")]
