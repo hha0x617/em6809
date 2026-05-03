@@ -111,26 +111,28 @@ fn render_call_stack(
                             egui::RichText::new(frame.kind.label()).monospace().strong(),
                         ),
                     );
-                    // Each address cell is clickable so a double-click
-                    // recentres the listing pane.  Manual
-                    // `clicked()` + timestamp double-click detection
-                    // (see `breakpoints_ui` for the rationale).
+                    // Each address cell is clickable.  Same
+                    // default-framed `Button` shape as the BP delete
+                    // button — the only `clicked()` pattern we know
+                    // works on Windows.  Manual timestamp double-
+                    // click detection bypasses egui's flaky
+                    // `double_clicked()`.  Temporary `eprintln!`s
+                    // confirm clicks reach us; remove once
+                    // verified.
                     let dc_threshold = 0.4_f64; // seconds
                     let now = ui.input(|i| i.time);
 
-                    let call_resp = ui
-                        .push_id(("cs_call", depth), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("${:04X}", frame.call_site))
-                                        .monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            )
-                        })
-                        .inner
-                        .on_hover_text("Double-click to jump listing pane to call site");
+                    let call_resp = ui.add_sized(
+                        [62.0, 0.0],
+                        egui::Button::new(
+                            egui::RichText::new(format!("${:04X}", frame.call_site)).monospace(),
+                        ),
+                    );
                     if call_resp.clicked() {
+                        eprintln!(
+                            "[cs-click] call_site=${:04X} depth={}",
+                            frame.call_site, depth
+                        );
                         let mem_id = egui::Id::new(("cs_call_dc", depth));
                         let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
                         if prev > 0.0 && now - prev < dc_threshold {
@@ -142,26 +144,17 @@ fn render_call_stack(
                             ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
                         }
                     }
-                    let pad = (62.0 - call_resp.rect.width()).max(0.0);
-                    if pad > 0.0 {
-                        ui.add_space(pad);
-                    }
 
                     ui.add_sized([22.0, 0.0], egui::Label::new("→"));
 
-                    let target_resp = ui
-                        .push_id(("cs_target", depth), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("${:04X}", frame.target))
-                                        .monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            )
-                        })
-                        .inner
-                        .on_hover_text("Double-click to jump listing pane to call target");
+                    let target_resp = ui.add_sized(
+                        [62.0, 0.0],
+                        egui::Button::new(
+                            egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
+                        ),
+                    );
                     if target_resp.clicked() {
+                        eprintln!("[cs-click] target=${:04X} depth={}", frame.target, depth);
                         let mem_id = egui::Id::new(("cs_target_dc", depth));
                         let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
                         if prev > 0.0 && now - prev < dc_threshold {
@@ -173,24 +166,18 @@ fn render_call_stack(
                             ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
                         }
                     }
-                    let pad = (62.0 - target_resp.rect.width()).max(0.0);
-                    if pad > 0.0 {
-                        ui.add_space(pad);
-                    }
 
-                    let ret_resp = ui
-                        .push_id(("cs_return", depth), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("${:04X}", frame.return_addr))
-                                        .monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            )
-                        })
-                        .inner
-                        .on_hover_text("Double-click to jump listing pane to return address");
+                    let ret_resp = ui.add_sized(
+                        [62.0, 0.0],
+                        egui::Button::new(
+                            egui::RichText::new(format!("${:04X}", frame.return_addr)).monospace(),
+                        ),
+                    );
                     if ret_resp.clicked() {
+                        eprintln!(
+                            "[cs-click] return=${:04X} depth={}",
+                            frame.return_addr, depth
+                        );
                         let mem_id = egui::Id::new(("cs_return_dc", depth));
                         let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
                         if prev > 0.0 && now - prev < dc_threshold {
@@ -201,10 +188,6 @@ fn render_call_stack(
                         } else {
                             ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
                         }
-                    }
-                    let pad = (62.0 - ret_resp.rect.width()).max(0.0);
-                    if pad > 0.0 {
-                        ui.add_space(pad);
                     }
                     ui.add_sized(
                         [62.0, 0.0],

@@ -123,32 +123,30 @@ fn render_breakpoints(
                         }
                     }
                     // Address cell — clickable so a double-click
-                    // recentres the listing pane on this BP's
-                    // address.  egui's built-in `double_clicked()`
-                    // proved unreliable across platforms (Windows:
-                    // never fired; macOS: fired once per
-                    // window-open then stopped; Linux: only the
-                    // middle CS column fired).  Implement double-
-                    // click detection manually: track the timestamp
-                    // of the previous `clicked()` per row and treat
-                    // two clicks within `multi_click_time` as a
-                    // double-click.  `ui.input(|i| i.time)` is the
-                    // egui frame time, so timing is consistent
-                    // regardless of platform double-click semantics.
-                    let addr_resp = ui
-                        .push_id(("bp_addr_click", bp.id), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            )
-                        })
-                        .inner
-                        .on_hover_text("Double-click to jump listing pane to this address");
+                    // recentres the listing pane.  Use the *exact*
+                    // widget shape that the delete-X button uses
+                    // (which is the only `clicked()` pattern we have
+                    // confirmed works on Windows): a default-framed
+                    // `Button` inside `add_sized`.  Earlier attempts
+                    // (`Label.sense(click())`, `Button.frame(false)`,
+                    // `allocate_exact_size + painter.text`) all failed
+                    // on Windows.  Manual timestamp logic below
+                    // converts two clicks within 400 ms into a
+                    // double-click without relying on egui's flaky
+                    // `double_clicked()`.
+                    //
+                    // The trailing `eprintln!` is a temporary
+                    // diagnostic — if the user reports "no
+                    // reaction", they can confirm whether the click
+                    // event reaches us at all by checking stderr.
+                    let addr_resp = ui.add_sized(
+                        [60.0, 0.0],
+                        egui::Button::new(
+                            egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
+                        ),
+                    );
                     if addr_resp.clicked() {
-                        // 400 ms threshold matches egui's own
-                        // multi_click_time default.
+                        eprintln!("[bp-click] addr=${:04X} id={}", bp.addr, bp.id);
                         let now = ui.input(|i| i.time);
                         let click_mem_id = egui::Id::new(("bp_addr_dc", bp.id));
                         let prev: f64 = ui
@@ -164,14 +162,6 @@ fn render_breakpoints(
                             ui.ctx()
                                 .memory_mut(|m| m.data.insert_temp(click_mem_id, now));
                         }
-                    }
-                    // Pad to keep approximate column alignment with
-                    // the 60-px header cell; `bp.addr` is always
-                    // 5 monospace characters so the actual text width
-                    // is roughly constant across rows.
-                    let pad = (60.0 - addr_resp.rect.width()).max(0.0);
-                    if pad > 0.0 {
-                        ui.add_space(pad);
                     }
                     ui.add_sized(
                         [60.0, 0.0],
