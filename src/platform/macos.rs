@@ -517,6 +517,133 @@ pub fn install_native_settings_handler_once(open_native_cb: Box<dyn Fn() + Send 
     }
 }
 
+/// macOS: prevent an auxiliary NSWindow (matched by exact title) from
+/// ever becoming the key / main window.  Required because eframe 0.29's
+/// multi-viewport support creates auxiliary NSWindows that AppKit
+/// happily promotes to key window on every paint or interaction —
+/// monopolising keyboard input from the main window's TextEdit and
+/// register-edit controls.
+///
+/// Mechanism: `object_setClass:` swaps the existing NSWindow instance
+/// into a dynamically generated subclass (one per distinct parent
+/// class) whose `canBecomeKeyWindow` and `canBecomeMainWindow` return
+/// NO.  Click events still reach inner widgets (so checkboxes / buttons
+/// inside aux windows continue to work) — only key-window-dependent
+/// keyboard dispatch is blocked.
+///
+/// Idempotent: marked NSWindow pointers are recorded so repeated calls
+/// (every frame from `RegApp::update`) are no-ops after the first
+/// successful swap.
+#[cfg(target_os = "macos")]
+pub fn mark_window_non_activating(title: &str) {
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Object as ObjcObject, BOOL, NO};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Mutex;
+
+    extern "C" {
+        fn object_setClass(obj: *mut ObjcObject, cls: *const Class) -> *const Class;
+    }
+
+    // Use objc::runtime::BOOL (alias for c_schar on x86_64 macOS,
+    // bool on aarch64) so the encoding matches platform ABI.
+    extern "C" fn return_no(_this: &ObjcObject, _sel: Sel) -> BOOL {
+        NO
+    }
+
+    static MARKED: OnceCell<Mutex<HashSet<usize>>> = OnceCell::new();
+    static SUBCLASSES: OnceCell<Mutex<HashMap<usize, usize>>> = OnceCell::new();
+
+    unsafe fn ensure_subclass(parent: *const Class) -> *const Class {
+        let map = SUBCLASSES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut g = map.lock().unwrap();
+        let key = parent as usize;
+        if let Some(&v) = g.get(&key) {
+            return v as *const Class;
+        }
+        let parent_ref: &Class = &*parent;
+        let unique = format!("Em6809AccessoryNSWindow_{:x}", key);
+        let cls: *const Class = if let Some(mut decl) = ClassDecl::new(&unique, parent_ref) {
+            decl.add_method(
+                sel!(canBecomeKeyWindow),
+                return_no as extern "C" fn(&ObjcObject, Sel) -> BOOL,
+            );
+            decl.add_method(
+                sel!(canBecomeMainWindow),
+                return_no as extern "C" fn(&ObjcObject, Sel) -> BOOL,
+            );
+            decl.register() as *const Class
+        } else if let Some(existing) = Class::get(&unique) {
+            existing as *const Class
+        } else {
+            std::ptr::null()
+        };
+        if !cls.is_null() {
+            g.insert(key, cls as usize);
+        }
+        cls
+    }
+
+    unsafe {
+        let app: *mut ObjcObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: *mut ObjcObject = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: i64 = msg_send![windows, count];
+        for i in 0..count {
+            let w: *mut ObjcObject = msg_send![windows, objectAtIndex: i];
+            if w.is_null() {
+                continue;
+            }
+            let wt: *mut ObjcObject = msg_send![w, title];
+            if wt.is_null() {
+                continue;
+            }
+            let utf8: *const i8 = msg_send![wt, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let cur = std::ffi::CStr::from_ptr(utf8).to_string_lossy().to_string();
+            if cur != title {
+                continue;
+            }
+            let key_id = w as usize;
+            let marked = MARKED.get_or_init(|| Mutex::new(HashSet::new()));
+            {
+                let g = marked.lock().unwrap();
+                if g.contains(&key_id) {
+                    continue;
+                }
+            }
+            let parent: *const Class = msg_send![w, class];
+            if parent.is_null() {
+                continue;
+            }
+            let new_cls = ensure_subclass(parent);
+            if new_cls.is_null() {
+                continue;
+            }
+            let _: *const Class = object_setClass(w, new_cls);
+            // If AppKit had already promoted this window to key
+            // before we swapped its class, push key status back to
+            // the main window.
+            let key_window: *mut ObjcObject = msg_send![app, keyWindow];
+            if key_window == w {
+                let main_window: *mut ObjcObject = msg_send![app, mainWindow];
+                if !main_window.is_null() && main_window != w {
+                    let _: () =
+                        msg_send![main_window, makeKeyAndOrderFront: core::ptr::null::<()>()];
+                }
+            }
+            marked.lock().unwrap().insert(key_id);
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn disable_minimize_zoom_for_title(title: &str) {
     use objc::runtime::Object as ObjcObject;

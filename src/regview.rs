@@ -1825,67 +1825,66 @@ pub mod gui {
             // (eframe viewport API — same pattern as the VT100 console).
             // The View-menu checkbox writes `self.bp_window_open`;
             // the OS window's X button is reconciled here by
-            // consuming the module's "closed" flag.  On macOS the BP /
-            // CS panels are rendered as in-app `egui::Window`s instead
-            // of separate NSWindows (eframe 0.29 multi-viewport input
-            // dispatch breaks the main window's TextEdit / button
-            // controls when any auxiliary NSWindow is alive), so the
-            // close-flag plumbing is platform-conditional.
-            #[cfg(not(target_os = "macos"))]
-            {
-                if breakpoints_ui::take_closed() {
-                    self.bp_window_open = false;
-                }
-                if call_stack_ui::take_closed() {
-                    self.call_stack_window_open = false;
-                }
-                // Nudge the deferred BP / Call Stack viewports to
-                // repaint only when the worker rewrote their
-                // snapshots.  The previous "pump every frame" approach
-                // burned cycles on Linux and confused AppKit on macOS.
-                if self.bp_window_open {
-                    let cur = self.bp_list_rev.load(Ordering::SeqCst);
-                    if cur != self.last_bp_list_rev {
-                        ctx.request_repaint_of(breakpoints_ui::breakpoints_viewport_id());
-                        self.last_bp_list_rev = cur;
-                    }
-                }
-                if self.call_stack_window_open {
-                    let cur = self.call_stack_rev.load(Ordering::SeqCst);
-                    if cur != self.last_call_stack_rev {
-                        ctx.request_repaint_of(call_stack_ui::call_stack_viewport_id());
-                        self.last_call_stack_rev = cur;
-                    }
-                }
-                breakpoints_ui::show_breakpoints_viewport(
-                    ctx,
-                    Arc::clone(&self.bp_list),
-                    Arc::clone(&self.cmds),
-                    self.bp_window_open,
-                );
-                call_stack_ui::show_call_stack_viewport(
-                    ctx,
-                    Arc::clone(&self.call_stack),
-                    self.call_stack_window_open,
-                );
+            // consuming the module's "closed" flag.
+            if breakpoints_ui::take_closed() {
+                self.bp_window_open = false;
             }
+            if call_stack_ui::take_closed() {
+                self.call_stack_window_open = false;
+            }
+            // Nudge the deferred BP / Call Stack viewports to repaint
+            // only when the worker rewrote their snapshots.  The
+            // previous "pump every frame" approach burned cycles on
+            // Linux and confused AppKit on macOS.
+            if self.bp_window_open {
+                let cur = self.bp_list_rev.load(Ordering::SeqCst);
+                if cur != self.last_bp_list_rev {
+                    ctx.request_repaint_of(breakpoints_ui::breakpoints_viewport_id());
+                    self.last_bp_list_rev = cur;
+                }
+            }
+            if self.call_stack_window_open {
+                let cur = self.call_stack_rev.load(Ordering::SeqCst);
+                if cur != self.last_call_stack_rev {
+                    ctx.request_repaint_of(call_stack_ui::call_stack_viewport_id());
+                    self.last_call_stack_rev = cur;
+                }
+            }
+            breakpoints_ui::show_breakpoints_viewport(
+                ctx,
+                Arc::clone(&self.bp_list),
+                Arc::clone(&self.cmds),
+                self.bp_window_open,
+            );
+            call_stack_ui::show_call_stack_viewport(
+                ctx,
+                Arc::clone(&self.call_stack),
+                self.call_stack_window_open,
+            );
+
+            // macOS: stop AppKit from promoting auxiliary NSWindows
+            // (BP / Call Stack / Console) to key window.  Without this
+            // any aux window monopolises keyboard input — the main
+            // window's TextEdit / register-edit controls receive a
+            // brief caret then lose it back to the aux window on the
+            // next paint.  The fix swaps each aux NSWindow's class to
+            // a dynamically generated subclass whose
+            // `canBecomeKeyWindow` / `canBecomeMainWindow` return NO.
+            // Click-only widgets (checkboxes, buttons) inside the aux
+            // windows still work because clicks are routed without
+            // requiring key status.  Idempotent — safe to call every
+            // frame, only marks each NSWindow once.
             #[cfg(target_os = "macos")]
             {
-                // egui::Window's `.open(&mut bool)` handles the close
-                // button directly, so the take_closed plumbing isn't
-                // needed.  Repaints come for free along with the rest
-                // of the main viewport.
-                breakpoints_ui::show_breakpoints_inapp(
-                    ctx,
-                    &self.bp_list,
-                    &self.cmds,
-                    &mut self.bp_window_open,
-                );
-                call_stack_ui::show_call_stack_inapp(
-                    ctx,
-                    &self.call_stack,
-                    &mut self.call_stack_window_open,
-                );
+                crate::platform::macos::mark_window_non_activating("em6809 Breakpoints");
+                crate::platform::macos::mark_window_non_activating("em6809 Call Stack");
+                let console_title_for_swizzle =
+                    if self.settings_baseline.console_gui_title.trim().is_empty() {
+                        "em6809 Console".to_string()
+                    } else {
+                        self.settings_baseline.console_gui_title.clone()
+                    };
+                crate::platform::macos::mark_window_non_activating(&console_title_for_swizzle);
             }
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
