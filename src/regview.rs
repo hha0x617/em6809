@@ -1862,29 +1862,24 @@ pub mod gui {
                 self.call_stack_window_open,
             );
 
-            // macOS: stop AppKit from promoting auxiliary NSWindows
-            // (BP / Call Stack / Console) to key window.  Without this
-            // any aux window monopolises keyboard input — the main
-            // window's TextEdit / register-edit controls receive a
-            // brief caret then lose it back to the aux window on the
-            // next paint.  The fix swaps each aux NSWindow's class to
-            // a dynamically generated subclass whose
+            // macOS: stop AppKit from promoting the read-only BP /
+            // Call Stack NSWindows to key window.  Without this they
+            // monopolise keyboard input — the main window's TextEdit
+            // / register-edit controls get a brief caret then lose it
+            // back on the next paint.  The fix swaps each NSWindow's
+            // class to a dynamically generated subclass whose
             // `canBecomeKeyWindow` / `canBecomeMainWindow` return NO.
-            // Click-only widgets (checkboxes, buttons) inside the aux
-            // windows still work because clicks are routed without
-            // requiring key status.  Idempotent — safe to call every
-            // frame, only marks each NSWindow once.
+            // Click-only widgets (checkboxes, buttons) inside still
+            // work because clicks are routed without requiring key
+            // status.  The Console NSWindow is intentionally NOT
+            // swizzled — it relies on key-window status to receive
+            // keystrokes via egui's `ctx.input(|i| i.events)` (see
+            // `console_ui::collect_input`).  Idempotent — safe to
+            // call every frame, only marks each NSWindow once.
             #[cfg(target_os = "macos")]
             {
                 em6809::platform::macos::mark_window_non_activating("em6809 Breakpoints");
                 em6809::platform::macos::mark_window_non_activating("em6809 Call Stack");
-                let console_title_for_swizzle =
-                    if self.settings_baseline.console_gui_title.trim().is_empty() {
-                        "em6809 Console".to_string()
-                    } else {
-                        self.settings_baseline.console_gui_title.clone()
-                    };
-                em6809::platform::macos::mark_window_non_activating(&console_title_for_swizzle);
             }
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
