@@ -124,27 +124,26 @@ fn render_breakpoints(
                     }
                     // Address cell — clickable so a double-click
                     // recentres the listing pane on this BP's
-                    // address.  Replicates the working
-                    // `list_ui::render_listing_lines` pattern:
-                    // `ui.add(Label::new(...).sense(click()))`.
-                    // Earlier attempts using `add_sized` plus
-                    // `Button.frame(false)` / `Button.min_size` /
-                    // `allocate_exact_size + painter.text` all
-                    // failed silently on Windows / macOS while
-                    // working partially on Linux — `ui.add` of a
-                    // Label with sense is the only pattern we have
-                    // empirical confirmation works for double-click
-                    // on every platform.  The cell loses its fixed
-                    // 60-px width as a result; column alignment with
-                    // adjacent rows is best-effort, but the click
-                    // is reliable.
+                    // address.  Wrapped in `ui.push_id(bp.id)` so
+                    // egui can match the second click of a double-
+                    // click against the same widget identity even if
+                    // the auto-generated id would otherwise drift
+                    // between frames.  Empirically a plain
+                    // `ui.add(Label.sense(click()))` fired only on
+                    // the first row and only "very rarely" on
+                    // Windows / macOS — consistent with widget id
+                    // instability across the worker-pushed bp_list
+                    // updates that arrive between paints.
                     let addr_resp = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
+                        .push_id(("bp_addr_click", bp.id), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
+                                )
+                                .sense(egui::Sense::click()),
                             )
-                            .sense(egui::Sense::click()),
-                        )
+                        })
+                        .inner
                         .on_hover_text("Double-click to jump listing pane to this address");
                     if addr_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {

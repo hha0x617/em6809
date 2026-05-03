@@ -113,19 +113,23 @@ fn render_call_stack(
                     );
                     // Each address cell is clickable so a double-click
                     // recentres the listing pane on the corresponding
-                    // address.  Same `ui.add(Label.sense(click()))`
-                    // pattern as `breakpoints_ui` — see that file for
-                    // the rationale (it's the only widget shape we
-                    // have empirical evidence works for double-click
-                    // across Windows / macOS / Linux).
+                    // address.  Each cell wraps the sensed Label in
+                    // `ui.push_id(...)` with a salt that's stable
+                    // across paints (frame depth + which-column tag),
+                    // so egui matches the two halves of a double-click
+                    // against the same widget id.  See
+                    // `breakpoints_ui` for the broader rationale.
                     let call_resp = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("${:04X}", frame.call_site))
-                                    .monospace(),
+                        .push_id(("cs_call", depth), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("${:04X}", frame.call_site))
+                                        .monospace(),
+                                )
+                                .sense(egui::Sense::click()),
                             )
-                            .sense(egui::Sense::click()),
-                        )
+                        })
+                        .inner
                         .on_hover_text("Double-click to jump listing pane to call site");
                     if call_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
@@ -140,12 +144,16 @@ fn render_call_stack(
                     ui.add_sized([22.0, 0.0], egui::Label::new("→"));
 
                     let target_resp = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
+                        .push_id(("cs_target", depth), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("${:04X}", frame.target))
+                                        .monospace(),
+                                )
+                                .sense(egui::Sense::click()),
                             )
-                            .sense(egui::Sense::click()),
-                        )
+                        })
+                        .inner
                         .on_hover_text("Double-click to jump listing pane to call target");
                     if target_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
@@ -158,13 +166,16 @@ fn render_call_stack(
                     }
 
                     let ret_resp = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("${:04X}", frame.return_addr))
-                                    .monospace(),
+                        .push_id(("cs_return", depth), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("${:04X}", frame.return_addr))
+                                        .monospace(),
+                                )
+                                .sense(egui::Sense::click()),
                             )
-                            .sense(egui::Sense::click()),
-                        )
+                        })
+                        .inner
                         .on_hover_text("Double-click to jump listing pane to return address");
                     if ret_resp.double_clicked() {
                         if let Ok(mut q) = cmds.lock() {
