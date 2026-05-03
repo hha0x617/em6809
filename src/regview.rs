@@ -830,6 +830,12 @@ pub mod gui {
         /// macOS: View → Call Stack menu item clicked. See
         /// [`UiToggleBreakpointsWindow`].
         UiToggleCallStackWindow,
+        /// Recentre the listing pane on `addr` without changing PC.
+        /// Pushed by double-click handlers in the Breakpoints / Call
+        /// Stack panels — letting the user jump the disassembly view
+        /// to the address shown in the panel row.  Handled entirely
+        /// on the UI thread (no worker action); the worker no-ops it.
+        UiCenterListingAt(u16),
         /// Set baseline settings + origins (0=Default,1=Saved,2=CLI) and optional GPIO color
         UiSetSettingsBaseline(SettingsState, Vec<(String, u8)>, Option<u32>),
         /// Worker acknowledgement that Apply/Save completed for a dialog instance
@@ -1112,6 +1118,14 @@ pub mod gui {
         pub bp_window_open: bool,
         /// Open/closed state of the standalone Call Stack window.
         pub call_stack_window_open: bool,
+        /// One-shot listing-pane recentre target, set by the BP / CS
+        /// double-click handlers via [`Command::UiCenterListingAt`].
+        /// `list_ui` consumes it on the next paint: finds the line
+        /// matching the address, scrolls it into view (centered), and
+        /// clears the field back to `None`.  Independent of the
+        /// follow-PC scroll path so jumping from a panel does not
+        /// implicitly toggle Follow PC.
+        pub pending_listing_center: Option<u16>,
     }
 
     impl RegApp {
@@ -1262,6 +1276,16 @@ pub mod gui {
                     }
                     Command::UiToggleCallStackWindow => {
                         self.call_stack_window_open = !self.call_stack_window_open;
+                    }
+                    Command::UiCenterListingAt(addr) => {
+                        // Recentre listing on `addr`. We park it as
+                        // `pending_listing_center`; list_ui.rs reads
+                        // it on the next paint, scrolls there, and
+                        // clears the field.  Re-enabling Follow PC
+                        // would fight this jump on the next pause
+                        // edge, so leave it untouched — the user
+                        // can re-arm it from the toolbar.
+                        self.pending_listing_center = Some(addr);
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
                         let prev_console_gui = self.settings_baseline.console_gui;
@@ -1859,6 +1883,7 @@ pub mod gui {
             call_stack_ui::show_call_stack_viewport(
                 ctx,
                 Arc::clone(&self.call_stack),
+                Arc::clone(&self.cmds),
                 self.call_stack_window_open,
             );
 
@@ -2478,6 +2503,7 @@ pub mod gui {
                     last_call_stack_rev: 0,
                     bp_window_open: false,
                     call_stack_window_open: false,
+                    pending_listing_center: None,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -2928,6 +2954,7 @@ pub mod gui {
                 last_call_stack_rev: 0,
                 bp_window_open: false,
                 call_stack_window_open: false,
+                pending_listing_center: None,
             };
             let mut init = init;
             #[cfg(windows)]

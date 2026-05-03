@@ -122,12 +122,23 @@ fn render_breakpoints(
                             q.push(Command::SetBreakpointEnabled(bp.id, enabled));
                         }
                     }
-                    ui.add_sized(
-                        [60.0, 0.0],
-                        egui::Label::new(
-                            egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
-                        ),
-                    );
+                    // Address cell — clickable so a double-click
+                    // recentres the listing pane on this BP's
+                    // address.  Hover hint: "double-click to jump".
+                    let addr_resp = ui
+                        .add_sized(
+                            [60.0, 0.0],
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Double-click to jump listing pane to this address");
+                    if addr_resp.double_clicked() {
+                        if let Ok(mut q) = cmds.lock() {
+                            q.push(Command::UiCenterListingAt(bp.addr));
+                        }
+                    }
                     ui.add_sized(
                         [60.0, 0.0],
                         egui::Label::new(

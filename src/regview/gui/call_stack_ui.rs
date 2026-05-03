@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use once_cell::sync::OnceCell;
 
-use super::CallFrameInfo;
+use super::{CallFrameInfo, Command};
 
 static CS_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CS_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
@@ -47,7 +47,11 @@ pub(crate) fn take_closed() -> bool {
         .unwrap_or(false)
 }
 
-fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo>>>) {
+fn render_call_stack(
+    ui: &mut egui::Ui,
+    call_stack: &Arc<Mutex<Vec<CallFrameInfo>>>,
+    cmds: &Arc<Mutex<Vec<Command>>>,
+) {
     let frames: Vec<CallFrameInfo> = call_stack.lock().map(|g| g.clone()).unwrap_or_default();
 
     if frames.is_empty() {
@@ -107,25 +111,55 @@ fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo
                             egui::RichText::new(frame.kind.label()).monospace().strong(),
                         ),
                     );
-                    ui.add_sized(
-                        [62.0, 0.0],
-                        egui::Label::new(
-                            egui::RichText::new(format!("${:04X}", frame.call_site)).monospace(),
-                        ),
-                    );
+                    // Each address cell is clickable so a double-click
+                    // recentres the listing pane on the corresponding
+                    // address — call site, call target, or return
+                    // address.
+                    let call_resp = ui
+                        .add_sized(
+                            [62.0, 0.0],
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", frame.call_site))
+                                    .monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Double-click to jump listing pane to call site");
+                    if call_resp.double_clicked() {
+                        if let Ok(mut q) = cmds.lock() {
+                            q.push(Command::UiCenterListingAt(frame.call_site));
+                        }
+                    }
                     ui.add_sized([22.0, 0.0], egui::Label::new("→"));
-                    ui.add_sized(
-                        [62.0, 0.0],
-                        egui::Label::new(
-                            egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
-                        ),
-                    );
-                    ui.add_sized(
-                        [62.0, 0.0],
-                        egui::Label::new(
-                            egui::RichText::new(format!("${:04X}", frame.return_addr)).monospace(),
-                        ),
-                    );
+                    let target_resp = ui
+                        .add_sized(
+                            [62.0, 0.0],
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Double-click to jump listing pane to call target");
+                    if target_resp.double_clicked() {
+                        if let Ok(mut q) = cmds.lock() {
+                            q.push(Command::UiCenterListingAt(frame.target));
+                        }
+                    }
+                    let ret_resp = ui
+                        .add_sized(
+                            [62.0, 0.0],
+                            egui::Label::new(
+                                egui::RichText::new(format!("${:04X}", frame.return_addr))
+                                    .monospace(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Double-click to jump listing pane to return address");
+                    if ret_resp.double_clicked() {
+                        if let Ok(mut q) = cmds.lock() {
+                            q.push(Command::UiCenterListingAt(frame.return_addr));
+                        }
+                    }
                     ui.add_sized(
                         [62.0, 0.0],
                         egui::Label::new(
@@ -140,6 +174,7 @@ fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo
 pub(super) fn show_call_stack_viewport(
     ctx: &egui::Context,
     call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
+    cmds: Arc<Mutex<Vec<Command>>>,
     open: bool,
 ) {
     let id = call_stack_viewport_id();
@@ -159,10 +194,11 @@ pub(super) fn show_call_stack_viewport(
     #[cfg(target_os = "windows")]
     {
         let cs_cl = Arc::clone(&call_stack);
+        let cmds_cl = Arc::clone(&cmds);
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_call_stack(ui, &cs_cl);
+                    render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
             }
             if ctx.input(|i| i.viewport().close_requested()) {
@@ -179,9 +215,10 @@ pub(super) fn show_call_stack_viewport(
     {
         if open {
             let cs_cl = Arc::clone(&call_stack);
+            let cmds_cl = Arc::clone(&cmds);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_call_stack(ui, &cs_cl);
+                    render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
                 if ctx.input(|i| i.viewport().close_requested()) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -196,10 +233,11 @@ pub(super) fn show_call_stack_viewport(
     #[cfg(target_os = "macos")]
     {
         let cs_cl = Arc::clone(&call_stack);
+        let cmds_cl = Arc::clone(&cmds);
         ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_call_stack(ui, &cs_cl);
+                    render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
             }
             if ctx.input(|i| i.viewport().close_requested()) {

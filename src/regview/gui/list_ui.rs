@@ -120,6 +120,11 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             let cur_pc = app.snap.lock().map(|g| g.pc).unwrap_or(0);
                             let need_scroll = app.scroll_to_pc_req.load(Ordering::SeqCst)
                                 || (cur_pc != app.last_pc_for_scroll);
+                            // One-shot recentre target from the BP /
+                            // CS double-click handlers (see
+                            // `Command::UiCenterListingAt`).  Takes
+                            // priority over follow-PC for this paint.
+                            let pending_center = app.pending_listing_center;
                             let text_style = egui::TextStyle::Monospace;
                             let row_height = ui.text_style_height(&text_style);
                             let row_height_with_spacing = row_height + ui.spacing().item_spacing.y;
@@ -154,11 +159,15 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                                 cur_pc,
                                             );
                                         }
-                                        let scroll_target = if follow_pc && need_scroll {
-                                            pc_line_index
-                                        } else {
-                                            None
-                                        };
+                                        let pending_center_idx = pending_center.and_then(|a| {
+                                            find_pc_line_index(&s, &app.hex_cache.line_offsets, a)
+                                        });
+                                        let scroll_target =
+                                            pending_center_idx.or(if follow_pc && need_scroll {
+                                                pc_line_index
+                                            } else {
+                                                None
+                                            });
                                         let (highlight, inner) = render_listing_lines(
                                             ui,
                                             &s,
@@ -212,11 +221,15 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             cur_pc,
                                         );
                                     }
-                                    let scroll_target = if follow_pc && need_scroll {
-                                        pc_line_index
-                                    } else {
-                                        None
-                                    };
+                                    let pending_center_idx = pending_center.and_then(|a| {
+                                        find_pc_line_index(text, &app.lst_cache.line_offsets, a)
+                                    });
+                                    let scroll_target =
+                                        pending_center_idx.or(if follow_pc && need_scroll {
+                                            pc_line_index
+                                        } else {
+                                            None
+                                        });
                                     let (highlight, inner) = render_listing_lines(
                                         ui,
                                         text,
@@ -243,6 +256,15 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     app.scroll_to_pc_req.store(false, Ordering::SeqCst);
                                     app.last_pc_for_scroll = cur_pc;
                                 }
+                            }
+                            // Clear the BP / CS double-click recentre
+                            // request after one paint regardless of
+                            // whether we found a matching line — if
+                            // the address isn't in the listing
+                            // (e.g., outside loaded ROM), retrying
+                            // every frame would just spin.
+                            if pending_center.is_some() {
+                                app.pending_listing_center = None;
                             }
                             // `inner_rect` and `row_height_with_spacing` are
                             // no longer used after the move; silence dead-code
