@@ -1876,15 +1876,15 @@ pub mod gui {
             // frame, only marks each NSWindow once.
             #[cfg(target_os = "macos")]
             {
-                crate::platform::macos::mark_window_non_activating("em6809 Breakpoints");
-                crate::platform::macos::mark_window_non_activating("em6809 Call Stack");
+                em6809::platform::macos::mark_window_non_activating("em6809 Breakpoints");
+                em6809::platform::macos::mark_window_non_activating("em6809 Call Stack");
                 let console_title_for_swizzle =
                     if self.settings_baseline.console_gui_title.trim().is_empty() {
                         "em6809 Console".to_string()
                     } else {
                         self.settings_baseline.console_gui_title.clone()
                     };
-                crate::platform::macos::mark_window_non_activating(&console_title_for_swizzle);
+                em6809::platform::macos::mark_window_non_activating(&console_title_for_swizzle);
             }
 
             // Editing is user-controlled via Edit/Apply toggle (not tied to pause)
