@@ -124,21 +124,23 @@ fn render_breakpoints(
                     }
                     // Address cell — clickable so a double-click
                     // recentres the listing pane on this BP's
-                    // address.  Use a frameless `Button` rather than
-                    // a `Label.sense(click())` because Label allocates
-                    // the response rect to the text galley only, so
-                    // clicks landing in the padding around the text
-                    // (very common in a 60-px wide cell) wouldn't
-                    // register.  Button covers the entire allocated
-                    // rect.  `frame(false)` keeps the visual identical
-                    // to the surrounding read-only labels.
+                    // address.  Frameless `Button` *with `min_size`
+                    // matching the column* — without `min_size` the
+                    // Button's response rect collapses back to the
+                    // text galley size and only the inner ~50 px of
+                    // the 60-px column is actually clickable.  The
+                    // outer `add_sized` reserves the column width in
+                    // the parent layout so adjacent rows stay aligned
+                    // even when the button is wider than the text.
+                    let row_h = ui.spacing().interact_size.y;
                     let addr_resp = ui
                         .add_sized(
                             [60.0, 0.0],
                             egui::Button::new(
                                 egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
                             )
-                            .frame(false),
+                            .frame(false)
+                            .min_size(egui::vec2(60.0, row_h)),
                         )
                         .on_hover_text("Double-click to jump listing pane to this address");
                     if addr_resp.double_clicked() {

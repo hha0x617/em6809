@@ -114,11 +114,14 @@ fn render_call_stack(
                     // Each address cell is clickable so a double-click
                     // recentres the listing pane on the corresponding
                     // address — call site, call target, or return
-                    // address.  Frameless `Button` (not a sensed Label)
-                    // is used so the response rect covers the full 62-
-                    // px column instead of just the text galley.  See
-                    // `breakpoints_ui::render_breakpoints` for the
-                    // rationale.
+                    // address.  Frameless `Button` with `min_size`
+                    // matching the column so the response rect covers
+                    // the full 62-px width.  See
+                    // `breakpoints_ui::render_breakpoints` for why
+                    // `min_size` is required (without it the Button
+                    // response shrinks to the text galley and the
+                    // column padding silently swallows clicks).
+                    let row_h = ui.spacing().interact_size.y;
                     let call_resp = ui
                         .add_sized(
                             [62.0, 0.0],
@@ -126,7 +129,8 @@ fn render_call_stack(
                                 egui::RichText::new(format!("${:04X}", frame.call_site))
                                     .monospace(),
                             )
-                            .frame(false),
+                            .frame(false)
+                            .min_size(egui::vec2(62.0, row_h)),
                         )
                         .on_hover_text("Double-click to jump listing pane to call site");
                     if call_resp.double_clicked() {
@@ -141,7 +145,8 @@ fn render_call_stack(
                             egui::Button::new(
                                 egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
                             )
-                            .frame(false),
+                            .frame(false)
+                            .min_size(egui::vec2(62.0, row_h)),
                         )
                         .on_hover_text("Double-click to jump listing pane to call target");
                     if target_resp.double_clicked() {
@@ -156,7 +161,8 @@ fn render_call_stack(
                                 egui::RichText::new(format!("${:04X}", frame.return_addr))
                                     .monospace(),
                             )
-                            .frame(false),
+                            .frame(false)
+                            .min_size(egui::vec2(62.0, row_h)),
                         )
                         .on_hover_text("Double-click to jump listing pane to return address");
                     if ret_resp.double_clicked() {
