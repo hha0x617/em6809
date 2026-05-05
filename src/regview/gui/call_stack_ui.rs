@@ -3,6 +3,7 @@
 // window. Read-only view of the shadow call stack, rendered
 // newest-first so the active frame sits at the top.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -13,6 +14,12 @@ use super::{CallFrameInfo, Command};
 
 static CS_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CS_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
+/// Per-(column,depth) timestamp of the previous click, for manual
+/// double-click detection.  See `breakpoints_ui::BP_LAST_CLICK`
+/// for the rationale (egui's memory store proved unreliable).
+/// Key: (column tag, depth).  Column tag is "call" / "target" /
+/// "return" so the same depth doesn't fight across columns.
+static CS_LAST_CLICK: OnceCell<Mutex<HashMap<(&'static str, usize), f64>>> = OnceCell::new();
 
 pub(crate) fn call_stack_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("em6809_call_stack_window")
@@ -129,19 +136,27 @@ fn render_call_stack(
                         ),
                     );
                     if call_resp.clicked() {
+                        let map = CS_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let key = ("call", depth);
+                        let prev = g.get(&key).copied().unwrap_or(0.0_f64);
+                        let dt = now - prev;
+                        let is_dc = prev > 0.0 && dt < dc_threshold;
                         eprintln!(
-                            "[cs-click] call_site=${:04X} depth={}",
-                            frame.call_site, depth
+                            "[cs-click] call_site=${:04X} depth={} now={:.3} prev={:.3} dt={:.3} dc={}",
+                            frame.call_site, depth, now, prev, dt, is_dc
                         );
-                        let mem_id = egui::Id::new(("cs_call_dc", depth));
-                        let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
-                        if prev > 0.0 && now - prev < dc_threshold {
+                        if is_dc {
+                            eprintln!(
+                                "[cs-click]   -> push UiCenterListingAt(${:04X})",
+                                frame.call_site
+                            );
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(frame.call_site));
                             }
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, 0.0_f64));
+                            g.remove(&key);
                         } else {
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
+                            g.insert(key, now);
                         }
                     }
 
@@ -154,16 +169,27 @@ fn render_call_stack(
                         ),
                     );
                     if target_resp.clicked() {
-                        eprintln!("[cs-click] target=${:04X} depth={}", frame.target, depth);
-                        let mem_id = egui::Id::new(("cs_target_dc", depth));
-                        let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
-                        if prev > 0.0 && now - prev < dc_threshold {
+                        let map = CS_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let key = ("target", depth);
+                        let prev = g.get(&key).copied().unwrap_or(0.0_f64);
+                        let dt = now - prev;
+                        let is_dc = prev > 0.0 && dt < dc_threshold;
+                        eprintln!(
+                            "[cs-click] target=${:04X} depth={} now={:.3} prev={:.3} dt={:.3} dc={}",
+                            frame.target, depth, now, prev, dt, is_dc
+                        );
+                        if is_dc {
+                            eprintln!(
+                                "[cs-click]   -> push UiCenterListingAt(${:04X})",
+                                frame.target
+                            );
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(frame.target));
                             }
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, 0.0_f64));
+                            g.remove(&key);
                         } else {
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
+                            g.insert(key, now);
                         }
                     }
 
@@ -174,19 +200,27 @@ fn render_call_stack(
                         ),
                     );
                     if ret_resp.clicked() {
+                        let map = CS_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let key = ("return", depth);
+                        let prev = g.get(&key).copied().unwrap_or(0.0_f64);
+                        let dt = now - prev;
+                        let is_dc = prev > 0.0 && dt < dc_threshold;
                         eprintln!(
-                            "[cs-click] return=${:04X} depth={}",
-                            frame.return_addr, depth
+                            "[cs-click] return=${:04X} depth={} now={:.3} prev={:.3} dt={:.3} dc={}",
+                            frame.return_addr, depth, now, prev, dt, is_dc
                         );
-                        let mem_id = egui::Id::new(("cs_return_dc", depth));
-                        let prev: f64 = ui.ctx().memory(|m| m.data.get_temp(mem_id).unwrap_or(0.0));
-                        if prev > 0.0 && now - prev < dc_threshold {
+                        if is_dc {
+                            eprintln!(
+                                "[cs-click]   -> push UiCenterListingAt(${:04X})",
+                                frame.return_addr
+                            );
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(frame.return_addr));
                             }
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, 0.0_f64));
+                            g.remove(&key);
                         } else {
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(mem_id, now));
+                            g.insert(key, now);
                         }
                     }
                     ui.add_sized(

@@ -25,6 +25,15 @@ static BP_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
 /// so unrelated BPs don't fight over the same draft slot. Entries are
 /// committed on lost-focus / Enter and removed on commit.
 static BP_COND_DRAFTS: OnceCell<Mutex<HashMap<u32, String>>> = OnceCell::new();
+/// Last `clicked()` timestamp per BP id, used to derive double-click
+/// from two `clicked()` events within `multi_click_time`.  Stored
+/// here (a process-local static) rather than via
+/// `ctx.memory().data.insert_temp`, because that storage proved
+/// unreliable across paints in our setup — on Windows we observed
+/// `[bp-click]` firing twice per double-click but `prev` reading 0.0
+/// each time, which would only happen if the inserted value
+/// disappeared between paints.
+static BP_LAST_CLICK: OnceCell<Mutex<HashMap<u32, f64>>> = OnceCell::new();
 
 fn drafts() -> &'static Mutex<HashMap<u32, String>> {
     BP_COND_DRAFTS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -147,10 +156,9 @@ fn render_breakpoints(
                     );
                     if addr_resp.clicked() {
                         let now = ui.input(|i| i.time);
-                        let click_mem_id = egui::Id::new(("bp_addr_dc", bp.id));
-                        let prev: f64 = ui
-                            .ctx()
-                            .memory(|m| m.data.get_temp(click_mem_id).unwrap_or(0.0));
+                        let map = BP_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let prev = g.get(&bp.id).copied().unwrap_or(0.0_f64);
                         let dt = now - prev;
                         let is_dc = prev > 0.0 && dt < 0.4;
                         eprintln!(
@@ -162,11 +170,9 @@ fn render_breakpoints(
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(bp.addr));
                             }
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(click_mem_id, 0.0_f64));
+                            g.remove(&bp.id);
                         } else {
-                            ui.ctx()
-                                .memory_mut(|m| m.data.insert_temp(click_mem_id, now));
+                            g.insert(bp.id, now);
                         }
                     }
                     ui.add_sized(

@@ -160,7 +160,16 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             );
                                         }
                                         let pending_center_idx = pending_center.and_then(|a| {
-                                            find_pc_line_index(&s, &app.hex_cache.line_offsets, a)
+                                            let idx = find_pc_line_index(
+                                                &s,
+                                                &app.hex_cache.line_offsets,
+                                                a,
+                                            );
+                                            eprintln!(
+                                                "[list_ui:hex] find_line_for(${:04X}) = {:?}",
+                                                a, idx
+                                            );
+                                            idx
                                         });
                                         let scroll_target =
                                             pending_center_idx.or(if follow_pc && need_scroll {
@@ -222,7 +231,16 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         );
                                     }
                                     let pending_center_idx = pending_center.and_then(|a| {
-                                        find_pc_line_index(text, &app.lst_cache.line_offsets, a)
+                                        let idx = find_pc_line_index(
+                                            text,
+                                            &app.lst_cache.line_offsets,
+                                            a,
+                                        );
+                                        eprintln!(
+                                            "[list_ui:lst] find_line_for(${:04X}) = {:?}",
+                                            a, idx
+                                        );
+                                        idx
                                     });
                                     let scroll_target =
                                         pending_center_idx.or(if follow_pc && need_scroll {
