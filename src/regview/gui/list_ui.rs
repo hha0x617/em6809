@@ -159,17 +159,21 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                                 cur_pc,
                                             );
                                         }
+                                        // `find_pc_line_index` returns
+                                        // `None` for addresses outside
+                                        // the loaded program (e.g.,
+                                        // a Call-Stack call-site that
+                                        // lives in the boot ROM area
+                                        // when the listing only covers
+                                        // the user program).  Silently
+                                        // skip the scroll in that case
+                                        // — the user already noticed
+                                        // the click happened (cursor
+                                        // feedback on the button) and
+                                        // the address is shown in the
+                                        // panel they clicked.
                                         let pending_center_idx = pending_center.and_then(|a| {
-                                            let idx = find_pc_line_index(
-                                                &s,
-                                                &app.hex_cache.line_offsets,
-                                                a,
-                                            );
-                                            eprintln!(
-                                                "[list_ui:hex] find_line_for(${:04X}) = {:?}",
-                                                a, idx
-                                            );
-                                            idx
+                                            find_pc_line_index(&s, &app.hex_cache.line_offsets, a)
                                         });
                                         let scroll_target =
                                             pending_center_idx.or(if follow_pc && need_scroll {
@@ -230,17 +234,12 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             cur_pc,
                                         );
                                     }
+                                    // See the hex-view branch above
+                                    // for the rationale on silent skip
+                                    // when the address isn't in the
+                                    // listing.
                                     let pending_center_idx = pending_center.and_then(|a| {
-                                        let idx = find_pc_line_index(
-                                            text,
-                                            &app.lst_cache.line_offsets,
-                                            a,
-                                        );
-                                        eprintln!(
-                                            "[list_ui:lst] find_line_for(${:04X}) = {:?}",
-                                            a, idx
-                                        );
-                                        idx
+                                        find_pc_line_index(text, &app.lst_cache.line_offsets, a)
                                     });
                                     let scroll_target =
                                         pending_center_idx.or(if follow_pc && need_scroll {
@@ -281,8 +280,7 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             // the address isn't in the listing
                             // (e.g., outside loaded ROM), retrying
                             // every frame would just spin.
-                            if let Some(pc) = pending_center {
-                                eprintln!("[list_ui] consume pending_listing_center=${:04X}", pc);
+                            if pending_center.is_some() {
                                 app.pending_listing_center = None;
                             }
                             // `inner_rect` and `row_height_with_spacing` are

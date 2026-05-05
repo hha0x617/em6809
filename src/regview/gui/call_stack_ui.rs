@@ -118,15 +118,11 @@ fn render_call_stack(
                             egui::RichText::new(frame.kind.label()).monospace().strong(),
                         ),
                     );
-                    // Each address cell is clickable.  Same
-                    // default-framed `Button` shape as the BP delete
-                    // button — the only `clicked()` pattern we know
-                    // works on Windows.  Manual timestamp double-
-                    // click detection bypasses egui's flaky
-                    // `double_clicked()`.  Temporary `eprintln!`s
-                    // confirm clicks reach us; remove once
-                    // verified.
-                    let dc_threshold = 0.4_f64; // seconds
+                    // Each address cell is clickable.  Same default-
+                    // framed `Button` shape as the BP delete-X button.
+                    // Manual timestamp double-click detection (see
+                    // `breakpoints_ui` for the rationale).
+                    let dc_threshold = 0.4_f64;
                     let now = ui.input(|i| i.time);
 
                     let call_resp = ui.add_sized(
@@ -140,17 +136,7 @@ fn render_call_stack(
                         let mut g = map.lock().unwrap();
                         let key = ("call", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
-                        let dt = now - prev;
-                        let is_dc = prev > 0.0 && dt < dc_threshold;
-                        eprintln!(
-                            "[cs-click] call_site=${:04X} depth={} now={:.3} prev={:.3} dt={:.3} dc={}",
-                            frame.call_site, depth, now, prev, dt, is_dc
-                        );
-                        if is_dc {
-                            eprintln!(
-                                "[cs-click]   -> push UiCenterListingAt(${:04X})",
-                                frame.call_site
-                            );
+                        if prev > 0.0 && now - prev < dc_threshold {
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(frame.call_site));
                             }
@@ -173,17 +159,7 @@ fn render_call_stack(
                         let mut g = map.lock().unwrap();
                         let key = ("target", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
-                        let dt = now - prev;
-                        let is_dc = prev > 0.0 && dt < dc_threshold;
-                        eprintln!(
-                            "[cs-click] target=${:04X} depth={} now={:.3} prev={:.3} dt={:.3} dc={}",
-                            frame.target, depth, now, prev, dt, is_dc
-                        );
-                        if is_dc {
-                            eprintln!(
-                                "[cs-click]   -> push UiCenterListingAt(${:04X})",
-                                frame.target
-                            );
+                        if prev > 0.0 && now - prev < dc_threshold {
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(frame.target));
                             }
@@ -204,17 +180,7 @@ fn render_call_stack(
                         let mut g = map.lock().unwrap();
                         let key = ("return", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
-                        let dt = now - prev;
-                        let is_dc = prev > 0.0 && dt < dc_threshold;
-                        eprintln!(
-                            "[cs-click] return=${:04X} depth={} now={:.3} prev={:.3} dt={:.3} dc={}",
-                            frame.return_addr, depth, now, prev, dt, is_dc
-                        );
-                        if is_dc {
-                            eprintln!(
-                                "[cs-click]   -> push UiCenterListingAt(${:04X})",
-                                frame.return_addr
-                            );
+                        if prev > 0.0 && now - prev < dc_threshold {
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(frame.return_addr));
                             }

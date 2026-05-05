@@ -132,22 +132,15 @@ fn render_breakpoints(
                         }
                     }
                     // Address cell — clickable so a double-click
-                    // recentres the listing pane.  Use the *exact*
-                    // widget shape that the delete-X button uses
-                    // (which is the only `clicked()` pattern we have
-                    // confirmed works on Windows): a default-framed
-                    // `Button` inside `add_sized`.  Earlier attempts
-                    // (`Label.sense(click())`, `Button.frame(false)`,
-                    // `allocate_exact_size + painter.text`) all failed
-                    // on Windows.  Manual timestamp logic below
+                    // recentres the listing pane.  Use a default-
+                    // framed `Button` (same shape as the delete-X
+                    // button below, which is the only `clicked()`
+                    // pattern we have empirical evidence works on
+                    // every platform).  Manual timestamp logic
                     // converts two clicks within 400 ms into a
-                    // double-click without relying on egui's flaky
-                    // `double_clicked()`.
-                    //
-                    // The trailing `eprintln!` is a temporary
-                    // diagnostic — if the user reports "no
-                    // reaction", they can confirm whether the click
-                    // event reaches us at all by checking stderr.
+                    // double-click without relying on egui's
+                    // `double_clicked()` which proved unreliable
+                    // for narrow short-text widgets like this.
                     let addr_resp = ui.add_sized(
                         [60.0, 0.0],
                         egui::Button::new(
@@ -159,14 +152,7 @@ fn render_breakpoints(
                         let map = BP_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
                         let mut g = map.lock().unwrap();
                         let prev = g.get(&bp.id).copied().unwrap_or(0.0_f64);
-                        let dt = now - prev;
-                        let is_dc = prev > 0.0 && dt < 0.4;
-                        eprintln!(
-                            "[bp-click] addr=${:04X} id={} now={:.3} prev={:.3} dt={:.3} dc={}",
-                            bp.addr, bp.id, now, prev, dt, is_dc
-                        );
-                        if is_dc {
-                            eprintln!("[bp-click]   -> push UiCenterListingAt(${:04X})", bp.addr);
+                        if prev > 0.0 && now - prev < 0.4 {
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt(bp.addr));
                             }

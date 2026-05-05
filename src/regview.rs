@@ -1282,10 +1282,6 @@ pub mod gui {
                         // `pending_listing_center`; list_ui.rs reads
                         // it on the next paint, scrolls there, and
                         // clears the field.
-                        eprintln!(
-                            "[drain] UiCenterListingAt(${:04X}) -> pending_listing_center",
-                            addr
-                        );
                         self.pending_listing_center = Some(addr);
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
