@@ -3428,6 +3428,7 @@ pub mod gui {
                             | Command::UiOpenImageDialog
                             | Command::UiToggleBreakpointsWindow
                             | Command::UiToggleCallStackWindow
+                            | Command::UiCenterListingAt(..)
                     )
                 }) {
                     return Some(q.remove(idx));
