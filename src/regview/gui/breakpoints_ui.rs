@@ -122,9 +122,16 @@ fn render_breakpoints(
 
             for bp in bps.iter() {
                 ui.horizontal(|ui| {
+                    // Force every cell to the same height so widgets
+                    // of different natural heights (Checkbox / Button
+                    // / Label / TextEdit) align vertically — passing
+                    // height = 0 to `add_sized` gives each cell its
+                    // own natural height, which makes Buttons sit
+                    // lower than Labels in the same row.
+                    let row_h = ui.spacing().interact_size.y;
                     let mut enabled = bp.enabled;
                     if ui
-                        .add_sized([22.0, 0.0], egui::Checkbox::without_text(&mut enabled))
+                        .add_sized([22.0, row_h], egui::Checkbox::without_text(&mut enabled))
                         .changed()
                     {
                         if let Ok(mut q) = cmds.lock() {
@@ -142,7 +149,7 @@ fn render_breakpoints(
                     // `double_clicked()` which proved unreliable
                     // for narrow short-text widgets like this.
                     let addr_resp = ui.add_sized(
-                        [60.0, 0.0],
+                        [60.0, row_h],
                         egui::Button::new(
                             egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
                         ),
@@ -162,13 +169,13 @@ fn render_breakpoints(
                         }
                     }
                     ui.add_sized(
-                        [60.0, 0.0],
+                        [60.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(format!("{}", bp.hit_count)).monospace(),
                         ),
                     );
                     ui.add_sized(
-                        [60.0, 0.0],
+                        [60.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(format!("{}", bp.ignore_count)).monospace(),
                         ),
@@ -184,7 +191,7 @@ fn render_breakpoints(
                         g.entry(bp.id).or_insert_with(|| stored.clone()).clone()
                     };
                     let resp = ui.add_sized(
-                        [120.0, 0.0],
+                        [120.0, row_h],
                         egui::TextEdit::singleline(&mut draft)
                             .font(egui::TextStyle::Monospace)
                             .hint_text("condition"),
@@ -204,7 +211,7 @@ fn render_breakpoints(
                             }
                         }
                     }
-                    let del = ui.add_sized([24.0, 0.0], egui::Button::new("✕"));
+                    let del = ui.add_sized([24.0, row_h], egui::Button::new("✕"));
                     if del.clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::RemoveBreakpoint(bp.id));

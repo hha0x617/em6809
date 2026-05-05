@@ -108,12 +108,16 @@ fn render_call_stack(
             for (rev_idx, frame) in frames.iter().rev().enumerate() {
                 let depth = total - rev_idx;
                 ui.horizontal(|ui| {
+                    // Force every cell to the same height so Buttons
+                    // and Labels line up vertically — see
+                    // `breakpoints_ui` for the rationale.
+                    let row_h = ui.spacing().interact_size.y;
                     ui.add_sized(
-                        [28.0, 0.0],
+                        [28.0, row_h],
                         egui::Label::new(egui::RichText::new(format!("{}", depth)).monospace()),
                     );
                     ui.add_sized(
-                        [46.0, 0.0],
+                        [46.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(frame.kind.label()).monospace().strong(),
                         ),
@@ -126,7 +130,7 @@ fn render_call_stack(
                     let now = ui.input(|i| i.time);
 
                     let call_resp = ui.add_sized(
-                        [62.0, 0.0],
+                        [62.0, row_h],
                         egui::Button::new(
                             egui::RichText::new(format!("${:04X}", frame.call_site)).monospace(),
                         ),
@@ -146,10 +150,10 @@ fn render_call_stack(
                         }
                     }
 
-                    ui.add_sized([22.0, 0.0], egui::Label::new("→"));
+                    ui.add_sized([22.0, row_h], egui::Label::new("→"));
 
                     let target_resp = ui.add_sized(
-                        [62.0, 0.0],
+                        [62.0, row_h],
                         egui::Button::new(
                             egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
                         ),
@@ -170,7 +174,7 @@ fn render_call_stack(
                     }
 
                     let ret_resp = ui.add_sized(
-                        [62.0, 0.0],
+                        [62.0, row_h],
                         egui::Button::new(
                             egui::RichText::new(format!("${:04X}", frame.return_addr)).monospace(),
                         ),
@@ -190,7 +194,7 @@ fn render_call_stack(
                         }
                     }
                     ui.add_sized(
-                        [62.0, 0.0],
+                        [62.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(format!("${:04X}", frame.sp_at_call)).monospace(),
                         ),
