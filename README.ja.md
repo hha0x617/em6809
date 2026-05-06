@@ -113,6 +113,21 @@ GUI 機能の追加は本リポジトリでは予定していません。
 - 開発/運用ルール: `AGENTS.md`
 - 行動規範/セキュリティ: `CODE_OF_CONDUCT.md` / `SECURITY.md`（存在する場合）
 
+## 商標について
+
+*OS‑9* は Microware Systems Corporation の商標です。*NitrOS‑9* は
+OS‑9 ファミリーに属する独立したオープンソースオペレーティング
+システムです。本プロジェクト (em6809) は Microware Systems
+Corporation、RadiSys Corporation、NitrOS‑9 プロジェクトのいずれ
+とも提携、推奨、スポンサー関係を持ちません。本ドキュメントに
+おける OS‑9 / NitrOS‑9 への言及はすべて説明目的です — em6809 は
+将来 OS‑9 ファミリーのカーネルをホストすることを**目指している**
+CPU エミュレータであり、互換性・認証・推奨を主張するもの
+ではありません。
+
+その他、本ドキュメント中に登場する製品名・商標・登録商標は、
+それぞれの所有者に帰属します。
+
 ## ライセンス
 
 MIT OR Apache‑2.0（デュアルライセンス）。詳細は `LICENSE-MIT` と `LICENSE-APACHE` を参照してください。

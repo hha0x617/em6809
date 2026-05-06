@@ -12,6 +12,13 @@
 > these pieces land.  Treat the document as a roadmap rather than a
 > tutorial; commands shown will not run a real NitrOS‑9 kernel today.
 
+> **Trademarks:** *OS‑9* is a trademark of Microware Systems
+> Corporation; *NitrOS‑9* is an independent open‑source project.
+> All references in this document are descriptive; this project is
+> not affiliated with, endorsed by, or sponsored by either.  See the
+> repository top‑level README "Trademarks" section for the full
+> notice.
+
 Typical steps and commands to boot/verify NitrOS‑9/OS‑9 on the emulator. Adjust module layout and entry to match your distribution/environment.
 
 ## What needs to land before boot works (Roadmap)

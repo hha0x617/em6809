@@ -123,6 +123,20 @@ here.
 - Development/Operations: `AGENTS.md`
 - Code of Conduct/Security: `CODE_OF_CONDUCT.md` / `SECURITY.md` (if present)
 
+## Trademarks
+
+*OS‑9* is a trademark of Microware Systems Corporation.  *NitrOS‑9*
+is an independent open‑source operating system in the OS‑9 family.
+This project (em6809) is not affiliated with, endorsed by, or
+sponsored by Microware Systems Corporation, RadiSys Corporation, or
+the NitrOS‑9 project.  References to OS‑9 / NitrOS‑9 in this
+documentation are descriptive only — em6809 is a CPU emulator that
+*aspires* to host OS‑9‑family kernels in the future, but does not
+claim compatibility, certification, or endorsement.
+
+All other product names, trademarks and registered trademarks
+referenced are the property of their respective owners.
+
 ## License
 
 MIT OR Apache‑2.0 (dual license). See `LICENSE-MIT` and `LICENSE-APACHE`.
