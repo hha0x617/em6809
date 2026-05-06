@@ -13,7 +13,7 @@ Build (lwtools lwasm):
 - `lwasm -9 --format=srec -o trace_all.s19 trace_all.asm`
 
 Run with trace:
-- `mc6809emu trace_all.s19 --format srec --trace --step 1200`
+- `em6809 trace_all.s19 --format srec --trace --step 1200`
 - Increase `--step` as needed to pass further tests.
 
 Optional console markers:
