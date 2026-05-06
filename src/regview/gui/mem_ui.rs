@@ -199,7 +199,7 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                     } else {
                         String::new()
                     };
-                    ui.output_mut(|o| o.copied_text = dump);
+                    ui.ctx().copy_text(dump);
                 }
             });
             ui.separator();

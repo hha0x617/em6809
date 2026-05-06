@@ -113,11 +113,11 @@ pub(crate) fn poke_console_viewport(ctx: &egui::Context) {
 
 fn measure_char_size(ctx: &egui::Context, font_size: f32) -> egui::Vec2 {
     let font_id = egui::FontId::monospace(font_size);
-    let size = ctx.fonts(|f| {
+    let size = ctx.fonts_mut(|f| {
         f.layout_no_wrap("M".to_string(), font_id.clone(), egui::Color32::WHITE)
             .size()
     });
-    let row_height = ctx.fonts(|f| f.row_height(&font_id));
+    let row_height = ctx.fonts_mut(|f| f.row_height(&font_id));
     egui::vec2(size.x, row_height.max(size.y))
 }
 
