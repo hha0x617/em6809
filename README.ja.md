@@ -3,7 +3,7 @@
 [![Build and Test](https://github.com/hha0x617/em6809/actions/workflows/build.yml/badge.svg)](https://github.com/hha0x617/em6809/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-APACHE)
 
-*このアプリケーションは、vibe coding ワークフローの一環として、AI ツール Codex CLI の支援を受けて生成されました。*
+*このアプリケーションは vibe coding ワークフローの一環として AI コーディングツールの支援を受けて生成されました。コミット `d85c2eb` までは **Codex CLI**、その次のコミット `aa1759e` 以降は **Claude Code** の支援を受けて開発が継続されています。*
 
 ## 概要
 
