@@ -79,38 +79,20 @@ fn ensure_console_repaint_ticker() {
     if started.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(|| {
-        // [DIAG] Linux freeze investigation: confirm the ticker
-        // thread actually keeps running during a freeze.
-        #[cfg(target_os = "linux")]
-        let mut tick_n: u64 = 0;
-        loop {
-            let visible = CONSOLE_VISIBLE
-                .get()
-                .map(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
-                .unwrap_or(false);
-            #[cfg(target_os = "linux")]
-            {
-                if tick_n % 30 == 0 {
-                    eprintln!(
-                        "[diag console_ticker] tick={} visible={} ctx_set={}",
-                        tick_n,
-                        visible,
-                        CONSOLE_CTX.get().is_some()
-                    );
-                }
-                tick_n = tick_n.wrapping_add(1);
+    std::thread::spawn(|| loop {
+        let visible = CONSOLE_VISIBLE
+            .get()
+            .map(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap_or(false);
+        if visible {
+            if let Some(ctx) = CONSOLE_CTX.get() {
+                let id = console_viewport_id();
+                ctx.request_repaint();
+                ctx.request_repaint_of(id);
+                ctx.request_repaint_after_for(Duration::from_millis(33), id);
             }
-            if visible {
-                if let Some(ctx) = CONSOLE_CTX.get() {
-                    let id = console_viewport_id();
-                    ctx.request_repaint();
-                    ctx.request_repaint_of(id);
-                    ctx.request_repaint_after_for(Duration::from_millis(33), id);
-                }
-            }
-            std::thread::sleep(Duration::from_millis(33));
         }
+        std::thread::sleep(Duration::from_millis(33));
     });
 }
 
@@ -473,22 +455,6 @@ pub(super) fn show_console_viewport(
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
             ensure_console_repaint_ticker();
-            // [DIAG] Linux freeze investigation: count Console
-            // viewport closure invocations.
-            #[cfg(target_os = "linux")]
-            {
-                use std::sync::atomic::{AtomicU64, Ordering as AtOrd};
-                static CLOSURE_TICK: AtomicU64 = AtomicU64::new(0);
-                let n = CLOSURE_TICK.fetch_add(1, AtOrd::Relaxed);
-                if n % 30 == 0 {
-                    let t = ctx.input(|i| i.time);
-                    let focused = ctx.input(|i| i.viewport().focused).unwrap_or(false);
-                    eprintln!(
-                        "[diag console_closure] tick={} t={:.3} focused={}",
-                        n, t, focused
-                    );
-                }
-            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
             if cfg.enabled {
                 render_console(ctx, &state, &input, &cfg);
