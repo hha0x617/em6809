@@ -75,9 +75,11 @@ Mutter — macOS ホスト上の Parallels VM で確認) では、**Console
 を表示します。`Ctrl+C` でも終了できないことがあり、確実に終了するには
 メインウィンドウの `[X]` ボタンを使う必要があります。
 
-これは `eframe` + `winit` の Wayland 上流の制限です。eframe
-0.29 / 0.30 / 0.31 / 0.32 で検証しましたが、いずれのリリース版でも未
-修正です。本リポジトリは部分的な緩和策 (parent context への 50 ms
+eframe 0.29 / 0.30 / 0.31 / 0.32 で検証しましたが、いずれのリリース版
+でも解消できていません。これは egui で in-app ウィンドウではなく無理に
+複数のトップレベルウィンドウを組み合わせて使用するアプリケーション設計
+との相性問題のように思えます。本リポジトリは部分的な緩和策 (parent
+context への 50 ms
 heartbeat repaint、33 ms 周期の Console repaint ticker、Linux での
 Console viewport の `show_viewport_immediate` 化) を含んでおり、起動時
 に Console が背面に作られて発生する deadlock は回避できますが、ユーザ

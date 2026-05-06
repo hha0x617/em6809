@@ -83,10 +83,12 @@ The window manager raises a *"em6809 is not responding"* dialog after a
 few seconds, and `Ctrl+C` may not terminate the process; closing the
 main window's `[X]` button is the reliable exit path.
 
-This is an upstream limitation of `eframe` + `winit` on Wayland.  We
-verified the freeze across eframe 0.29 / 0.30 / 0.31 / 0.32 — the bug
-is not fixed in any released version we tested.  This repo includes
-partial mitigations (a 50 ms heartbeat repaint on the parent context,
+We verified the freeze across eframe 0.29 / 0.30 / 0.31 / 0.32 and it
+is not resolved in any released version we tested.  We suspect this is
+a friction between our application design — forcing several top-level
+windows under egui rather than using egui's native in-app windows —
+and Wayland's surface lifecycle.  This repo includes partial mitigations
+(a 50 ms heartbeat repaint on the parent context,
 a 33 ms Console repaint ticker, and `show_viewport_immediate` for the
 Console viewport on Linux) that prevent the startup deadlock when
 Console opens occluded, but they do not eliminate the freeze when
