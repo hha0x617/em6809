@@ -93,6 +93,32 @@ Console viewport の `show_viewport_immediate` 化) を含んでおり、起動�
 * または Windows / macOS でビルド・実行する。これらの環境では multi-
   viewport は問題なく動作します。
 
+### Linux + WSL2 (Windows Subsystem for Linux)
+
+Windows ホスト上から em6809 GUI を Linux で動かす場合の標準環境は
+WSL2 + WSLg (Wayland) です。Windows 11 では多くの場合そのまま動きます
+が、Windows 側の GPU ドライバ更新、スリープ復帰、Mesa パッケージ更新
+などのタイミングで WSLg の ZINK / Mesa OpenGL パイプラインの初期化が
+失敗することがあります。典型的な症状は
+`libEGL warning: failed to get driver name for fd -1`、
+`MESA: error: ZINK: failed to choose pdev`、そしてアプリが終了するか
+headless モードへフォールバックする、というものです。
+
+これは WSLg 側の既知の不安定性であり em6809 固有のバグではありません。
+確実な workaround は ZINK を経由せず Mesa の CPU レンダラ (llvmpipe)
+を強制すること:
+
+```bash
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+cargo run --release
+```
+
+永続化方法と WSL2 GUI のフルセットアップ (依存パッケージ、各種環境
+変数、X11 フォールバック、復旧手順) は `docs/troubleshooting.md`
+（日本語版、現状 canonical）を参照してください。英語版は
+`docs/en/troubleshooting.md` にあり、同等の内容です。
+
 ### プロジェクトの方向性
 
 当面の間、本リポジトリでのマルチプラットフォーム対応開発は**停止**します。
