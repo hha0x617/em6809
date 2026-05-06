@@ -1256,8 +1256,8 @@ pub mod gui {
             .show(ctx, |ui| {
                 egui::Frame::default()
                     .fill(egui::Color32::from_black_alpha(220))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .rounding(6)
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
                     .show(ui, |ui| {
                         ui.colored_label(egui::Color32::WHITE, &t.text);

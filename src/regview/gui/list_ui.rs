@@ -550,11 +550,12 @@ fn render_listing_lines(
                         let fill = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 40);
                         let stroke_col = ui.visuals().widgets.hovered.fg_stroke.color;
                         ui.painter()
-                            .rect_filled(resp.rect, egui::Rounding::same(0.0), fill);
+                            .rect_filled(resp.rect, egui::Rounding::same(0), fill);
                         ui.painter().rect_stroke(
                             resp.rect,
-                            egui::Rounding::same(0.0),
+                            egui::Rounding::same(0),
                             egui::Stroke::new(1.0, stroke_col),
+                            egui::StrokeKind::Inside,
                         );
                     }
                 }

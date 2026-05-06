@@ -202,8 +202,12 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                 1.0,
                                 ui.visuals().widgets.noninteractive.bg_stroke.color,
                             );
-                            ui.painter()
-                                .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                            ui.painter().rect_stroke(
+                                rect,
+                                egui::Rounding::same(0),
+                                stroke,
+                                egui::StrokeKind::Inside,
+                            );
                         });
                         header.col(|ui| {
                             ui.strong(fl!(LOADER, "value"));
@@ -212,8 +216,12 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                 1.0,
                                 ui.visuals().widgets.noninteractive.bg_stroke.color,
                             );
-                            ui.painter()
-                                .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                            ui.painter().rect_stroke(
+                                rect,
+                                egui::Rounding::same(0),
+                                stroke,
+                                egui::StrokeKind::Inside,
+                            );
                         });
                     })
                     .body(|mut body| {
@@ -230,8 +238,9 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         );
                                         ui.painter().rect_stroke(
                                             rect,
-                                            egui::Rounding::same(0.0),
+                                            egui::Rounding::same(0),
                                             stroke,
+                                            egui::StrokeKind::Inside,
                                         );
                                     });
                                     row.col(|ui| {
@@ -250,8 +259,9 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         );
                                         ui.painter().rect_stroke(
                                             rect,
-                                            egui::Rounding::same(0.0),
+                                            egui::Rounding::same(0),
                                             stroke,
+                                            egui::StrokeKind::Inside,
                                         );
                                     });
                                 });
@@ -274,8 +284,12 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     1.0,
                                     ui.visuals().widgets.noninteractive.bg_stroke.color,
                                 );
-                                ui.painter()
-                                    .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    egui::Rounding::same(0),
+                                    stroke,
+                                    egui::StrokeKind::Inside,
+                                );
                             });
                             row.col(|ui| {
                                 if editing {
@@ -318,8 +332,12 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     1.0,
                                     ui.visuals().widgets.noninteractive.bg_stroke.color,
                                 );
-                                ui.painter()
-                                    .rect_stroke(rect, egui::Rounding::same(0.0), stroke);
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    egui::Rounding::same(0),
+                                    stroke,
+                                    egui::StrokeKind::Inside,
+                                );
                             });
                         });
                     });
@@ -684,8 +702,9 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                                 ui.visuals().widgets.noninteractive.bg_stroke.color;
                                             ui.painter().rect_stroke(
                                                 resp.rect.expand(2.0),
-                                                egui::Rounding::same(6.0),
+                                                egui::Rounding::same(6),
                                                 egui::Stroke::new(1.0, stroke_col),
+                                                egui::StrokeKind::Inside,
                                             );
                                             if (i + 1) % 4 == 0 {
                                                 ui.end_row();

@@ -110,7 +110,7 @@ impl SettingsNativeApp {
             .frame(
                 egui::Frame::default()
                     .fill(ctx.style().visuals.window_fill())
-                    .inner_margin(egui::Margin::same(6.0)),
+                    .inner_margin(egui::Margin::same(6)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

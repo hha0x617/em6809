@@ -12,10 +12,10 @@ where
             eframe::egui::Frame::default()
                 .fill(ctx.style().visuals.panel_fill)
                 .inner_margin(egui::Margin {
-                    left: 8.0,
-                    right: 8.0,
-                    top: 6.0,
-                    bottom: 6.0,
+                    left: 8,
+                    right: 8,
+                    top: 6,
+                    bottom: 6,
                 }),
         )
         .show(ctx, |ui| {
@@ -140,10 +140,10 @@ pub fn show_settings_header(ctx: &egui::Context, title: &str) {
             eframe::egui::Frame::default()
                 .fill(ctx.style().visuals.panel_fill)
                 .inner_margin(egui::Margin {
-                    left: 8.0,
-                    right: 8.0,
-                    top: 6.0,
-                    bottom: 6.0,
+                    left: 8,
+                    right: 8,
+                    top: 6,
+                    bottom: 6,
                 }),
         )
         .show(ctx, |ui| {

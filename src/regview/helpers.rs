@@ -113,12 +113,13 @@ pub fn draw_origin_badge(
     );
     let size = galley.size() + padding * 2.0;
     let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, Rounding::same(6.0), bg);
+    ui.painter().rect_filled(rect, Rounding::same(6), bg);
     let border = Stroke {
         width: 1.0,
         color: bg.gamma_multiply(0.8),
     };
-    ui.painter().rect_stroke(rect, Rounding::same(6.0), border);
+    ui.painter()
+        .rect_stroke(rect, Rounding::same(6), border, egui::StrokeKind::Inside);
     ui.painter()
         .galley(rect.left_top() + padding, galley, egui::Color32::WHITE);
 }
