@@ -1127,6 +1127,22 @@ pub mod gui {
         /// follow-PC scroll path so jumping from a panel does not
         /// implicitly toggle Follow PC.
         pub pending_listing_center: Option<u16>,
+        /// Transient toast notification (text + deadline).  Used to
+        /// surface non-blocking status feedback — e.g., when a BP /
+        /// CS double-click points at an address that is not in the
+        /// loaded listing, so the user knows the click registered
+        /// but had no scroll target to land on.  `update()` renders
+        /// this as a fixed-position `egui::Area` and clears it once
+        /// `Instant::now()` passes the deadline.
+        pub toast: Option<ToastMessage>,
+    }
+
+    /// Transient on-screen notification surfaced for a few seconds.
+    /// See [`RegApp::toast`].
+    #[derive(Clone)]
+    pub struct ToastMessage {
+        pub text: String,
+        pub deadline: std::time::Instant,
     }
 
     impl RegApp {
@@ -2033,6 +2049,36 @@ pub mod gui {
             } else {
                 em6809::io::set_console_repaint_callback(None);
             }
+
+            // Transient toast notification.  Set by list_ui when a
+            // BP / CS double-click points at an address that isn't
+            // present in the loaded listing — gives visible
+            // confirmation that the click was registered, even
+            // though the listing didn't scroll.
+            if let Some(toast) = self.toast.clone() {
+                let now = std::time::Instant::now();
+                if now < toast.deadline {
+                    egui::Area::new(egui::Id::new("em6809_toast"))
+                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -16.0))
+                        .order(egui::Order::Tooltip)
+                        .show(ctx, |ui| {
+                            egui::Frame::default()
+                                .fill(egui::Color32::from_black_alpha(220))
+                                .rounding(6.0)
+                                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
+                                .show(ui, |ui| {
+                                    ui.colored_label(egui::Color32::WHITE, &toast.text);
+                                });
+                        });
+                    // Repaint so the toast disappears on time even
+                    // if nothing else is driving paints right now.
+                    let remaining = toast.deadline.saturating_duration_since(now);
+                    ctx.request_repaint_after(remaining.min(Duration::from_millis(100)));
+                } else {
+                    self.toast = None;
+                }
+            }
         }
     }
 
@@ -2528,6 +2574,7 @@ pub mod gui {
                     bp_window_open: false,
                     call_stack_window_open: false,
                     pending_listing_center: None,
+                    toast: None,
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -3003,6 +3050,7 @@ pub mod gui {
                 bp_window_open: false,
                 call_stack_window_open: false,
                 pending_listing_center: None,
+                toast: None,
             };
             let mut init = init;
             #[cfg(windows)]
