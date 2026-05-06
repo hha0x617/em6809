@@ -102,6 +102,31 @@ Workarounds:
 * Or run the build on Windows / macOS, where the multi-viewport stack
   is unaffected.
 
+### Linux on WSL2 (Windows Subsystem for Linux)
+
+WSL2 + WSLg (Wayland) is the typical environment for running em6809's
+GUI on Linux from a Windows host.  Most setups work out of the box on
+Windows 11, but the WSLg ZINK / Mesa OpenGL pipeline can fail to
+initialize after Windows GPU driver updates, sleep/resume, or Mesa
+package upgrades — typical symptoms are
+`libEGL warning: failed to get driver name for fd -1`,
+`MESA: error: ZINK: failed to choose pdev`, and the app exiting or
+falling back to headless mode.
+
+This is a known WSLg-side instability, not an em6809-specific bug.
+The reliable workaround is to force Mesa's CPU rasterizer (llvmpipe)
+and bypass ZINK entirely:
+
+```bash
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+cargo run --release
+```
+
+For persistence and the full WSL2 GUI setup (prerequisite packages,
+backend env vars, X11 fallback, recovery steps), see
+`docs/troubleshooting.md`.
+
 ### Project direction
 
 For the time being, multi-platform development on this repository is

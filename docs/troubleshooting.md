@@ -70,3 +70,45 @@ WSL2 + WSLg（Wayland）の環境で GUI を表示するための準備と手順
   - Wayland 環境で `XDG_RUNTIME_DIR` が未設定だと GUI 起動に失敗する場合があります（WSLg では通常 `/mnt/wslg/runtime-dir`）。
   - バックエンド切替（`WINIT_UNIX_BACKEND=wayland|x11`）と `WGPU_BACKEND=gl|vulkan` の組み合わせで改善することがあります。
   - マルチビューポートの挙動を調べる際は `RUST_LOG=egui_winit=debug` を付けて実行すると、`ViewportCommand::InnerSize ignored by winit` などの詳細ログを確認できます（Linux でのネイティブ Settings の描画不具合調査に有効）。
+
+### ZINK 初期化失敗時の workaround（GUI が起動しない / 起動直後に異常終了）
+
+WSLg 上で OpenGL コンテキストの初期化に失敗するケースがあります。Windows 側の GPU ドライバ更新、スリープ復帰、Mesa パッケージ更新などのタイミングで顕在化しやすく、em6809 固有の問題ではなく WSLg 全体に影響します。
+
+- **症状（stderr に出力される警告/エラー）**
+  ```
+  libEGL warning: failed to get driver name for fd -1
+  libEGL warning: MESA-LOADER: failed to retrieve device information
+  MESA: error: ZINK: failed to choose pdev
+  libEGL warning: egl: failed to create dri2 screen
+  Io error: Broken pipe (os error 32)
+  [regview] GUI error: winit EventLoopError: Exit Failure: 1 — running headless
+  ```
+  もしくは起動はするものの数秒で異常終了する。
+
+- **原因の概略**: WSL2 の `/dev/dri/` は通常存在せず、WSLg は ZINK (Vulkan ベースの OpenGL 実装) → D3D12 経由でホストの GPU にブリッジしている。このパイプラインのどこかで初期化に失敗すると、Mesa がデバイスを見つけられず GL コンテキスト作成が失敗する。
+
+- **ワークアラウンド: ZINK を経由せず llvmpipe（CPU レンダリング）に切替える**
+  ```bash
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  cargo run --release
+  ```
+
+- **永続化（推奨）**: `~/.bashrc` に追記すれば新しい shell でも自動で適用される
+  ```bash
+  cat >> ~/.bashrc <<'EOF'
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  EOF
+  source ~/.bashrc
+  ```
+
+- **トレードオフ**: GPU 加速が無効になる。ただし em6809 は egui ベースで描画負荷が小さく、体感差はほぼないと報告されている。
+
+- **一時的に GPU 加速を試したい場合**: `unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER` で外して再実行。
+
+- **補助的な復旧手順**（上記でも改善しない場合）
+  - PowerShell から `wsl --shutdown` → 数秒待ってから WSL terminal を開き直す。
+  - Mesa の再インストール: `sudo apt install --reinstall -y libgl1 libegl1 libglx-mesa0 libgl1-mesa-dri`
+  - `glxinfo -B` で `direct rendering: Yes` と llvmpipe が表示されれば OK（`mesa-utils` 必須）。
