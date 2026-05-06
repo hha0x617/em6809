@@ -669,9 +669,10 @@ pub mod gui {
         }
 
         fn process_bytes(&mut self, bytes: &[u8]) {
-            for b in bytes {
-                self.parser.advance(&mut self.term, *b);
-            }
+            // vte 0.13 changed `Parser::advance` from per-byte (`u8`)
+            // to slice-based (`&[u8]`).  Pass the whole slice in one
+            // call — also slightly more efficient than the old loop.
+            self.parser.advance(&mut self.term, bytes);
         }
 
         fn screen_content_rows(&self) -> usize {
