@@ -3,16 +3,23 @@
 // window. Read-only view of the shadow call stack, rendered
 // newest-first so the active frame sits at the top.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 use once_cell::sync::OnceCell;
 
-use super::CallFrameInfo;
+use super::{CallFrameInfo, Command};
 
 static CS_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CS_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
+/// Per-(column,depth) timestamp of the previous click, for manual
+/// double-click detection.  See `breakpoints_ui::BP_LAST_CLICK`
+/// for the rationale (egui's memory store proved unreliable).
+/// Key: (column tag, depth).  Column tag is "call" / "target" /
+/// "return" so the same depth doesn't fight across columns.
+static CS_LAST_CLICK: OnceCell<Mutex<HashMap<(&'static str, usize), f64>>> = OnceCell::new();
 
 pub(crate) fn call_stack_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("em6809_call_stack_window")
@@ -47,7 +54,11 @@ pub(crate) fn take_closed() -> bool {
         .unwrap_or(false)
 }
 
-fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo>>>) {
+fn render_call_stack(
+    ui: &mut egui::Ui,
+    call_stack: &Arc<Mutex<Vec<CallFrameInfo>>>,
+    cmds: &Arc<Mutex<Vec<Command>>>,
+) {
     let frames: Vec<CallFrameInfo> = call_stack.lock().map(|g| g.clone()).unwrap_or_default();
 
     if frames.is_empty() {
@@ -97,37 +108,93 @@ fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo
             for (rev_idx, frame) in frames.iter().rev().enumerate() {
                 let depth = total - rev_idx;
                 ui.horizontal(|ui| {
+                    // Force every cell to the same height so Buttons
+                    // and Labels line up vertically — see
+                    // `breakpoints_ui` for the rationale.
+                    let row_h = ui.spacing().interact_size.y;
                     ui.add_sized(
-                        [28.0, 0.0],
+                        [28.0, row_h],
                         egui::Label::new(egui::RichText::new(format!("{}", depth)).monospace()),
                     );
                     ui.add_sized(
-                        [46.0, 0.0],
+                        [46.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(frame.kind.label()).monospace().strong(),
                         ),
                     );
-                    ui.add_sized(
-                        [62.0, 0.0],
-                        egui::Label::new(
+                    // Each address cell is clickable.  Same default-
+                    // framed `Button` shape as the BP delete-X button.
+                    // Manual timestamp double-click detection (see
+                    // `breakpoints_ui` for the rationale).
+                    let dc_threshold = 0.4_f64;
+                    let now = ui.input(|i| i.time);
+
+                    let call_resp = ui.add_sized(
+                        [62.0, row_h],
+                        egui::Button::new(
                             egui::RichText::new(format!("${:04X}", frame.call_site)).monospace(),
                         ),
                     );
-                    ui.add_sized([22.0, 0.0], egui::Label::new("→"));
-                    ui.add_sized(
-                        [62.0, 0.0],
-                        egui::Label::new(
+                    if call_resp.clicked() {
+                        let map = CS_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let key = ("call", depth);
+                        let prev = g.get(&key).copied().unwrap_or(0.0_f64);
+                        if prev > 0.0 && now - prev < dc_threshold {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(frame.call_site));
+                            }
+                            g.remove(&key);
+                        } else {
+                            g.insert(key, now);
+                        }
+                    }
+
+                    ui.add_sized([22.0, row_h], egui::Label::new("→"));
+
+                    let target_resp = ui.add_sized(
+                        [62.0, row_h],
+                        egui::Button::new(
                             egui::RichText::new(format!("${:04X}", frame.target)).monospace(),
                         ),
                     );
-                    ui.add_sized(
-                        [62.0, 0.0],
-                        egui::Label::new(
+                    if target_resp.clicked() {
+                        let map = CS_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let key = ("target", depth);
+                        let prev = g.get(&key).copied().unwrap_or(0.0_f64);
+                        if prev > 0.0 && now - prev < dc_threshold {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(frame.target));
+                            }
+                            g.remove(&key);
+                        } else {
+                            g.insert(key, now);
+                        }
+                    }
+
+                    let ret_resp = ui.add_sized(
+                        [62.0, row_h],
+                        egui::Button::new(
                             egui::RichText::new(format!("${:04X}", frame.return_addr)).monospace(),
                         ),
                     );
+                    if ret_resp.clicked() {
+                        let map = CS_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let key = ("return", depth);
+                        let prev = g.get(&key).copied().unwrap_or(0.0_f64);
+                        if prev > 0.0 && now - prev < dc_threshold {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(frame.return_addr));
+                            }
+                            g.remove(&key);
+                        } else {
+                            g.insert(key, now);
+                        }
+                    }
                     ui.add_sized(
-                        [62.0, 0.0],
+                        [62.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(format!("${:04X}", frame.sp_at_call)).monospace(),
                         ),
@@ -140,26 +207,31 @@ fn render_call_stack(ui: &mut egui::Ui, call_stack: &Arc<Mutex<Vec<CallFrameInfo
 pub(super) fn show_call_stack_viewport(
     ctx: &egui::Context,
     call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
+    cmds: Arc<Mutex<Vec<Command>>>,
     open: bool,
 ) {
     let id = call_stack_viewport_id();
     if update_visible(open) {
         set_visible(ctx, open);
     }
+    // See `breakpoints_ui::show_breakpoints_viewport` for the
+    // `with_active(false)` rationale (macOS focus monopolisation).
     let builder = egui::ViewportBuilder::default()
         .with_title("em6809 Call Stack")
         .with_inner_size(egui::vec2(500.0, 260.0))
         .with_visible(open)
+        .with_active(false)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
 
     #[cfg(target_os = "windows")]
     {
         let cs_cl = Arc::clone(&call_stack);
+        let cmds_cl = Arc::clone(&cmds);
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_call_stack(ui, &cs_cl);
+                    render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
             }
             if ctx.input(|i| i.viewport().close_requested()) {
@@ -170,23 +242,16 @@ pub(super) fn show_call_stack_viewport(
             }
         });
     }
-    #[cfg(not(target_os = "windows"))]
+    // See `breakpoints_ui::show_breakpoints_viewport` for the platform
+    // split rationale (Linux gate-by-declaration vs macOS always-declare).
+    #[cfg(target_os = "linux")]
     {
-        // Only declare the deferred viewport while the window is open.
-        // See breakpoints_ui::show_breakpoints_viewport for the full
-        // rationale — deferred viewports on Linux/macOS ignore
-        // `with_visible(false)`, so we gate declaration instead.
         if open {
-            // Pump repaints so the deferred viewport picks up worker-side
-            // call-stack mutations (BSR/JSR/RTS, IRQ entry, …) without
-            // requiring the user to focus the child window first.
-            ctx.request_repaint_of(id);
-            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
-
             let cs_cl = Arc::clone(&call_stack);
+            let cmds_cl = Arc::clone(&cmds);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_call_stack(ui, &cs_cl);
+                    render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
                 if ctx.input(|i| i.viewport().close_requested()) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -196,5 +261,24 @@ pub(super) fn show_call_stack_viewport(
                 }
             });
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let cs_cl = Arc::clone(&call_stack);
+        let cmds_cl = Arc::clone(&cmds);
+        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+            if open {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_call_stack(ui, &cs_cl, &cmds_cl);
+                });
+            }
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_visible(false);
+                note_closed();
+            }
+        });
     }
 }

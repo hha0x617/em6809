@@ -25,6 +25,15 @@ static BP_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
 /// so unrelated BPs don't fight over the same draft slot. Entries are
 /// committed on lost-focus / Enter and removed on commit.
 static BP_COND_DRAFTS: OnceCell<Mutex<HashMap<u32, String>>> = OnceCell::new();
+/// Last `clicked()` timestamp per BP id, used to derive double-click
+/// from two `clicked()` events within `multi_click_time`.  Stored
+/// here (a process-local static) rather than via
+/// `ctx.memory().data.insert_temp`, because that storage proved
+/// unreliable across paints in our setup — on Windows we observed
+/// `[bp-click]` firing twice per double-click but `prev` reading 0.0
+/// each time, which would only happen if the inserted value
+/// disappeared between paints.
+static BP_LAST_CLICK: OnceCell<Mutex<HashMap<u32, f64>>> = OnceCell::new();
 
 fn drafts() -> &'static Mutex<HashMap<u32, String>> {
     BP_COND_DRAFTS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -113,29 +122,60 @@ fn render_breakpoints(
 
             for bp in bps.iter() {
                 ui.horizontal(|ui| {
+                    // Force every cell to the same height so widgets
+                    // of different natural heights (Checkbox / Button
+                    // / Label / TextEdit) align vertically — passing
+                    // height = 0 to `add_sized` gives each cell its
+                    // own natural height, which makes Buttons sit
+                    // lower than Labels in the same row.
+                    let row_h = ui.spacing().interact_size.y;
                     let mut enabled = bp.enabled;
                     if ui
-                        .add_sized([22.0, 0.0], egui::Checkbox::without_text(&mut enabled))
+                        .add_sized([22.0, row_h], egui::Checkbox::without_text(&mut enabled))
                         .changed()
                     {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::SetBreakpointEnabled(bp.id, enabled));
                         }
                     }
-                    ui.add_sized(
-                        [60.0, 0.0],
-                        egui::Label::new(
+                    // Address cell — clickable so a double-click
+                    // recentres the listing pane.  Use a default-
+                    // framed `Button` (same shape as the delete-X
+                    // button below, which is the only `clicked()`
+                    // pattern we have empirical evidence works on
+                    // every platform).  Manual timestamp logic
+                    // converts two clicks within 400 ms into a
+                    // double-click without relying on egui's
+                    // `double_clicked()` which proved unreliable
+                    // for narrow short-text widgets like this.
+                    let addr_resp = ui.add_sized(
+                        [60.0, row_h],
+                        egui::Button::new(
                             egui::RichText::new(format!("${:04X}", bp.addr)).monospace(),
                         ),
                     );
+                    if addr_resp.clicked() {
+                        let now = ui.input(|i| i.time);
+                        let map = BP_LAST_CLICK.get_or_init(|| Mutex::new(HashMap::new()));
+                        let mut g = map.lock().unwrap();
+                        let prev = g.get(&bp.id).copied().unwrap_or(0.0_f64);
+                        if prev > 0.0 && now - prev < 0.4 {
+                            if let Ok(mut q) = cmds.lock() {
+                                q.push(Command::UiCenterListingAt(bp.addr));
+                            }
+                            g.remove(&bp.id);
+                        } else {
+                            g.insert(bp.id, now);
+                        }
+                    }
                     ui.add_sized(
-                        [60.0, 0.0],
+                        [60.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(format!("{}", bp.hit_count)).monospace(),
                         ),
                     );
                     ui.add_sized(
-                        [60.0, 0.0],
+                        [60.0, row_h],
                         egui::Label::new(
                             egui::RichText::new(format!("{}", bp.ignore_count)).monospace(),
                         ),
@@ -151,7 +191,7 @@ fn render_breakpoints(
                         g.entry(bp.id).or_insert_with(|| stored.clone()).clone()
                     };
                     let resp = ui.add_sized(
-                        [120.0, 0.0],
+                        [120.0, row_h],
                         egui::TextEdit::singleline(&mut draft)
                             .font(egui::TextStyle::Monospace)
                             .hint_text("condition"),
@@ -171,7 +211,7 @@ fn render_breakpoints(
                             }
                         }
                     }
-                    let del = ui.add_sized([24.0, 0.0], egui::Button::new("✕"));
+                    let del = ui.add_sized([24.0, row_h], egui::Button::new("✕"));
                     if del.clicked() {
                         if let Ok(mut q) = cmds.lock() {
                             q.push(Command::RemoveBreakpoint(bp.id));
@@ -198,10 +238,17 @@ pub(super) fn show_breakpoints_viewport(
     if update_visible(open) {
         set_visible(ctx, open);
     }
+    // `with_active(false)` is the macOS-relevant bit: tell AppKit not
+    // to promote this NSWindow to the key window when it appears, so
+    // typing into the main window or VT100 console keeps working
+    // while the BP / Call Stack panels are open.  Documented as
+    // unsupported on X11 / Wayland in egui, but harmless there — the
+    // flag is simply ignored.
     let builder = egui::ViewportBuilder::default()
         .with_title("em6809 Breakpoints")
         .with_inner_size(egui::vec2(440.0, 260.0))
         .with_visible(open)
+        .with_active(false)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
 
@@ -223,23 +270,13 @@ pub(super) fn show_breakpoints_viewport(
             }
         });
     }
-    #[cfg(not(target_os = "windows"))]
+    // Linux: deferred viewports do not honor
+    // `ViewportBuilder::with_visible(false)`, so we have to gate the
+    // declaration itself — dropping it on the next frame closes the
+    // viewport.  See git log for the original WSLg-startup bug.
+    #[cfg(target_os = "linux")]
     {
-        // Only declare the deferred viewport while the window is open.
-        // Dropping the declaration on the next frame after `open` flips
-        // false tells egui to close the viewport. Linux/macOS deferred
-        // viewports do not honor `ViewportBuilder::with_visible(false)`,
-        // so without this gate the window pops up at startup despite
-        // the menu showing it hidden.
         if open {
-            // Pump repaints so the deferred viewport reflects parent-side
-            // updates (worker-side bp_list mutations from listing-pane
-            // double-clicks etc.) without requiring the user to focus
-            // the child window first. Mirrors what console_ui does for
-            // its own deferred viewport.
-            ctx.request_repaint_of(id);
-            ctx.request_repaint_after_for(std::time::Duration::from_millis(33), id);
-
             let bp_list_cl = Arc::clone(&bp_list);
             let cmds_cl = Arc::clone(&cmds);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
@@ -254,5 +291,33 @@ pub(super) fn show_breakpoints_viewport(
                 }
             });
         }
+    }
+
+    // macOS: declare the viewport unconditionally and toggle
+    // visibility with `Visible(bool)` viewport commands instead.
+    // Re-declaring after an `if open == false` gap creates a fresh
+    // NSWindow each time the user re-opens the panel, and AppKit
+    // promotes the new NSWindow to the key window — that's what
+    // monopolised input from the main window and the VT100 console
+    // on macOS.  Mirrors what `console_ui` does for its own
+    // deferred viewport.  Render is still guarded by `open` so a
+    // hidden viewport doesn't spend time laying out the table.
+    #[cfg(target_os = "macos")]
+    {
+        let bp_list_cl = Arc::clone(&bp_list);
+        let cmds_cl = Arc::clone(&cmds);
+        ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
+            if open {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_breakpoints(ui, &bp_list_cl, &cmds_cl);
+                });
+            }
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                update_visible(false);
+                note_closed();
+            }
+        });
     }
 }
