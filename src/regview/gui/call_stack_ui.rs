@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use once_cell::sync::OnceCell;
 
-use super::{CallFrameInfo, Command};
+use super::{CallFrameInfo, Command, ToastMessage, ToastOrigin};
 
 static CS_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CS_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
@@ -141,8 +141,13 @@ fn render_call_stack(
                         let key = ("call", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
+                            let anchor = call_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
                             if let Ok(mut q) = cmds.lock() {
-                                q.push(Command::UiCenterListingAt(frame.call_site));
+                                q.push(Command::UiCenterListingAt {
+                                    addr: frame.call_site,
+                                    origin: ToastOrigin::CallStack,
+                                    anchor,
+                                });
                             }
                             g.remove(&key);
                         } else {
@@ -164,8 +169,13 @@ fn render_call_stack(
                         let key = ("target", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
+                            let anchor = target_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
                             if let Ok(mut q) = cmds.lock() {
-                                q.push(Command::UiCenterListingAt(frame.target));
+                                q.push(Command::UiCenterListingAt {
+                                    addr: frame.target,
+                                    origin: ToastOrigin::CallStack,
+                                    anchor,
+                                });
                             }
                             g.remove(&key);
                         } else {
@@ -185,8 +195,13 @@ fn render_call_stack(
                         let key = ("return", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
+                            let anchor = ret_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
                             if let Ok(mut q) = cmds.lock() {
-                                q.push(Command::UiCenterListingAt(frame.return_addr));
+                                q.push(Command::UiCenterListingAt {
+                                    addr: frame.return_addr,
+                                    origin: ToastOrigin::CallStack,
+                                    anchor,
+                                });
                             }
                             g.remove(&key);
                         } else {
@@ -208,6 +223,7 @@ pub(super) fn show_call_stack_viewport(
     ctx: &egui::Context,
     call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,
     cmds: Arc<Mutex<Vec<Command>>>,
+    toast: Arc<Mutex<Option<ToastMessage>>>,
     open: bool,
 ) {
     let id = call_stack_viewport_id();
@@ -228,11 +244,13 @@ pub(super) fn show_call_stack_viewport(
     {
         let cs_cl = Arc::clone(&call_stack);
         let cmds_cl = Arc::clone(&cmds);
+        let toast_cl = Arc::clone(&toast);
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
+                super::render_toast_for(ctx, &toast_cl, ToastOrigin::CallStack);
             }
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -249,10 +267,12 @@ pub(super) fn show_call_stack_viewport(
         if open {
             let cs_cl = Arc::clone(&call_stack);
             let cmds_cl = Arc::clone(&cmds);
+            let toast_cl = Arc::clone(&toast);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
+                super::render_toast_for(ctx, &toast_cl, ToastOrigin::CallStack);
                 if ctx.input(|i| i.viewport().close_requested()) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -267,11 +287,13 @@ pub(super) fn show_call_stack_viewport(
     {
         let cs_cl = Arc::clone(&call_stack);
         let cmds_cl = Arc::clone(&cmds);
+        let toast_cl = Arc::clone(&toast);
         ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     render_call_stack(ui, &cs_cl, &cmds_cl);
                 });
+                super::render_toast_for(ctx, &toast_cl, ToastOrigin::CallStack);
             }
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

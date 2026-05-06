@@ -836,7 +836,15 @@ pub mod gui {
         /// Stack panels — letting the user jump the disassembly view
         /// to the address shown in the panel row.  Handled entirely
         /// on the UI thread (no worker action); the worker no-ops it.
-        UiCenterListingAt(u16),
+        ///
+        /// `origin` and `anchor` are forwarded to the toast that
+        /// fires when `addr` is not in the loaded listing — they
+        /// position the popup next to the button the user clicked.
+        UiCenterListingAt {
+            addr: u16,
+            origin: ToastOrigin,
+            anchor: egui::Pos2,
+        },
         /// Set baseline settings + origins (0=Default,1=Saved,2=CLI) and optional GPIO color
         UiSetSettingsBaseline(SettingsState, Vec<(String, u8)>, Option<u32>),
         /// Worker acknowledgement that Apply/Save completed for a dialog instance
@@ -1126,23 +1134,99 @@ pub mod gui {
         /// clears the field back to `None`.  Independent of the
         /// follow-PC scroll path so jumping from a panel does not
         /// implicitly toggle Follow PC.
-        pub pending_listing_center: Option<u16>,
+        ///
+        /// The tuple carries `(addr, toast_origin, toast_anchor)` so
+        /// that a miss (address not present in the loaded listing)
+        /// can raise a toast in the source viewport, near the button
+        /// the user clicked — the latter two fields are unused on a
+        /// successful scroll.
+        pub pending_listing_center: Option<(u16, ToastOrigin, egui::Pos2)>,
         /// Transient toast notification (text + deadline).  Used to
         /// surface non-blocking status feedback — e.g., when a BP /
         /// CS double-click points at an address that is not in the
         /// loaded listing, so the user knows the click registered
-        /// but had no scroll target to land on.  `update()` renders
-        /// this as a fixed-position `egui::Area` and clears it once
-        /// `Instant::now()` passes the deadline.
-        pub toast: Option<ToastMessage>,
+        /// but had no scroll target to land on.  Wrapped in
+        /// `Arc<Mutex<...>>` because BP / CS viewport closures (which
+        /// run inside `show_viewport_immediate`) need to render the
+        /// toast in their own ctx and so need access to the value
+        /// without an `&mut RegApp`.  Each viewport renders only when
+        /// `toast.origin` matches its own viewport.
+        pub toast: Arc<Mutex<Option<ToastMessage>>>,
+    }
+
+    /// Which viewport (top-level window) raised the current toast.
+    /// Drives where the toast renders so the popup appears next to
+    /// the button the user actually clicked, instead of always at
+    /// the bottom of the main window.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum ToastOrigin {
+        /// Main register-view window (listing pane, etc.).
+        Main,
+        /// Breakpoints window (separate viewport).
+        Breakpoints,
+        /// Call Stack window (separate viewport).
+        CallStack,
     }
 
     /// Transient on-screen notification surfaced for a few seconds.
-    /// See [`RegApp::toast`].
+    /// See [`RegApp::toast`].  `origin` selects which viewport's
+    /// closure should draw it; `anchor` is the screen position in
+    /// that viewport's coordinate space (typically the bottom-centre
+    /// of the button that triggered the notification, plus a small
+    /// gap) — the toast is rendered with `Align2::CENTER_TOP` so its
+    /// top-centre lands on `anchor`.
     #[derive(Clone)]
     pub struct ToastMessage {
         pub text: String,
         pub deadline: std::time::Instant,
+        pub origin: ToastOrigin,
+        pub anchor: egui::Pos2,
+    }
+
+    /// Draw the active toast in `ctx` if its `origin` matches the
+    /// supplied viewport tag.  Also clears the toast slot once its
+    /// deadline has passed (any viewport that paints can collect
+    /// the expired entry, so this works regardless of which
+    /// viewport last had focus).  No-op when `toast` holds `None`
+    /// or the deadline has not yet expired but the origin differs.
+    pub(crate) fn render_toast_for(
+        ctx: &egui::Context,
+        toast: &Arc<Mutex<Option<ToastMessage>>>,
+        origin: ToastOrigin,
+    ) {
+        let snapshot = match toast.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => return,
+        };
+        let Some(t) = snapshot else { return };
+        let now = std::time::Instant::now();
+        if now >= t.deadline {
+            if let Ok(mut g) = toast.lock() {
+                if g.as_ref().map(|m| m.deadline) == Some(t.deadline) {
+                    *g = None;
+                }
+            }
+            return;
+        }
+        if t.origin != origin {
+            return;
+        }
+        egui::Area::new(egui::Id::new("em6809_toast"))
+            .fixed_pos(t.anchor)
+            .pivot(egui::Align2::CENTER_TOP)
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::default()
+                    .fill(egui::Color32::from_black_alpha(220))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
+                    .show(ui, |ui| {
+                        ui.colored_label(egui::Color32::WHITE, &t.text);
+                    });
+            });
+        let remaining = t.deadline.saturating_duration_since(now);
+        ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(100)));
     }
 
     impl RegApp {
@@ -1320,12 +1404,20 @@ pub mod gui {
                     Command::UiToggleCallStackWindow => {
                         self.call_stack_window_open = !self.call_stack_window_open;
                     }
-                    Command::UiCenterListingAt(addr) => {
+                    Command::UiCenterListingAt {
+                        addr,
+                        origin,
+                        anchor,
+                    } => {
                         // Recentre listing on `addr`. We park it as
                         // `pending_listing_center`; list_ui.rs reads
                         // it on the next paint, scrolls there, and
-                        // clears the field.
-                        self.pending_listing_center = Some(addr);
+                        // clears the field.  `origin` / `anchor` are
+                        // forwarded along the way so an out-of-listing
+                        // miss can raise a toast next to the source
+                        // button (which lives in BP/CS viewport, not
+                        // the main one).
+                        self.pending_listing_center = Some((addr, origin, anchor));
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
                         let prev_console_gui = self.settings_baseline.console_gui;
@@ -1918,12 +2010,14 @@ pub mod gui {
                 ctx,
                 Arc::clone(&self.bp_list),
                 Arc::clone(&self.cmds),
+                Arc::clone(&self.toast),
                 self.bp_window_open,
             );
             call_stack_ui::show_call_stack_viewport(
                 ctx,
                 Arc::clone(&self.call_stack),
                 Arc::clone(&self.cmds),
+                Arc::clone(&self.toast),
                 self.call_stack_window_open,
             );
 
@@ -2050,35 +2144,13 @@ pub mod gui {
                 em6809::io::set_console_repaint_callback(None);
             }
 
-            // Transient toast notification.  Set by list_ui when a
-            // BP / CS double-click points at an address that isn't
-            // present in the loaded listing — gives visible
-            // confirmation that the click was registered, even
-            // though the listing didn't scroll.
-            if let Some(toast) = self.toast.clone() {
-                let now = std::time::Instant::now();
-                if now < toast.deadline {
-                    egui::Area::new(egui::Id::new("em6809_toast"))
-                        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -16.0))
-                        .order(egui::Order::Tooltip)
-                        .show(ctx, |ui| {
-                            egui::Frame::default()
-                                .fill(egui::Color32::from_black_alpha(220))
-                                .rounding(6.0)
-                                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
-                                .show(ui, |ui| {
-                                    ui.colored_label(egui::Color32::WHITE, &toast.text);
-                                });
-                        });
-                    // Repaint so the toast disappears on time even
-                    // if nothing else is driving paints right now.
-                    let remaining = toast.deadline.saturating_duration_since(now);
-                    ctx.request_repaint_after(remaining.min(Duration::from_millis(100)));
-                } else {
-                    self.toast = None;
-                }
-            }
+            // Transient toast notification.  Drawn here only when
+            // the active toast's `origin == ToastOrigin::Main` — toasts
+            // raised from BP / CS double-click handlers render inside
+            // those viewports' own closures (see `render_toast_for`)
+            // so the popup appears next to the button the user
+            // clicked.
+            render_toast_for(ctx, &self.toast, ToastOrigin::Main);
         }
     }
 
@@ -2574,7 +2646,7 @@ pub mod gui {
                     bp_window_open: false,
                     call_stack_window_open: false,
                     pending_listing_center: None,
-                    toast: None,
+                    toast: Arc::new(Mutex::new(None)),
                 };
                 // Windows supports any-thread event loop via ExtWindows; run normally.
                 // On Unix (incl. WSL2), winit may require main-thread; catch and fall back headless.
@@ -3050,7 +3122,7 @@ pub mod gui {
                 bp_window_open: false,
                 call_stack_window_open: false,
                 pending_listing_center: None,
-                toast: None,
+                toast: Arc::new(Mutex::new(None)),
             };
             let mut init = init;
             #[cfg(windows)]
@@ -3499,7 +3571,7 @@ pub mod gui {
                             | Command::UiOpenImageDialog
                             | Command::UiToggleBreakpointsWindow
                             | Command::UiToggleCallStackWindow
-                            | Command::UiCenterListingAt(..)
+                            | Command::UiCenterListingAt { .. }
                     )
                 }) {
                     return Some(q.remove(idx));

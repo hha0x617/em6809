@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use once_cell::sync::OnceCell;
 
-use super::{BpInfo, Command};
+use super::{BpInfo, Command, ToastMessage, ToastOrigin};
 
 static BP_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static BP_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
@@ -160,8 +160,16 @@ fn render_breakpoints(
                         let mut g = map.lock().unwrap();
                         let prev = g.get(&bp.id).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < 0.4 {
+                            // Anchor the eventual "not in listing"
+                            // toast just below the address button so
+                            // the popup is visually tied to the click.
+                            let anchor = addr_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
                             if let Ok(mut q) = cmds.lock() {
-                                q.push(Command::UiCenterListingAt(bp.addr));
+                                q.push(Command::UiCenterListingAt {
+                                    addr: bp.addr,
+                                    origin: ToastOrigin::Breakpoints,
+                                    anchor,
+                                });
                             }
                             g.remove(&bp.id);
                         } else {
@@ -232,6 +240,7 @@ pub(super) fn show_breakpoints_viewport(
     ctx: &egui::Context,
     bp_list: Arc<Mutex<Vec<BpInfo>>>,
     cmds: Arc<Mutex<Vec<Command>>>,
+    toast: Arc<Mutex<Option<ToastMessage>>>,
     open: bool,
 ) {
     let id = breakpoints_viewport_id();
@@ -256,11 +265,13 @@ pub(super) fn show_breakpoints_viewport(
     {
         let bp_list_cl = Arc::clone(&bp_list);
         let cmds_cl = Arc::clone(&cmds);
+        let toast_cl = Arc::clone(&toast);
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     render_breakpoints(ui, &bp_list_cl, &cmds_cl);
                 });
+                super::render_toast_for(ctx, &toast_cl, ToastOrigin::Breakpoints);
             }
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -279,10 +290,12 @@ pub(super) fn show_breakpoints_viewport(
         if open {
             let bp_list_cl = Arc::clone(&bp_list);
             let cmds_cl = Arc::clone(&cmds);
+            let toast_cl = Arc::clone(&toast);
             ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     render_breakpoints(ui, &bp_list_cl, &cmds_cl);
                 });
+                super::render_toast_for(ctx, &toast_cl, ToastOrigin::Breakpoints);
                 if ctx.input(|i| i.viewport().close_requested()) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -306,11 +319,13 @@ pub(super) fn show_breakpoints_viewport(
     {
         let bp_list_cl = Arc::clone(&bp_list);
         let cmds_cl = Arc::clone(&cmds);
+        let toast_cl = Arc::clone(&toast);
         ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
             if open {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     render_breakpoints(ui, &bp_list_cl, &cmds_cl);
                 });
+                super::render_toast_for(ctx, &toast_cl, ToastOrigin::Breakpoints);
             }
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
