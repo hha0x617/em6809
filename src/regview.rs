@@ -1196,6 +1196,32 @@ pub mod gui {
 
     impl App for RegApp {
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+            // Heartbeat: ensure the event loop wakes up at least every
+            // 50 ms regardless of input or any auxiliary viewport's
+            // state.  Some Linux compositors (e.g., Mutter on Ubuntu
+            // 24.04 under Parallels) won't send the first frame
+            // callback for an auxiliary deferred viewport that opens
+            // fully occluded behind the main window — without a
+            // wake-up source on the parent, the eframe / winit run
+            // loop blocks waiting for that callback and the WM marks
+            // the app "not responding".  A periodic main repaint keeps
+            // the loop alive and the window manager satisfied.
+            ctx.request_repaint_after(Duration::from_millis(50));
+
+            // [DIAG] Linux freeze investigation: print main update tick.
+            // If the freeze actually occurs, these lines will stop
+            // appearing in stderr during the unresponsive period.
+            #[cfg(target_os = "linux")]
+            {
+                use std::sync::atomic::{AtomicU64, Ordering as AtOrd};
+                static MAIN_UPDATE_TICK: AtomicU64 = AtomicU64::new(0);
+                let n = MAIN_UPDATE_TICK.fetch_add(1, AtOrd::Relaxed);
+                if n % 30 == 0 {
+                    let t = ctx.input(|i| i.time);
+                    eprintln!("[diag main_update] tick={} t={:.3}", n, t);
+                }
+            }
+
             // Initialize color text once if empty (for first render before opening settings)
             if self.gpio_on_color_text.is_empty() {
                 self.gpio_on_color_text = format_color_hex(self.gpio_on_color);

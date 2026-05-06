@@ -22,7 +22,6 @@ static CONSOLE_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
 static CONSOLE_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CONSOLE_CTX: OnceCell<egui::Context> = OnceCell::new();
 static CONSOLE_VIEWPORT_SIZE: OnceCell<Mutex<egui::Vec2>> = OnceCell::new();
-#[cfg(target_os = "windows")]
 static CONSOLE_REPAINT_TICKER: OnceCell<AtomicBool> = OnceCell::new();
 
 pub(crate) fn console_viewport_id() -> egui::ViewportId {
@@ -66,26 +65,52 @@ pub(crate) fn request_console_repaint(ctx_fallback: &egui::Context) {
     }
 }
 
-#[cfg(target_os = "windows")]
+/// Background thread that requests a periodic Console repaint so the
+/// eframe / winit event loop never goes fully idle on a stuck child
+/// viewport.  Originally Windows-only (a separate occlusion-related
+/// quirk there); now also enabled on Linux/macOS because Mutter on
+/// Ubuntu under Parallels was observed to deadlock at startup when
+/// the Console viewport opens fully behind the main window — Wayland
+/// withholds the first frame callback and the run loop blocks.  A
+/// 33 ms heartbeat from a separate thread keeps the loop progressing
+/// regardless of compositor state.
 fn ensure_console_repaint_ticker() {
     let started = CONSOLE_REPAINT_TICKER.get_or_init(|| AtomicBool::new(false));
     if started.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(|| loop {
-        let visible = CONSOLE_VISIBLE
-            .get()
-            .map(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
-            .unwrap_or(false);
-        if visible {
-            if let Some(ctx) = CONSOLE_CTX.get() {
-                let id = console_viewport_id();
-                ctx.request_repaint();
-                ctx.request_repaint_of(id);
-                ctx.request_repaint_after_for(Duration::from_millis(33), id);
+    std::thread::spawn(|| {
+        // [DIAG] Linux freeze investigation: confirm the ticker
+        // thread actually keeps running during a freeze.
+        #[cfg(target_os = "linux")]
+        let mut tick_n: u64 = 0;
+        loop {
+            let visible = CONSOLE_VISIBLE
+                .get()
+                .map(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+                .unwrap_or(false);
+            #[cfg(target_os = "linux")]
+            {
+                if tick_n % 30 == 0 {
+                    eprintln!(
+                        "[diag console_ticker] tick={} visible={} ctx_set={}",
+                        tick_n,
+                        visible,
+                        CONSOLE_CTX.get().is_some()
+                    );
+                }
+                tick_n = tick_n.wrapping_add(1);
             }
+            if visible {
+                if let Some(ctx) = CONSOLE_CTX.get() {
+                    let id = console_viewport_id();
+                    ctx.request_repaint();
+                    ctx.request_repaint_of(id);
+                    ctx.request_repaint_after_for(Duration::from_millis(33), id);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(33));
         }
-        std::thread::sleep(Duration::from_millis(33));
     });
 }
 
@@ -436,11 +461,34 @@ pub(super) fn show_console_viewport(
         .with_visible(cfg.enabled)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
-    #[cfg(target_os = "windows")]
+    // Use `show_viewport_immediate` on Windows + Linux: the closure
+    // runs synchronously inside the parent's update, so there is no
+    // independent surface-ack cycle that can wedge when the Console
+    // window is occluded.  macOS keeps `show_viewport_deferred`
+    // because the focus / canBecomeKeyWindow swizzle (see
+    // `platform/macos.rs`) is engineered around the deferred model
+    // and tested across BP / CS / Console.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
             ensure_console_repaint_ticker();
+            // [DIAG] Linux freeze investigation: count Console
+            // viewport closure invocations.
+            #[cfg(target_os = "linux")]
+            {
+                use std::sync::atomic::{AtomicU64, Ordering as AtOrd};
+                static CLOSURE_TICK: AtomicU64 = AtomicU64::new(0);
+                let n = CLOSURE_TICK.fetch_add(1, AtOrd::Relaxed);
+                if n % 30 == 0 {
+                    let t = ctx.input(|i| i.time);
+                    let focused = ctx.input(|i| i.viewport().focused).unwrap_or(false);
+                    eprintln!(
+                        "[diag console_closure] tick={} t={:.3} focused={}",
+                        n, t, focused
+                    );
+                }
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
             if cfg.enabled {
                 render_console(ctx, &state, &input, &cfg);
@@ -453,8 +501,9 @@ pub(super) fn show_console_viewport(
             }
         });
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
+        ensure_console_repaint_ticker();
         ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
             let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
