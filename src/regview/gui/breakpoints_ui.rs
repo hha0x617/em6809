@@ -167,7 +167,7 @@ fn render_breakpoints(
                             // popup is visually tied to the click and
                             // never gets clipped.
                             let (anchor, pivot) =
-                                toast_anchor_for_button(addr_resp.rect, ui.ctx().screen_rect());
+                                toast_anchor_for_button(addr_resp.rect, ui.ctx().content_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: bp.addr,
@@ -241,6 +241,11 @@ fn render_breakpoints(
 /// renders inline (`show_viewport_immediate`), while on other
 /// platforms it spawns a deferred viewport that survives across
 /// frames (`show_viewport_deferred`).
+// `CentralPanel::show(ctx, ...)` is deprecated; viewport closures only
+// receive `ctx` from `show_viewport_immediate / _deferred`, so migrating
+// to `show_inside(ui, ...)` requires extra Ui plumbing.  See
+// `docs/en/gui_stack.md`.
+#[allow(deprecated)]
 pub(super) fn show_breakpoints_viewport(
     ctx: &egui::Context,
     bp_list: Arc<Mutex<Vec<BpInfo>>>,

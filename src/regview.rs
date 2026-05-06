@@ -1256,8 +1256,8 @@ pub mod gui {
             .show(ctx, |ui| {
                 egui::Frame::default()
                     .fill(egui::Color32::from_black_alpha(220))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .corner_radius(6)
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
                     .show(ui, |ui| {
                         ui.colored_label(egui::Color32::WHITE, &t.text);
@@ -1333,6 +1333,16 @@ pub mod gui {
     }
 
     impl App for RegApp {
+        // eframe 0.34 added `App::ui(&mut Ui, &mut Frame)` as a required
+        // method while keeping `update()` (now deprecated) still called
+        // every frame.  Our entire frame logic lives in `update()`; the
+        // stub satisfies the trait without changing behavior.
+        fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+
+        // `Panel::show(ctx, ...)` is deprecated; the migration to
+        // `App::ui(&mut Ui, ...)` + `Panel::show_inside(ui, ...)` is
+        // intentionally deferred — see `docs/en/gui_stack.md`.
+        #[allow(deprecated)]
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             // Heartbeat: ensure the event loop wakes up at least every
             // 50 ms regardless of input or any auxiliary viewport's
@@ -1662,7 +1672,7 @@ pub mod gui {
                     let mut defs = egui::FontDefinitions::default();
                     defs.font_data.insert(
                         "ja".to_owned(),
-                        egui::FontData::from_owned((**bytes).clone()),
+                        egui::FontData::from_owned((**bytes).clone()).into(),
                     );
                     // Proportional: prefer JP font first so menu/headings render Japanese nicely
                     defs.families
@@ -1766,8 +1776,8 @@ pub mod gui {
             // Windows: simple menu bar with About
             #[cfg(windows)]
             {
-                eframe::egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-                    eframe::egui::menu::bar(ui, |ui| {
+                eframe::egui::Panel::top("menu_bar").show(ctx, |ui| {
+                    eframe::egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
                             if ui.button("Open…").clicked() {
                                 self.paused.store(true, Ordering::SeqCst);
@@ -1789,16 +1799,16 @@ pub mod gui {
                                         self.spawn_image_loader(path, None);
                                     }
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Settings…").clicked() {
                                 self.open_in_app_settings();
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if ui.button("Quit").clicked() {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         ui.menu_button("View", |ui| {
@@ -1810,7 +1820,7 @@ pub mod gui {
                         ui.menu_button("Help", |ui| {
                             if ui.button("About em6809…").clicked() {
                                 self.about_open = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     });
@@ -1854,16 +1864,16 @@ pub mod gui {
                                         self.spawn_image_loader(path, None);
                                     }
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Settings…").clicked() {
                                 open_settings_req = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if ui.button("Quit").clicked() {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         ui.menu_button("View", |ui| {
@@ -1873,7 +1883,7 @@ pub mod gui {
                         ui.menu_button("Help", |ui| {
                             if ui.button("About em6809…").clicked() {
                                 self.about_open = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     });
@@ -1905,16 +1915,16 @@ pub mod gui {
                                             self.spawn_image_loader(path, None);
                                         }
                                     }
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button("Settings…").clicked() {
                                     self.open_in_app_settings();
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 ui.separator();
                                 if ui.button("Quit").clicked() {
                                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
                             ui.menu_button("View", |ui| {
@@ -1924,7 +1934,7 @@ pub mod gui {
                             ui.menu_button("Help", |ui| {
                                 if ui.button("About em6809…").clicked() {
                                     self.about_open = true;
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
                         });

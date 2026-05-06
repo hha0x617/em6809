@@ -12,14 +12,14 @@ where
             eframe::egui::Frame::default()
                 .fill(ctx.style().visuals.panel_fill)
                 .inner_margin(egui::Margin {
-                    left: 8.0,
-                    right: 8.0,
-                    top: 6.0,
-                    bottom: 6.0,
+                    left: 8,
+                    right: 8,
+                    top: 6,
+                    bottom: 6,
                 }),
         )
         .show(ctx, |ui| {
-            eframe::egui::menu::bar(ui, |ui| {
+            eframe::egui::MenuBar::new().ui(ui, |ui| {
                 // Left: small icon + title（タイトルは選択不可・描画のみ）
                 let desired = egui::vec2(18.0, 18.0);
                 let (icon_rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
@@ -140,10 +140,10 @@ pub fn show_settings_header(ctx: &egui::Context, title: &str) {
             eframe::egui::Frame::default()
                 .fill(ctx.style().visuals.panel_fill)
                 .inner_margin(egui::Margin {
-                    left: 8.0,
-                    right: 8.0,
-                    top: 6.0,
-                    bottom: 6.0,
+                    left: 8,
+                    right: 8,
+                    top: 6,
+                    bottom: 6,
                 }),
         )
         .show(ctx, |ui| {

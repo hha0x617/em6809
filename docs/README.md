@@ -10,6 +10,7 @@ This project maintains English as the primary documentation. Japanese docs are p
   - OS‑9/NitrOS‑9: `en/os9_guide.md`
   - Troubleshooting: `en/troubleshooting.md`
   - Instruction coverage: `en/instruction_status.md`
+  - GUI stack notes (eframe / egui, deferred migrations): `en/gui_stack.md`
 
 - Japanese (companion)
   - 使用方法: `ja/usage.md`
@@ -20,6 +21,7 @@ This project maintains English as the primary documentation. Japanese docs are p
   - トラブルシューティング: `ja/troubleshooting.md`
   - 命令カバレッジ: `ja/instruction_status.md`
   - メモリ編集 UI 設計（設計メモ）: `ja/memory_edit_ui.md`
+  - GUI スタックメモ（eframe / egui、先送りした移行）: `ja/gui_stack.md`
 
 ## Project TODOs
 

@@ -113,11 +113,11 @@ pub(crate) fn poke_console_viewport(ctx: &egui::Context) {
 
 fn measure_char_size(ctx: &egui::Context, font_size: f32) -> egui::Vec2 {
     let font_id = egui::FontId::monospace(font_size);
-    let size = ctx.fonts(|f| {
+    let size = ctx.fonts_mut(|f| {
         f.layout_no_wrap("M".to_string(), font_id.clone(), egui::Color32::WHITE)
             .size()
     });
-    let row_height = ctx.fonts(|f| f.row_height(&font_id));
+    let row_height = ctx.fonts_mut(|f| f.row_height(&font_id));
     egui::vec2(size.x, row_height.max(size.y))
 }
 
@@ -248,6 +248,9 @@ fn collect_input(ctx: &egui::Context, ctrl_keys: bool) -> Vec<u8> {
     out
 }
 
+// `CentralPanel::show(ctx, ...)` is deprecated; see
+// `docs/en/gui_stack.md`.
+#[allow(deprecated)]
 fn render_console(
     ctx: &egui::Context,
     state: &Arc<Mutex<ConsoleState>>,
@@ -260,7 +263,7 @@ fn render_console(
     let char_size = measure_char_size(ctx, cfg.font_size);
     let bytes = em6809::io::take_console_gui_bytes();
     egui::CentralPanel::default()
-        .frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)))
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(0)))
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
             ui.painter().rect_filled(ui.max_rect(), 0.0, default_bg);
@@ -285,7 +288,7 @@ fn render_console(
                     .map(|p| ui.max_rect().contains(p))
                     .unwrap_or(false);
                 let user_scrolling_now = ctx.input(|i| {
-                    i.raw_scroll_delta.y != 0.0 || (hover_in_console && i.pointer.primary_down())
+                    i.smooth_scroll_delta.y != 0.0 || (hover_in_console && i.pointer.primary_down())
                 });
                 let output = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -417,6 +420,11 @@ fn render_console(
     ctx.request_repaint_after(Duration::from_millis(33));
 }
 
+// `CentralPanel::show(ctx, ...)` is deprecated; the viewport closure
+// only receives `ctx` from `show_viewport_immediate / _deferred`, so
+// migrating to `show_inside(ui, ...)` requires extra Ui plumbing.
+// See `docs/en/gui_stack.md`.
+#[allow(deprecated)]
 pub(super) fn show_console_viewport(
     ctx: &egui::Context,
     state: Arc<Mutex<ConsoleState>>,

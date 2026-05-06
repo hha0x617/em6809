@@ -98,7 +98,7 @@ pub fn draw_origin_badge(
     if !settings_origin_badges_enabled() {
         return;
     }
-    use egui::{Color32, Rounding, Stroke, TextStyle, Vec2};
+    use egui::{Color32, CornerRadius, Stroke, TextStyle, Vec2};
     let (label, bg) = match origins.get(key).copied().unwrap_or(0) {
         2 => ("CLI", Color32::from_rgb(220, 80, 60)),
         1 => ("Saved", Color32::from_rgb(70, 130, 200)),
@@ -113,12 +113,17 @@ pub fn draw_origin_badge(
     );
     let size = galley.size() + padding * 2.0;
     let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, Rounding::same(6.0), bg);
+    ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
     let border = Stroke {
         width: 1.0,
         color: bg.gamma_multiply(0.8),
     };
-    ui.painter().rect_stroke(rect, Rounding::same(6.0), border);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(6),
+        border,
+        egui::StrokeKind::Inside,
+    );
     ui.painter()
         .galley(rect.left_top() + padding, galley, egui::Color32::WHITE);
 }

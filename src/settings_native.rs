@@ -91,6 +91,9 @@ impl SettingsNativeApp {
 }
 
 impl SettingsNativeApp {
+    // `CentralPanel::show(ctx, ...)` is deprecated; see
+    // `docs/en/gui_stack.md` for the deferred App::ui-based migration.
+    #[allow(deprecated)]
     fn draw(&mut self, ctx: &egui::Context) {
         // Mark that at least one frame of the native Settings viewport rendered
         #[cfg_attr(not(windows), allow(dead_code))]
@@ -109,8 +112,8 @@ impl SettingsNativeApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(ctx.style().visuals.window_fill())
-                    .inner_margin(egui::Margin::same(6.0)),
+                    .fill(ctx.global_style().visuals.window_fill())
+                    .inner_margin(egui::Margin::same(6)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -707,6 +710,11 @@ impl eframe::App for SettingsNativeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.draw(ctx);
     }
+    // eframe 0.34 added `App::ui(&mut Ui, &mut Frame)` as a required
+    // method while keeping `update()` (now deprecated) still called
+    // every frame.  Our app runs entirely in `update()`; the stub
+    // satisfies the trait without changing behavior.
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 }
 
 fn request_worker_close(instance_id: u64, reason: CloseReason) {
