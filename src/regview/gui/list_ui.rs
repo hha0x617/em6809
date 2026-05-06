@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 use i18n_embed_fl::fl;
 
-use super::{BpUiState, Command, RegApp, LOADER};
+use super::{BpUiState, Command, RegApp, ToastMessage, ToastOrigin, LOADER};
 
 /// Look up `addr` in the BP-state snapshot. The slice is small in
 /// practice (a handful of breakpoints), so a linear scan is cheaper
@@ -124,7 +124,13 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             // CS double-click handlers (see
                             // `Command::UiCenterListingAt`).  Takes
                             // priority over follow-PC for this paint.
+                            // `(addr, toast_origin, toast_anchor,
+                            // toast_pivot)` so a miss can fire a
+                            // toast in the source viewport.  Only the
+                            // address is used for the actual scroll
+                            // lookup.
                             let pending_center = app.pending_listing_center;
+                            let pending_center_addr = pending_center.map(|(a, _, _, _)| a);
                             let text_style = egui::TextStyle::Monospace;
                             let row_height = ui.text_style_height(&text_style);
                             let row_height_with_spacing = row_height + ui.spacing().item_spacing.y;
@@ -132,6 +138,20 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             let mut pc_line_index: Option<usize> = None;
                             let mut highlight_rect: Option<egui::Rect> = None;
                             let mut inner_rect: Option<egui::Rect> = None;
+                            // Set if `pending_center` was Some but the
+                            // address could not be found anywhere in
+                            // the loaded listing.  Drives the
+                            // "Address $XXXX not in listing" toast.
+                            // Carries the origin viewport + anchor +
+                            // pivot forwarded from the BP / CS click
+                            // so the toast renders next to the source
+                            // button on the appropriate side.
+                            let mut center_miss: Option<(
+                                u16,
+                                ToastOrigin,
+                                egui::Pos2,
+                                egui::Align2,
+                            )> = None;
 
                             // Snapshot the BP-state list once; each
                             // render_listing_lines call below borrows it.
@@ -172,9 +192,19 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         // feedback on the button) and
                                         // the address is shown in the
                                         // panel they clicked.
-                                        let pending_center_idx = pending_center.and_then(|a| {
-                                            find_pc_line_index(&s, &app.hex_cache.line_offsets, a)
-                                        });
+                                        let pending_center_idx =
+                                            pending_center_addr.and_then(|a| {
+                                                find_pc_line_index(
+                                                    &s,
+                                                    &app.hex_cache.line_offsets,
+                                                    a,
+                                                )
+                                            });
+                                        if let (Some((addr, origin, anchor, pivot)), None) =
+                                            (pending_center, pending_center_idx)
+                                        {
+                                            center_miss = Some((addr, origin, anchor, pivot));
+                                        }
                                         let scroll_target =
                                             pending_center_idx.or(if follow_pc && need_scroll {
                                                 pc_line_index
@@ -238,9 +268,14 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                                     // for the rationale on silent skip
                                     // when the address isn't in the
                                     // listing.
-                                    let pending_center_idx = pending_center.and_then(|a| {
+                                    let pending_center_idx = pending_center_addr.and_then(|a| {
                                         find_pc_line_index(text, &app.lst_cache.line_offsets, a)
                                     });
+                                    if let (Some((addr, origin, anchor, pivot)), None) =
+                                        (pending_center, pending_center_idx)
+                                    {
+                                        center_miss = Some((addr, origin, anchor, pivot));
+                                    }
                                     let scroll_target =
                                         pending_center_idx.or(if follow_pc && need_scroll {
                                             pc_line_index
@@ -282,6 +317,25 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
                             // every frame would just spin.
                             if pending_center.is_some() {
                                 app.pending_listing_center = None;
+                            }
+                            // If the recentre target wasn't found, raise
+                            // a toast so the user knows the click
+                            // registered but had nowhere to land.  The
+                            // toast renders inside whichever viewport
+                            // raised the request (BP / CS / Main) so
+                            // the popup appears next to the button the
+                            // user clicked.
+                            if let Some((addr, origin, anchor, pivot)) = center_miss {
+                                if let Ok(mut g) = app.toast.lock() {
+                                    *g = Some(ToastMessage {
+                                        text: format!("Address ${:04X} not in listing", addr),
+                                        deadline: std::time::Instant::now()
+                                            + std::time::Duration::from_secs(3),
+                                        origin,
+                                        anchor,
+                                        pivot,
+                                    });
+                                }
                             }
                             // `inner_rect` and `row_height_with_spacing` are
                             // no longer used after the move; silence dead-code
