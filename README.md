@@ -7,7 +7,7 @@
 
 ## Overview
 
-em6809 is a software emulator for the MC6809. It provides a GUI with register/memory views, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. It can be used to boot and validate OS‑9/NitrOS‑9 setups.
+em6809 is a software emulator for the MC6809. It provides a GUI with register/memory views, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. Booting OS‑9 / NitrOS‑9 is a long‑term goal but is **not yet supported** — several core pieces still need to land before the kernel reaches a usable state. See `docs/en/os9_guide.md` for the current status and remaining work.
 
 ## Install
 
@@ -122,6 +122,20 @@ here.
 
 - Development/Operations: `AGENTS.md`
 - Code of Conduct/Security: `CODE_OF_CONDUCT.md` / `SECURITY.md` (if present)
+
+## Trademarks
+
+*OS‑9* is a trademark of Microware Systems Corporation.  *NitrOS‑9*
+is an independent open‑source operating system in the OS‑9 family.
+This project (em6809) is not affiliated with, endorsed by, or
+sponsored by Microware Systems Corporation, RadiSys Corporation, or
+the NitrOS‑9 project.  References to OS‑9 / NitrOS‑9 in this
+documentation are descriptive only — em6809 is a CPU emulator that
+*aspires* to host OS‑9‑family kernels in the future, but does not
+claim compatibility, certification, or endorsement.
+
+All other product names, trademarks and registered trademarks
+referenced are the property of their respective owners.
 
 ## License
 
