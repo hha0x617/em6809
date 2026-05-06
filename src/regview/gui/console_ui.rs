@@ -22,7 +22,6 @@ static CONSOLE_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
 static CONSOLE_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CONSOLE_CTX: OnceCell<egui::Context> = OnceCell::new();
 static CONSOLE_VIEWPORT_SIZE: OnceCell<Mutex<egui::Vec2>> = OnceCell::new();
-#[cfg(target_os = "windows")]
 static CONSOLE_REPAINT_TICKER: OnceCell<AtomicBool> = OnceCell::new();
 
 pub(crate) fn console_viewport_id() -> egui::ViewportId {
@@ -66,7 +65,15 @@ pub(crate) fn request_console_repaint(ctx_fallback: &egui::Context) {
     }
 }
 
-#[cfg(target_os = "windows")]
+/// Background thread that requests a periodic Console repaint so the
+/// eframe / winit event loop never goes fully idle on a stuck child
+/// viewport.  Originally Windows-only (a separate occlusion-related
+/// quirk there); now also enabled on Linux/macOS because Mutter on
+/// Ubuntu under Parallels was observed to deadlock at startup when
+/// the Console viewport opens fully behind the main window — Wayland
+/// withholds the first frame callback and the run loop blocks.  A
+/// 33 ms heartbeat from a separate thread keeps the loop progressing
+/// regardless of compositor state.
 fn ensure_console_repaint_ticker() {
     let started = CONSOLE_REPAINT_TICKER.get_or_init(|| AtomicBool::new(false));
     if started.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -455,6 +462,7 @@ pub(super) fn show_console_viewport(
     }
     #[cfg(not(target_os = "windows"))]
     {
+        ensure_console_repaint_ticker();
         ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
             let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(cfg.title.clone()));
