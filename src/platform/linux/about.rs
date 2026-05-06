@@ -30,6 +30,7 @@ fn load_icon_png(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle>
                 }
                 let color_img = egui::ColorImage {
                     size: [w, h],
+                    source_size: egui::vec2(w as f32, h as f32),
                     pixels,
                 };
                 let tex = ctx.load_texture(

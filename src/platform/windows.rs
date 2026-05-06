@@ -94,6 +94,7 @@ pub fn ensure_about_icon(ctx: &egui::Context, tex_slot: &mut Option<egui::Textur
         if ok {
             let img = egui::ColorImage {
                 size: [size as usize, size as usize],
+                source_size: egui::vec2(size as f32, size as f32),
                 pixels,
             };
             let tex = ctx.load_texture(
