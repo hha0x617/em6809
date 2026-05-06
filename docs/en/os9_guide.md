@@ -1,5 +1,17 @@
 # OS‑9 / NitrOS‑9 Integration Guide
 
+> **⚠️ Status: not yet bootable.**
+> Booting OS‑9 / NitrOS‑9 on em6809 is an **aspirational goal**, not a
+> currently supported feature.  Several pieces are still missing — for
+> example a working disk image / mass‑storage controller surface for
+> the OS‑9 device tree, hardware vector wiring sufficient for the
+> kernel's cooperative multitasking, and a tested boot script /
+> module‑load path.
+>
+> The steps below describe the **intended** end‑state workflow once
+> these pieces land.  Treat the document as a roadmap rather than a
+> tutorial; commands shown will not run a real NitrOS‑9 kernel today.
+
 Typical steps and commands to boot/verify NitrOS‑9/OS‑9 on the emulator. Adjust module layout and entry to match your distribution/environment.
 
 ## Preparation

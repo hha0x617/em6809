@@ -7,7 +7,7 @@
 
 ## Overview
 
-em6809 is a software emulator for the MC6809. It provides a GUI with register/memory views, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. It can be used to boot and validate OS‑9/NitrOS‑9 setups.
+em6809 is a software emulator for the MC6809. It provides a GUI with register/memory views, rich console I/O controls, instruction tracing with resolved branch targets, and a disassembler. Booting OS‑9 / NitrOS‑9 is a long‑term goal but is **not yet supported** — several core pieces still need to land before the kernel reaches a usable state. See `docs/en/os9_guide.md` for the current status and remaining work.
 
 ## Install
 
