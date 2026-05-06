@@ -241,6 +241,11 @@ fn render_breakpoints(
 /// renders inline (`show_viewport_immediate`), while on other
 /// platforms it spawns a deferred viewport that survives across
 /// frames (`show_viewport_deferred`).
+// `CentralPanel::show(ctx, ...)` is deprecated; viewport closures only
+// receive `ctx` from `show_viewport_immediate / _deferred`, so migrating
+// to `show_inside(ui, ...)` requires extra Ui plumbing.  See
+// `memory/em6809_app_ui_migration_todo.md`.
+#[allow(deprecated)]
 pub(super) fn show_breakpoints_viewport(
     ctx: &egui::Context,
     bp_list: Arc<Mutex<Vec<BpInfo>>>,

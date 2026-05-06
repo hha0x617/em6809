@@ -248,6 +248,9 @@ fn collect_input(ctx: &egui::Context, ctrl_keys: bool) -> Vec<u8> {
     out
 }
 
+// `CentralPanel::show(ctx, ...)` is deprecated; see
+// `memory/em6809_app_ui_migration_todo.md`.
+#[allow(deprecated)]
 fn render_console(
     ctx: &egui::Context,
     state: &Arc<Mutex<ConsoleState>>,
@@ -417,6 +420,11 @@ fn render_console(
     ctx.request_repaint_after(Duration::from_millis(33));
 }
 
+// `CentralPanel::show(ctx, ...)` is deprecated; the viewport closure
+// only receives `ctx` from `show_viewport_immediate / _deferred`, so
+// migrating to `show_inside(ui, ...)` requires extra Ui plumbing.
+// See `memory/em6809_app_ui_migration_todo.md`.
+#[allow(deprecated)]
 pub(super) fn show_console_viewport(
     ctx: &egui::Context,
     state: Arc<Mutex<ConsoleState>>,

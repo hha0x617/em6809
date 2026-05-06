@@ -225,6 +225,11 @@ fn render_call_stack(
         });
 }
 
+// `CentralPanel::show(ctx, ...)` is deprecated; viewport closures only
+// receive `ctx` from `show_viewport_immediate / _deferred`, so migrating
+// to `show_inside(ui, ...)` requires extra Ui plumbing.  See
+// `memory/em6809_app_ui_migration_todo.md`.
+#[allow(deprecated)]
 pub(super) fn show_call_stack_viewport(
     ctx: &egui::Context,
     call_stack: Arc<Mutex<Vec<CallFrameInfo>>>,

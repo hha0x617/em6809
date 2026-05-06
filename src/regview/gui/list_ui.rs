@@ -28,6 +28,9 @@ fn bp_marker_glyph(s: Option<BpUiState>) -> &'static str {
     }
 }
 
+// `Panel::show(ctx, ...)` is deprecated; see comment on
+// `render_regs_panel` (regs_ui.rs) for the deferred-migration note.
+#[allow(deprecated)]
 pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
     if app.lst_mmap.is_none() && app.lst_text.is_none() {
         return;

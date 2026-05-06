@@ -1339,6 +1339,11 @@ pub mod gui {
         // stub satisfies the trait without changing behavior.
         fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
+        // `Panel::show(ctx, ...)` is deprecated; the migration to
+        // `App::ui(&mut Ui, ...)` + `Panel::show_inside(ui, ...)` is
+        // intentionally deferred — see
+        // `memory/em6809_app_ui_migration_todo.md`.
+        #[allow(deprecated)]
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             // Heartbeat: ensure the event loop wakes up at least every
             // 50 ms regardless of input or any auxiliary viewport's

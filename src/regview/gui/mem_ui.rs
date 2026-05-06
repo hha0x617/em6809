@@ -5,6 +5,9 @@ use super::{
     format_memory_dump, parse_num_u16_any_gui, parse_num_usize_any_gui, Command, RegApp, LOADER,
 };
 
+// `Panel::show(ctx, ...)` is deprecated; see `regs_ui::render_regs_panel`
+// for the deferred-migration note.
+#[allow(deprecated)]
 pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
     egui::Panel::right("mem_panel")
         .resizable(false)
