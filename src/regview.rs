@@ -1662,7 +1662,7 @@ pub mod gui {
                     let mut defs = egui::FontDefinitions::default();
                     defs.font_data.insert(
                         "ja".to_owned(),
-                        egui::FontData::from_owned((**bytes).clone()),
+                        egui::FontData::from_owned((**bytes).clone()).into(),
                     );
                     // Proportional: prefer JP font first so menu/headings render Japanese nicely
                     defs.families
