@@ -3,7 +3,7 @@
 ## Project Structure
 - `src/`: Rust sources (`cpu.rs`, `bus.rs`, `io.rs`, `disasm.rs`, `main.rs`, etc.)
 - `samples/`: Example programs and traces (e.g., `samples/traces/trace_all.asm`)
-- `docs/`: Documentation (e.g., `docs/instruction_status.md`)
+- `docs/`: Documentation (English under `docs/en/`, Japanese companion under `docs/ja/`; project-internal design notes live at the `docs/` root)
 - `tests/`: Rust tests
 
 ## Build, Run, Format
