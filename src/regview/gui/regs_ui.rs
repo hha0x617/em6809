@@ -204,7 +204,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                             );
                             ui.painter().rect_stroke(
                                 rect,
-                                egui::Rounding::same(0),
+                                egui::CornerRadius::same(0),
                                 stroke,
                                 egui::StrokeKind::Inside,
                             );
@@ -218,7 +218,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                             );
                             ui.painter().rect_stroke(
                                 rect,
-                                egui::Rounding::same(0),
+                                egui::CornerRadius::same(0),
                                 stroke,
                                 egui::StrokeKind::Inside,
                             );
@@ -238,7 +238,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         );
                                         ui.painter().rect_stroke(
                                             rect,
-                                            egui::Rounding::same(0),
+                                            egui::CornerRadius::same(0),
                                             stroke,
                                             egui::StrokeKind::Inside,
                                         );
@@ -259,7 +259,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                         );
                                         ui.painter().rect_stroke(
                                             rect,
-                                            egui::Rounding::same(0),
+                                            egui::CornerRadius::same(0),
                                             stroke,
                                             egui::StrokeKind::Inside,
                                         );
@@ -286,7 +286,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                 );
                                 ui.painter().rect_stroke(
                                     rect,
-                                    egui::Rounding::same(0),
+                                    egui::CornerRadius::same(0),
                                     stroke,
                                     egui::StrokeKind::Inside,
                                 );
@@ -334,7 +334,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                 );
                                 ui.painter().rect_stroke(
                                     rect,
-                                    egui::Rounding::same(0),
+                                    egui::CornerRadius::same(0),
                                     stroke,
                                     egui::StrokeKind::Inside,
                                 );
@@ -702,7 +702,7 @@ pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
                                                 ui.visuals().widgets.noninteractive.bg_stroke.color;
                                             ui.painter().rect_stroke(
                                                 resp.rect.expand(2.0),
-                                                egui::Rounding::same(6),
+                                                egui::CornerRadius::same(6),
                                                 egui::Stroke::new(1.0, stroke_col),
                                                 egui::StrokeKind::Inside,
                                             );

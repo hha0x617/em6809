@@ -142,7 +142,7 @@ fn render_call_stack(
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
                             let (anchor, pivot) =
-                                toast_anchor_for_button(call_resp.rect, ui.ctx().screen_rect());
+                                toast_anchor_for_button(call_resp.rect, ui.ctx().content_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: frame.call_site,
@@ -172,7 +172,7 @@ fn render_call_stack(
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
                             let (anchor, pivot) =
-                                toast_anchor_for_button(target_resp.rect, ui.ctx().screen_rect());
+                                toast_anchor_for_button(target_resp.rect, ui.ctx().content_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: frame.target,
@@ -200,7 +200,7 @@ fn render_call_stack(
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
                             let (anchor, pivot) =
-                                toast_anchor_for_button(ret_resp.rect, ui.ctx().screen_rect());
+                                toast_anchor_for_button(ret_resp.rect, ui.ctx().content_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: frame.return_addr,

@@ -109,7 +109,7 @@ impl SettingsNativeApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(ctx.style().visuals.window_fill())
+                    .fill(ctx.global_style().visuals.window_fill())
                     .inner_margin(egui::Margin::same(6)),
             )
             .show(ctx, |ui| {

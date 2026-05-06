@@ -6,10 +6,10 @@ use super::{
 };
 
 pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
-    egui::SidePanel::right("mem_panel")
+    egui::Panel::right("mem_panel")
         .resizable(false)
-        .min_width(440.0)
-        .default_width(440.0)
+        .min_size(440.0)
+        .default_size(440.0)
         .show(ctx, |ui| {
             let mut follow_pc = app.mem_follow_pc.load(std::sync::atomic::Ordering::SeqCst);
             let _win_len = app.mem_window_len.load(std::sync::atomic::Ordering::SeqCst);
@@ -477,7 +477,7 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             rect.min.y -= 1.0;
                                             ui.painter().rect_filled(
                                                 rect,
-                                                egui::Rounding::same(0),
+                                                egui::CornerRadius::same(0),
                                                 egui::Color32::from_rgb(255, 60, 60),
                                             );
                                             ui.painter().text(
@@ -537,7 +537,7 @@ pub(super) fn render_memory_panel(app: &mut RegApp, ctx: &egui::Context) {
                                             );
                                             ui.painter().rect_filled(
                                                 r,
-                                                egui::Rounding::same(0),
+                                                egui::CornerRadius::same(0),
                                                 egui::Color32::from_rgb(255, 60, 60),
                                             );
                                             // Re-draw character in black for contrast

@@ -33,10 +33,10 @@ pub(super) fn render_listing_panel(app: &mut RegApp, ctx: &egui::Context) {
         return;
     }
 
-    egui::SidePanel::right("lst_panel")
+    egui::Panel::right("lst_panel")
         .resizable(false)
-        .min_width(400.0)
-        .default_width(600.0)
+        .min_size(400.0)
+        .default_size(600.0)
         .show(ctx, |ui| {
             egui::ScrollArea::horizontal()
                 .auto_shrink([false, true])
@@ -491,22 +491,22 @@ fn render_listing_lines(
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::CycleBreakpointAtAddr(addr));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button(label_run_until).clicked() {
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::RunUntil(addr));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button(label_set_pc).clicked() {
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::SetPc(addr));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button(label_cancel).clicked() {
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     }
@@ -527,22 +527,22 @@ fn render_listing_lines(
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::CycleBreakpointAtAddr(addr));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button(label_run_until).clicked() {
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::RunUntil(addr));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button(label_set_pc).clicked() {
                                 if let Ok(mut q) = cmds.lock() {
                                     q.push(Command::SetPc(addr));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button(label_cancel).clicked() {
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     }
@@ -550,10 +550,10 @@ fn render_listing_lines(
                         let fill = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 40);
                         let stroke_col = ui.visuals().widgets.hovered.fg_stroke.color;
                         ui.painter()
-                            .rect_filled(resp.rect, egui::Rounding::same(0), fill);
+                            .rect_filled(resp.rect, egui::CornerRadius::same(0), fill);
                         ui.painter().rect_stroke(
                             resp.rect,
-                            egui::Rounding::same(0),
+                            egui::CornerRadius::same(0),
                             egui::Stroke::new(1.0, stroke_col),
                             egui::StrokeKind::Inside,
                         );

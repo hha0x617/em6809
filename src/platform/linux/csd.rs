@@ -19,7 +19,7 @@ where
                 }),
         )
         .show(ctx, |ui| {
-            eframe::egui::menu::bar(ui, |ui| {
+            eframe::egui::MenuBar::new().ui(ui, |ui| {
                 // Left: small icon + title（タイトルは選択不可・描画のみ）
                 let desired = egui::vec2(18.0, 18.0);
                 let (icon_rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());

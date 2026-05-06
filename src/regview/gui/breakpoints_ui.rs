@@ -167,7 +167,7 @@ fn render_breakpoints(
                             // popup is visually tied to the click and
                             // never gets clipped.
                             let (anchor, pivot) =
-                                toast_anchor_for_button(addr_resp.rect, ui.ctx().screen_rect());
+                                toast_anchor_for_button(addr_resp.rect, ui.ctx().content_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: bp.addr,

@@ -260,7 +260,7 @@ fn render_console(
     let char_size = measure_char_size(ctx, cfg.font_size);
     let bytes = em6809::io::take_console_gui_bytes();
     egui::CentralPanel::default()
-        .frame(egui::Frame::none().inner_margin(egui::Margin::same(0)))
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(0)))
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
             ui.painter().rect_filled(ui.max_rect(), 0.0, default_bg);

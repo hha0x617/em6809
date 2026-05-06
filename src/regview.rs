@@ -1256,7 +1256,7 @@ pub mod gui {
             .show(ctx, |ui| {
                 egui::Frame::default()
                     .fill(egui::Color32::from_black_alpha(220))
-                    .rounding(6)
+                    .corner_radius(6)
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
                     .show(ui, |ui| {
@@ -1772,8 +1772,8 @@ pub mod gui {
             // Windows: simple menu bar with About
             #[cfg(windows)]
             {
-                eframe::egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-                    eframe::egui::menu::bar(ui, |ui| {
+                eframe::egui::Panel::top("menu_bar").show(ctx, |ui| {
+                    eframe::egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
                             if ui.button("Open…").clicked() {
                                 self.paused.store(true, Ordering::SeqCst);
@@ -1795,16 +1795,16 @@ pub mod gui {
                                         self.spawn_image_loader(path, None);
                                     }
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Settings…").clicked() {
                                 self.open_in_app_settings();
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if ui.button("Quit").clicked() {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         ui.menu_button("View", |ui| {
@@ -1816,7 +1816,7 @@ pub mod gui {
                         ui.menu_button("Help", |ui| {
                             if ui.button("About em6809…").clicked() {
                                 self.about_open = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     });
@@ -1860,16 +1860,16 @@ pub mod gui {
                                         self.spawn_image_loader(path, None);
                                     }
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Settings…").clicked() {
                                 open_settings_req = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if ui.button("Quit").clicked() {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         ui.menu_button("View", |ui| {
@@ -1879,7 +1879,7 @@ pub mod gui {
                         ui.menu_button("Help", |ui| {
                             if ui.button("About em6809…").clicked() {
                                 self.about_open = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     });
@@ -1911,16 +1911,16 @@ pub mod gui {
                                             self.spawn_image_loader(path, None);
                                         }
                                     }
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui.button("Settings…").clicked() {
                                     self.open_in_app_settings();
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 ui.separator();
                                 if ui.button("Quit").clicked() {
                                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
                             ui.menu_button("View", |ui| {
@@ -1930,7 +1930,7 @@ pub mod gui {
                             ui.menu_button("Help", |ui| {
                                 if ui.button("About em6809…").clicked() {
                                     self.about_open = true;
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
                         });
