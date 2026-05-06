@@ -443,7 +443,14 @@ pub(super) fn show_console_viewport(
         .with_visible(cfg.enabled)
         .with_window_level(egui::WindowLevel::Normal)
         .with_resizable(true);
-    #[cfg(target_os = "windows")]
+    // Use `show_viewport_immediate` on Windows + Linux: the closure
+    // runs synchronously inside the parent's update, so there is no
+    // independent surface-ack cycle that can wedge when the Console
+    // window is occluded.  macOS keeps `show_viewport_deferred`
+    // because the focus / canBecomeKeyWindow swizzle (see
+    // `platform/macos.rs`) is engineered around the deferred model
+    // and tested across BP / CS / Console.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         ctx.show_viewport_immediate(id, builder, move |ctx, _class| {
             let _ = CONSOLE_CTX.get_or_init(|| ctx.clone());
@@ -460,7 +467,7 @@ pub(super) fn show_console_viewport(
             }
         });
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         ensure_console_repaint_ticker();
         ctx.show_viewport_deferred(id, builder, move |ctx, _class| {
