@@ -707,6 +707,11 @@ impl eframe::App for SettingsNativeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.draw(ctx);
     }
+    // eframe 0.34 added `App::ui(&mut Ui, &mut Frame)` as a required
+    // method while keeping `update()` (now deprecated) still called
+    // every frame.  Our app runs entirely in `update()`; the stub
+    // satisfies the trait without changing behavior.
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 }
 
 fn request_worker_close(instance_id: u64, reason: CloseReason) {

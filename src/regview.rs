@@ -1333,6 +1333,12 @@ pub mod gui {
     }
 
     impl App for RegApp {
+        // eframe 0.34 added `App::ui(&mut Ui, &mut Frame)` as a required
+        // method while keeping `update()` (now deprecated) still called
+        // every frame.  Our entire frame logic lives in `update()`; the
+        // stub satisfies the trait without changing behavior.
+        fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             // Heartbeat: ensure the event loop wakes up at least every
             // 50 ms regardless of input or any auxiliary viewport's

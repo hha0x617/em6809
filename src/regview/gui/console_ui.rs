@@ -285,7 +285,7 @@ fn render_console(
                     .map(|p| ui.max_rect().contains(p))
                     .unwrap_or(false);
                 let user_scrolling_now = ctx.input(|i| {
-                    i.raw_scroll_delta.y != 0.0 || (hover_in_console && i.pointer.primary_down())
+                    i.smooth_scroll_delta.y != 0.0 || (hover_in_console && i.pointer.primary_down())
                 });
                 let output = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
