@@ -58,6 +58,54 @@ em6809 は MC6809 のソフトウェアエミュレータです。GUI を中心�
 - 6809 コミュニティリソース: http://www.6809.org.uk/
 - LWTOOLS: https://www.lwtools.ca/
 
+## 既知の問題
+
+### Linux + Wayland (Ubuntu Desktop / Mutter コンポジタ)
+
+GUI は [eframe / egui](https://github.com/emilk/egui) の multi-viewport
+を使い、Breakpoints / Call Stack / Console を別トップレベルウィンドウ
+として描画しています。Wayland 環境 (特に Ubuntu Desktop 24.04 LTS の
+Mutter — macOS ホスト上の Parallels VM で確認) では、**Console
+ウィンドウがメインウィンドウの背面に完全に隠れた瞬間にアプリケーションが
+フリーズする** 不具合があります。例えば、メインウィンドウのメニューを
+クリックした時や、メインウィンドウを Console に重なる位置までドラッグ
+した時に発生します。
+
+数秒後にウィンドウマネージャが *「em6809 が応答していません」* ダイアログ
+を表示します。`Ctrl+C` でも終了できないことがあり、確実に終了するには
+メインウィンドウの `[X]` ボタンを使う必要があります。
+
+これは `eframe` + `winit` の Wayland 上流の制限です。eframe
+0.29 / 0.30 / 0.31 / 0.32 で検証しましたが、いずれのリリース版でも未
+修正です。本リポジトリは部分的な緩和策 (parent context への 50 ms
+heartbeat repaint、33 ms 周期の Console repaint ticker、Linux での
+Console viewport の `show_viewport_immediate` 化) を含んでおり、起動時
+に Console が背面に作られて発生する deadlock は回避できますが、ユーザ
+操作で後から Console が背面化した場合の freeze は解消できていません。
+
+対処法:
+
+* Linux は **X11** で起動する (GNOME ログイン画面で「Ubuntu on Xorg」を選択)。
+* または Console ウィンドウを必ず一部でも見える位置に配置する — メイン
+  ウィンドウの真後ろに置かない。
+* または Windows / macOS でビルド・実行する。これらの環境では multi-
+  viewport は問題なく動作します。
+
+### プロジェクトの方向性
+
+当面の間、本リポジトリでのマルチプラットフォーム対応開発は**停止**します。
+アクティブな開発は、Windows に特化した新プロジェクト **emfe** (プラグ
+イン式エミュレータフレームワーク) に移行します。emfe では本 `em6809` を
+コアバックエンドとして**プラグイン**で利用しつつ、フロントエンド UI を
+Windows ネイティブのスタック (WinUI 3 / WPF) で再構築するため、Wayland
+multi-viewport 系の問題を構造的に回避できます。
+
+本リポジトリは引き続き Windows / macOS / Linux (ネイティブ X11) で
+ビルド・実行可能で、emfe がロードする MC6809 コアの正規 Rust 実装と
+して維持されます。CPU コア・デバッガバックエンド・プラットフォーム非
+依存部分の Pull Request は歓迎しますが、eframe フロントエンド固有の新規
+GUI 機能の追加は本リポジトリでは予定していません。
+
 ## 貢献とポリシー
 
 - 開発/運用ルール: `AGENTS.md`
