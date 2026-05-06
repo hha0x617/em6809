@@ -125,7 +125,7 @@ cargo run --release
 
 For persistence and the full WSL2 GUI setup (prerequisite packages,
 backend env vars, X11 fallback, recovery steps), see
-`docs/troubleshooting.md`.
+`docs/en/troubleshooting.md`.
 
 ### Project direction
 

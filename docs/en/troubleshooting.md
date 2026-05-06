@@ -35,7 +35,76 @@ Common pitfalls and how to fix them.
 
 ## WSL2 / Linux GUI
 
-WSL2 + WSLg (Wayland) is the typical environment for running em6809's GUI on Linux from a Windows host.  Most setups work out of the box on Windows 11.  For prerequisite packages, environment variables (`XDG_RUNTIME_DIR`, `WINIT_UNIX_BACKEND`, `WGPU_BACKEND`) and the X11 / VcXsrv fallback path, see the more comprehensive Japanese troubleshooting doc at `docs/troubleshooting.md`.
+WSL2 + WSLg (Wayland) is the typical environment for running em6809's GUI on Linux from a Windows host.  Most setups work out of the box on Windows 11.  This section walks through prerequisites, environment variables, fallback paths, and the most common failure modes.
+
+### Prerequisite packages (Ubuntu / Debian)
+
+- **Wayland + GL minimum** — `libxkbcommon0`, `libwayland-client0`, `libwayland-cursor0`, `libwayland-egl1`, `libegl1-mesa`, `libgles2`
+- **X11 (XWayland) fallback** — `libx11-6`, `libxi6`, `libxcursor1`, `libxrandr2`, `libxinerama1`
+- **Diagnostic tools (optional)** — `mesa-utils` (provides `glxinfo -B` for GL verification)
+- **Bulk install**:
+  ```bash
+  sudo apt update
+  sudo apt install -y \
+    libxkbcommon0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+    libegl1-mesa libgles2 \
+    libx11-6 libxi6 libxcursor1 libxrandr2 libxinerama1 \
+    mesa-utils
+  ```
+
+### Build with the GUI feature
+
+```bash
+cargo build --release --features gui
+```
+
+### Runtime environment variables (WSLg / Wayland, recommended)
+
+- `export XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir` — let the process see WSLg's Wayland socket.
+- `export WINIT_UNIX_BACKEND=wayland` — pin winit to its Wayland backend.
+- `export WGPU_BACKEND=gl` — pin wgpu to OpenGL.
+- Example invocation:
+  ```bash
+  XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir \
+  WINIT_UNIX_BACKEND=wayland \
+  WGPU_BACKEND=gl \
+  cargo run --release --features gui -- <image> --paused --dump-regs
+  ```
+
+### X11 (XWayland) fallback
+
+If Wayland is unhappy, fall back to X11:
+
+- `export WINIT_UNIX_BACKEND=x11`
+- `export DISPLAY=:0` (usually already set under WSLg)
+- Example:
+  ```bash
+  WINIT_UNIX_BACKEND=x11 WGPU_BACKEND=gl \
+  cargo run --release --features gui -- <image> --paused --dump-regs
+  ```
+
+### Legacy WSL without WSLg (reference)
+
+On older WSL setups that lack WSLg, run an X server on the Windows side (VcXsrv, X410, etc.) and point WSL at it:
+
+```bash
+export DISPLAY=$(awk '/nameserver/{print $2; exit}' /etc/resolv.conf):0
+export WINIT_UNIX_BACKEND=x11
+# Optional, depending on the X server:
+export LIBGL_ALWAYS_INDIRECT=1
+```
+
+### Verification
+
+- `echo $WAYLAND_DISPLAY` — should be non-empty (e.g. `wayland-0`).
+- `echo $DISPLAY` — set, for the XWayland fallback path.
+- `glxinfo -B` — shows the GL implementation in use (requires `mesa-utils`).
+
+### General notes
+
+- If `XDG_RUNTIME_DIR` is unset under Wayland, GUI startup can fail.  Under WSLg this is normally `/mnt/wslg/runtime-dir`.
+- Combinations of `WINIT_UNIX_BACKEND=wayland|x11` × `WGPU_BACKEND=gl|vulkan` sometimes resolve issues that any single setting alone does not.
+- For multi-viewport debugging, run with `RUST_LOG=egui_winit=debug` to surface egui/winit details (e.g. `ViewportCommand::InnerSize ignored by winit`) — useful when investigating Linux-side rendering anomalies in the native Settings panel.
 
 ### ZINK init failure (GUI fails to launch or exits shortly after start)
 
