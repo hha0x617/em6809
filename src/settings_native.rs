@@ -92,8 +92,7 @@ impl SettingsNativeApp {
 
 impl SettingsNativeApp {
     // `CentralPanel::show(ctx, ...)` is deprecated; see
-    // `memory/em6809_app_ui_migration_todo.md` for the deferred
-    // App::ui-based migration.
+    // `docs/en/gui_stack.md` for the deferred App::ui-based migration.
     #[allow(deprecated)]
     fn draw(&mut self, ctx: &egui::Context) {
         // Mark that at least one frame of the native Settings viewport rendered

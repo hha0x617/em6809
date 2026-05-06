@@ -37,6 +37,7 @@ em6809 は MC6809 のソフトウェアエミュレータです。GUI を中心�
 - OS‑9/NitrOS‑9 ガイド: `docs/ja/os9_guide.md`
 - トラブルシューティング: `docs/ja/troubleshooting.md`
 - 命令カバレッジ: `docs/ja/instruction_status.md`
+- GUI スタックメモ（eframe / egui、先送りした移行）: `docs/ja/gui_stack.md`
  - GUI の環境変数（フォント/言語）: `docs/ja/usage.md`（「環境変数」節）
 
 ## リンク

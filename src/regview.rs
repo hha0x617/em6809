@@ -1341,8 +1341,7 @@ pub mod gui {
 
         // `Panel::show(ctx, ...)` is deprecated; the migration to
         // `App::ui(&mut Ui, ...)` + `Panel::show_inside(ui, ...)` is
-        // intentionally deferred — see
-        // `memory/em6809_app_ui_migration_todo.md`.
+        // intentionally deferred — see `docs/en/gui_stack.md`.
         #[allow(deprecated)]
         fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
             // Heartbeat: ensure the event loop wakes up at least every

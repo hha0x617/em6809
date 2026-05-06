@@ -11,7 +11,7 @@ use super::{
 // `Panel::show_inside(ui, ...)` driven by `App::ui(&mut Ui, ...)`.
 // We still hang our entire frame off `App::update(&mut Context, ...)`,
 // so migrate the panel-show calls when we move to the new arch — see
-// `memory/em6809_app_ui_migration_todo.md`.
+// `docs/en/gui_stack.md`.
 #[allow(deprecated)]
 pub(super) fn render_regs_panel(app: &mut RegApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
