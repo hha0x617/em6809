@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use once_cell::sync::OnceCell;
 
-use super::{BpInfo, Command, ToastMessage, ToastOrigin};
+use super::{toast_anchor_for_button, BpInfo, Command, ToastMessage, ToastOrigin};
 
 static BP_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static BP_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
@@ -161,14 +161,19 @@ fn render_breakpoints(
                         let prev = g.get(&bp.id).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < 0.4 {
                             // Anchor the eventual "not in listing"
-                            // toast just below the address button so
-                            // the popup is visually tied to the click.
-                            let anchor = addr_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
+                            // toast just below the address button —
+                            // or above it when below would overflow
+                            // the viewport's bottom edge — so the
+                            // popup is visually tied to the click and
+                            // never gets clipped.
+                            let (anchor, pivot) =
+                                toast_anchor_for_button(addr_resp.rect, ui.ctx().screen_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: bp.addr,
                                     origin: ToastOrigin::Breakpoints,
                                     anchor,
+                                    pivot,
                                 });
                             }
                             g.remove(&bp.id);

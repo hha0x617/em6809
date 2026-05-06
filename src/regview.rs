@@ -844,6 +844,7 @@ pub mod gui {
             addr: u16,
             origin: ToastOrigin,
             anchor: egui::Pos2,
+            pivot: egui::Align2,
         },
         /// Set baseline settings + origins (0=Default,1=Saved,2=CLI) and optional GPIO color
         UiSetSettingsBaseline(SettingsState, Vec<(String, u8)>, Option<u32>),
@@ -1135,12 +1136,12 @@ pub mod gui {
         /// follow-PC scroll path so jumping from a panel does not
         /// implicitly toggle Follow PC.
         ///
-        /// The tuple carries `(addr, toast_origin, toast_anchor)` so
-        /// that a miss (address not present in the loaded listing)
-        /// can raise a toast in the source viewport, near the button
-        /// the user clicked — the latter two fields are unused on a
-        /// successful scroll.
-        pub pending_listing_center: Option<(u16, ToastOrigin, egui::Pos2)>,
+        /// The tuple carries `(addr, toast_origin, toast_anchor,
+        /// toast_pivot)` so that a miss (address not present in the
+        /// loaded listing) can raise a toast in the source viewport,
+        /// near the button the user clicked — the latter three
+        /// fields are unused on a successful scroll.
+        pub pending_listing_center: Option<(u16, ToastOrigin, egui::Pos2, egui::Align2)>,
         /// Transient toast notification (text + deadline).  Used to
         /// surface non-blocking status feedback — e.g., when a BP /
         /// CS double-click points at an address that is not in the
@@ -1170,17 +1171,54 @@ pub mod gui {
 
     /// Transient on-screen notification surfaced for a few seconds.
     /// See [`RegApp::toast`].  `origin` selects which viewport's
-    /// closure should draw it; `anchor` is the screen position in
-    /// that viewport's coordinate space (typically the bottom-centre
-    /// of the button that triggered the notification, plus a small
-    /// gap) — the toast is rendered with `Align2::CENTER_TOP` so its
-    /// top-centre lands on `anchor`.
+    /// closure should draw it.  `anchor` is the screen position in
+    /// that viewport's coordinate space and `pivot` is the corner
+    /// of the toast frame that should land on `anchor` — together
+    /// they let the click site choose either "just below the button"
+    /// (`pivot = CENTER_TOP`) or "just above the button" when the
+    /// button is near the viewport's bottom edge and the popup would
+    /// overflow (`pivot = CENTER_BOTTOM`).
     #[derive(Clone)]
     pub struct ToastMessage {
         pub text: String,
         pub deadline: std::time::Instant,
         pub origin: ToastOrigin,
         pub anchor: egui::Pos2,
+        pub pivot: egui::Align2,
+    }
+
+    /// Approximate height (in screen px) that the toast will occupy
+    /// once laid out — text row + symmetric inner margin (12, 8) +
+    /// frame stroke.  Used by click sites to decide whether to
+    /// anchor the toast below or above the source button so it does
+    /// not overflow the viewport.  Conservative on purpose; the
+    /// exact height comes from the egui layout pass we cannot run
+    /// at click time.
+    pub const TOAST_ESTIMATED_HEIGHT: f32 = 40.0;
+    /// Vertical gap between the source button and the toast frame.
+    pub const TOAST_GAP: f32 = 4.0;
+
+    /// Decide where to place the toast relative to a source button:
+    /// below by default, above when below would clip against the
+    /// viewport's bottom edge.  `button_rect` and `screen_rect` are
+    /// in the same (viewport-local) coordinate space.  Returns
+    /// `(anchor, pivot)` ready for [`ToastMessage`].
+    pub(crate) fn toast_anchor_for_button(
+        button_rect: egui::Rect,
+        screen_rect: egui::Rect,
+    ) -> (egui::Pos2, egui::Align2) {
+        let below_y = button_rect.bottom() + TOAST_GAP;
+        if below_y + TOAST_ESTIMATED_HEIGHT > screen_rect.bottom() {
+            (
+                button_rect.center_top() + egui::vec2(0.0, -TOAST_GAP),
+                egui::Align2::CENTER_BOTTOM,
+            )
+        } else {
+            (
+                egui::pos2(button_rect.center().x, below_y),
+                egui::Align2::CENTER_TOP,
+            )
+        }
     }
 
     /// Draw the active toast in `ctx` if its `origin` matches the
@@ -1213,7 +1251,7 @@ pub mod gui {
         }
         egui::Area::new(egui::Id::new("em6809_toast"))
             .fixed_pos(t.anchor)
-            .pivot(egui::Align2::CENTER_TOP)
+            .pivot(t.pivot)
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::default()
@@ -1408,16 +1446,18 @@ pub mod gui {
                         addr,
                         origin,
                         anchor,
+                        pivot,
                     } => {
                         // Recentre listing on `addr`. We park it as
                         // `pending_listing_center`; list_ui.rs reads
                         // it on the next paint, scrolls there, and
-                        // clears the field.  `origin` / `anchor` are
-                        // forwarded along the way so an out-of-listing
+                        // clears the field.  `origin` / `anchor` /
+                        // `pivot` are forwarded so an out-of-listing
                         // miss can raise a toast next to the source
                         // button (which lives in BP/CS viewport, not
-                        // the main one).
-                        self.pending_listing_center = Some((addr, origin, anchor));
+                        // the main one) and flip above the button if
+                        // below would overflow the viewport edge.
+                        self.pending_listing_center = Some((addr, origin, anchor, pivot));
                     }
                     Command::UiSetSettingsBaseline(s, origins, color_opt) => {
                         let prev_console_gui = self.settings_baseline.console_gui;

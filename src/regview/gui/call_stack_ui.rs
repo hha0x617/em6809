@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use once_cell::sync::OnceCell;
 
-use super::{CallFrameInfo, Command, ToastMessage, ToastOrigin};
+use super::{toast_anchor_for_button, CallFrameInfo, Command, ToastMessage, ToastOrigin};
 
 static CS_VISIBLE: OnceCell<AtomicBool> = OnceCell::new();
 static CS_CLOSED: OnceCell<AtomicBool> = OnceCell::new();
@@ -141,12 +141,14 @@ fn render_call_stack(
                         let key = ("call", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
-                            let anchor = call_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
+                            let (anchor, pivot) =
+                                toast_anchor_for_button(call_resp.rect, ui.ctx().screen_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: frame.call_site,
                                     origin: ToastOrigin::CallStack,
                                     anchor,
+                                    pivot,
                                 });
                             }
                             g.remove(&key);
@@ -169,12 +171,14 @@ fn render_call_stack(
                         let key = ("target", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
-                            let anchor = target_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
+                            let (anchor, pivot) =
+                                toast_anchor_for_button(target_resp.rect, ui.ctx().screen_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: frame.target,
                                     origin: ToastOrigin::CallStack,
                                     anchor,
+                                    pivot,
                                 });
                             }
                             g.remove(&key);
@@ -195,12 +199,14 @@ fn render_call_stack(
                         let key = ("return", depth);
                         let prev = g.get(&key).copied().unwrap_or(0.0_f64);
                         if prev > 0.0 && now - prev < dc_threshold {
-                            let anchor = ret_resp.rect.center_bottom() + egui::vec2(0.0, 4.0);
+                            let (anchor, pivot) =
+                                toast_anchor_for_button(ret_resp.rect, ui.ctx().screen_rect());
                             if let Ok(mut q) = cmds.lock() {
                                 q.push(Command::UiCenterListingAt {
                                     addr: frame.return_addr,
                                     origin: ToastOrigin::CallStack,
                                     anchor,
+                                    pivot,
                                 });
                             }
                             g.remove(&key);
