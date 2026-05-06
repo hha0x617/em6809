@@ -136,3 +136,41 @@ Additional (About dialog icon on Linux):
 - `--timer-irq`: Enable timer IRQ; `--timer-firq`: route to FIRQ instead
 - `--timer-start`: Start timer immediately
 - `--run`: Start unpaused
+
+## Register viewer enhancements (recent additions)
+
+The GUI register viewer (built with `--features gui`) has accumulated
+several quality-of-life features.  The cross-references below point
+back to `docs/en/regview_integration.md` and `docs/en/tracing.md` for
+deeper detail.
+
+- Listing fallback / Hex view toggle
+  - When the loaded image has a sibling `.lst` file, that listing is
+    rendered.  Otherwise a hex disassembly over the program span is
+    auto-generated.
+  - The "Hex view" toggle switches between the `.lst` and the
+    auto-generated hex disassembly.
+- Follow PC + highlight
+  - When "Follow PC" is enabled, the listing scrolls to keep the
+    program counter visible and the current instruction line is
+    highlighted.
+- Event-driven re-disassembly for self-modifying code
+  - Memory writes are detected and trigger a re-disassembly (event-
+    driven, not timer-driven).
+  - Span Mode: **Full span** regenerates the entire span containing
+    the PC; **PC window** regenerates only the area near the modified
+    address with a configurable window length.
+- Right-click context menu (listing lines)
+  - **Run to here**: stops the CPU once execution reaches the
+    selected address.
+  - **Set PC to this address**: jumps the program counter immediately.
+  - **Cancel**: closes the menu.
+  - Menu labels follow the locale automatically; force a specific
+    language with `EM6809_LANG=ja|en`.
+  - After "Run to here" or "Set PC to this address" fires, the
+    register pane and the listing pane are both refreshed so the new
+    state is visible without manually stepping.
+- Hover highlight on listing lines
+  - Hovering a row in the listing pane lightly highlights the entire
+    line, making it easier to aim at a specific instruction (helpful
+    when setting breakpoints or invoking the context menu).
