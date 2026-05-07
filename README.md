@@ -53,7 +53,6 @@ em6809 is a software emulator for the MC6809. It provides a GUI with register/me
 
 - Repository: https://github.com/hha0x617/em6809
 - Issues: https://github.com/hha0x617/em6809/issues
-- Releases: https://github.com/hha0x617/em6809/releases
 - Docs index: `docs/README.md`
 - English docs: `docs/en/`
 - Japanese docs: `docs/ja/`
