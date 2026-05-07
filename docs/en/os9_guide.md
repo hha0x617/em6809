@@ -99,6 +99,6 @@ is hardest to predict.
 
 ## References
 
-- Device map examples: `docs/os9_device_map_templates.md`
+- Device map examples: `docs/en/os9_device_map_templates.md`
 - Boot scripts: `samples/bootscripts/README.md`, `samples/bootscripts/*.boot`
 - Instruction coverage: `docs/en/instruction_status.md`

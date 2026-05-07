@@ -116,8 +116,8 @@ cargo run --release
 ```
 
 永続化方法と WSL2 GUI のフルセットアップ (依存パッケージ、各種環境
-変数、X11 フォールバック、復旧手順) は `docs/troubleshooting.md`
-（日本語版、現状 canonical）を参照してください。英語版は
+変数、X11 フォールバック、復旧手順) は `docs/ja/troubleshooting.md`
+を参照してください。英語版 (canonical) は
 `docs/en/troubleshooting.md` にあり、同等の内容です。
 
 ### プロジェクトの方向性
