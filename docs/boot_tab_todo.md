@@ -1,88 +1,142 @@
-# Boot 用設定タブ（GUI）— TODO / 設計メモ
+# Boot Settings Tab (GUI) — TODO / Design Memo
 
-本ドキュメントは、Settings ダイアログに「Boot（ブートスクリプト）」タブを追加するための背景、課題、解決策案、要相談事項を整理したものです。
+This document captures the background, open issues, proposed solutions,
+and policy questions for adding a "Boot" (boot-script) tab to the
+Settings dialog.
 
-## 現時点で未実装の主な理由
+## Why this is not yet implemented
 
-- 設計上の分離: Settings はデバイス/表示などの「ランタイム設定」を扱う方針で、ブートスクリプトは「起動時シーケンスの自動化」。性質が異なり、混在を避けていた。
-- 現状は CLI 主導: `--boot-script` / `--emit-boot-template` による CLI 入口のみで、GUI のコマンド系（`src/regview.rs`）にロード/適用/停止などの経路がない。i18n キーも未定義。
-- DSL の拡張途上: `docs/dsl_actions_future.md` に将来の拡張案があり、GUI を先に固定化すると後方互換や UX 改修コストが増える懸念。
-- 実行モデルの複雑さ: ブートスクリプトは `BootSequencer::on_pre_step/on_post_step`（`src/bootscript.rs`）でステップ実行にフック。途中適用/差し替え/停止には安全な一時停止、状態の引き継ぎやリセットの扱いが必要（Settings の Apply/Revert/Cancel との整合も課題）。
-- エラー処理と UX: 解析エラーの表示、ファイル入出力、テンプレート適用、ログ連携など、ひと通りの GUI ワークフローを整える実装コストが今回の Settings 改修スコープ外だった。
+- Conceptual separation: Settings handles "runtime configuration"
+  (devices, display, etc.), whereas boot scripts automate the
+  "startup sequence" — different concerns we have so far avoided
+  mixing.
+- CLI-driven today: only the `--boot-script` / `--emit-boot-template`
+  entry points exist.  The GUI command system (`src/regview.rs`)
+  has no load / apply / stop path, and no i18n keys are defined.
+- DSL is still evolving: `docs/dsl_actions_future.md` lists planned
+  extensions.  Locking down the GUI before the DSL stabilises would
+  inflate the cost of backward compatibility and UX rework.
+- Execution-model complexity: boot scripts hook step execution via
+  `BootSequencer::on_pre_step` / `on_post_step` (`src/bootscript.rs`).
+  Mid-run apply / replace / stop requires safe pausing, state
+  hand-off, and reset semantics — all of which need to align with
+  Settings' Apply / Revert / Cancel behaviour.
+- Error handling and UX: parse-error reporting, file I/O, template
+  application, and log integration together require a full GUI
+  workflow that was outside the previous Settings refactor's scope.
 
-## 解決策（提案）
+## Proposed solution
 
-1) タブとデータモデルの追加
-- Settings に「Boot」タブを追加（`tab-boot`）。
-- `SettingsState` に以下を追加（例）:
-  - `boot_enable: bool`（セッションで有効）
-  - `boot_script_path: String`（読み込み用）
-  - `boot_editor_text: Option<String>`（インライン編集/プレビュー用・段階導入）
-  - `boot_preset_name: String`（テンプレート名の選択肢）
-  - `boot_log_triggers: bool`（トリガー発火ログの有無）
+1) Add the tab and the data model
+- New "Boot" tab in Settings (`tab-boot`).
+- Add the following fields to `SettingsState` (illustrative):
+  - `boot_enable: bool` (enabled for the current session)
+  - `boot_script_path: String` (path to load from)
+  - `boot_editor_text: Option<String>` (inline edit / preview;
+    introduced gradually)
+  - `boot_preset_name: String` (template selector)
+  - `boot_log_triggers: bool` (whether to log trigger firings)
 
-2) コマンド/ワーカー連携
-- `regview::Command` に以下を追加:
+2) Command / worker integration
+- Add to `regview::Command`:
   - `BootApplyFile { path: PathBuf }`
   - `BootApplyText { text: String }`
-  - `BootEmitTemplate { name: String }`（エディタに流し込む）
-  - `BootControlStart | BootControlPause | BootControlStop | BootReload`（任意）
-- `main.rs` のワーカーループで `parse_boot_script` → `BootSequencer::new` を生成・保持し、既存の on_pre_step/on_post_step に統合。Stop 時は `None` に戻す。
-- 適用時は一時停止→差し替え→再開の順で安全に更新（失敗時は UI にエラー表示し、既存状態は維持）。
+  - `BootEmitTemplate { name: String }` (populates the editor)
+  - `BootControlStart | BootControlPause | BootControlStop | BootReload`
+    (optional)
+- In the worker loop in `main.rs`, build and hold a
+  `BootSequencer::new` constructed from `parse_boot_script`, hooked
+  into the existing `on_pre_step` / `on_post_step` callbacks.  Drop
+  back to `None` on Stop.
+- Apply with the safe pause → swap → resume sequence.  On failure,
+  surface the error in the UI and keep the previous state intact.
 
-3) UI/UX
-- まずは「ファイルから読み込み + 適用/停止 + ログON/OFF」を実装（Phase A）。
-- 次に「テンプレートを選択してエディタへ展開→編集→適用」（Phase B）。
-- 最後に「起動時自動適用（永続化）」などのプリファレンス連携（Phase C）。
-- Settings フッターの Apply/Revert/Cancel と整合:
-  - Boot は「Apply で初めて sequencer を差し替え」・「Revert は UI の未適用変更を破棄のみ」・「Cancel は閉じるのみ」。
-  - 実機能の適用/停止ボタンは Boot パネル内に独立して持たせる（即時操作の性格）。
+3) UI / UX
+- Phase A: file load + apply / stop + log on/off toggle.
+- Phase B: select a template, expand into the editor, edit, apply.
+- Phase C: preference integration (auto-apply at startup, persisted).
+- Reconcile with the Settings footer's Apply / Revert / Cancel:
+  - Boot's sequencer is only swapped on Apply; Revert merely drops
+    unapplied UI edits; Cancel just closes the dialog.
+  - Apply / stop buttons inside the Boot panel stay independent, so
+    immediate operations remain fast.
 
-4) i18n / ドキュメント
-- `locales/en/ja` に Boot タブ/各種ボタン・ラベルのキーを追加。
-- `docs/ja/usage.md`（および `docs/en/usage.md`）に GUI からの適用手順・テンプレート一覧を追記。
-- 既存サンプル（`samples/bootscripts/*.boot`）へ誘導するヘルプ本文を UI に表示。
+4) i18n / documentation
+- Add Boot-tab keys (tab name, button labels, etc.) to `locales/en`
+  and `locales/ja`.
+- Append GUI-driven workflow steps and a template list to
+  `docs/en/usage.md` (and the JA companion `docs/ja/usage.md`).
+- Surface in-app help that points to the existing samples
+  (`samples/bootscripts/*.boot`).
 
-5) ロギング/可視化
-- 既存のログ出力へ「トリガー発火」をトレース（例: `on_pc 0xE000: con_ctrl 0x11`）。
-- 任意で GUI 側に簡易ログパネル（将来のタスク）。
+5) Logging / observability
+- Trace "trigger fired" events through the existing log path
+  (e.g., `on_pc 0xE000: con_ctrl 0x11`).
+- Optionally expose a small log panel in the GUI (later phase).
 
-## TODO（実装タスク）
+## TODO (implementation tasks)
 
-- [ ] UI: Settings に「Boot」タブ追加（自動サイズ/横幅制限は既存に準拠）。
-- [ ] 状態: `SettingsState` に Boot 関連フィールドを追加、Open/Revert/Apply のベースライン連携。
-- [ ] コマンド: `regview::Command` に Boot 系を追加、GUI→ワーカーへの送出を実装。
-- [ ] ワーカー: `main.rs` の各ループに Boot 制御を追加（生成/差し替え/停止）。
-- [ ] 解析/適用: `parse_boot_script` のエラーを UI で可視化（赤字/トースト等）。
-- [ ] ファイルダイアログ: rfd 統合（最近ディレクトリの保持は任意）。
-- [ ] テンプレート: `emit_boot_template(NAME)` を UI から利用（プリセットの一覧も UI 化）。
-- [ ] i18n: `locales/en/ja` へキー追加（タブ名、読み込み、適用、停止、テンプレート、ログ等）。
-- [ ] ドキュメント: `docs/ja/usage.md`（および `docs/en/usage.md`）に GUI 操作手順を追記、サンプルへのリンクを追加。
-- [ ] 手動検証: OS‑9 サンプルで発火ログ/挙動を確認（Pause→Apply→Resume の分岐も確認）。
-- [ ] 将来: インラインエディタ（シンタックス強調は任意）・起動時自動適用（永続化）。
+- [ ] UI: add the "Boot" tab to Settings (matching the existing
+      auto-size / width-cap conventions).
+- [ ] State: add Boot-related fields to `SettingsState`; wire them
+      into Open / Revert / Apply baseline handling.
+- [ ] Commands: extend `regview::Command` with the Boot variants and
+      send them from the GUI to the worker.
+- [ ] Worker: thread Boot control (build / swap / stop) through the
+      loops in `main.rs`.
+- [ ] Parse / apply: surface `parse_boot_script` errors in the UI
+      (red text, toast, etc.).
+- [ ] File dialog: integrate `rfd` (remembering the last directory
+      is optional).
+- [ ] Templates: drive `emit_boot_template(NAME)` from the GUI, and
+      render the preset list itself in the UI.
+- [ ] i18n: add keys to `locales/en` and `locales/ja` (tab name,
+      Load, Apply, Stop, templates, log toggle, etc.).
+- [ ] Docs: append GUI workflow steps and sample links to
+      `docs/en/usage.md` (and `docs/ja/usage.md`).
+- [ ] Manual verification: walk an OS‑9 sample and check the trigger
+      log / behaviour (including Pause → Apply → Resume).
+- [ ] Later: inline editor (syntax highlighting optional), persisted
+      auto-apply at startup.
 
-## 要相談事項（設計ポリシー）
+## Open policy questions
 
-- 永続化の範囲: 「前回の Boot 設定を起動時に自動適用」するか（プロファイル/プロジェクト単位の構想があるか）。
-- インライン編集の是非: 当面はファイル読み込みのみか、簡易エディタも併設するか（誤適用防止のため Apply のみ反映に統一するか）。
-- 実行中の差し替え: 適用時に自動で一時停止→差し替え→再開まで行うか、ユーザー操作を前提にするか。
-- リセット/巻き戻し: 新規スクリプト適用時にリセット（PC/メモリ初期化）を提供するか。GUI に「Reset」動作を追加するか。 
-- テンプレートの露出範囲: どのテンプレート名を UI へ出すか（`os9l2-boot`/`os9l2-io`/`os9l2-full` など）。
-- ログの粒度: トリガー発火の詳細（PC/Step/アクション）をどの程度出すか。GUI パネル化の要否。
-- 競合回避: Settings の Apply/Revert/Cancel と Boot タブ内の「即時適用/停止」操作の優先順位・表記統一。
-- スレッド安全性: ワーカーとの同期方式（既存のコマンドキュー準拠で良いか、排他制御の改善が必要か）。
+- Persistence scope: should the previous Boot configuration auto-
+  apply at startup?  Is there a per-profile / per-project scheme
+  envisioned?
+- Inline editing: stick to file-load only for now, or also offer a
+  simple editor?  (To prevent accidental application, do we keep a
+  single Apply path?)
+- Mid-run swap: does Apply automatically pause → swap → resume, or
+  do we require the user to drive that manually?
+- Reset / rollback: should applying a new script offer a reset
+  (PC / memory reinitialisation)?  Should the GUI grow a "Reset"
+  action?
+- Template exposure: which template names appear in the UI
+  (`os9l2-boot` / `os9l2-io` / `os9l2-full` / …)?
+- Log granularity: how detailed should trigger-firing logs be
+  (PC / step / action)?  Do we need a dedicated log panel?
+- Conflict resolution: how do we order — and label consistently —
+  Settings' Apply / Revert / Cancel vs. the Boot tab's immediate
+  apply / stop buttons?
+- Thread safety: stick with the existing command-queue protocol for
+  worker synchronisation, or improve the locking discipline?
 
-## フェーズ分割（実装順）
+## Phase ordering (implementation)
 
-- Phase A: Boot タブ（読み込み/適用/停止/ログトグル）、テンプレートの流し込み、エラー表示。
-- Phase B: インラインエディタ、テンプレート選択、保存/再読込、UI トースト/ガイド強化。
-- Phase C: 設定の永続化（自動適用）、「Reset」動作の導入、ログパネル（任意）。
+- Phase A: Boot tab (load / apply / stop / log toggle), template
+  population, and error display.
+- Phase B: inline editor, template selector, save / reload, richer
+  UI toasts / guidance.
+- Phase C: persisted settings (auto-apply), a "Reset" action, and
+  optionally a log panel.
 
-## 参照
+## References
 
-- CLI 入口: `src/main.rs`（`--boot-script` / `--emit-boot-template`）
-- 解析/実行: `src/bootscript.rs`（`parse_boot_script` / `BootSequencer`）
-- GUI: `src/regview.rs`（Settings ダイアログ、コマンドキュー）
-- サンプル: `samples/bootscripts/*.boot`
-- 将来拡張: `docs/dsl_actions_future.md`
-
+- CLI entry points: `src/main.rs` (`--boot-script` /
+  `--emit-boot-template`)
+- Parsing / execution: `src/bootscript.rs` (`parse_boot_script` /
+  `BootSequencer`)
+- GUI: `src/regview.rs` (Settings dialog, command queue)
+- Samples: `samples/bootscripts/*.boot`
+- Future extensions: `docs/dsl_actions_future.md`
