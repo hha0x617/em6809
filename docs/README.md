@@ -24,6 +24,7 @@ This project maintains English as the primary documentation. Japanese docs are p
   - 命令カバレッジ: `ja/instruction_status.md`
   - メモリ編集 UI 設計（設計メモ）: `ja/memory_edit_ui.md`
   - レジスタビューア連携（GUI）: `ja/regview_integration.md`
+  - OS‑9 デバイスマップ雛形: `ja/os9_device_map_templates.md`
   - GUI スタックメモ（eframe / egui、先送りした移行）: `ja/gui_stack.md`
 
 ## Project TODOs
