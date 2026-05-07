@@ -45,7 +45,6 @@ em6809 は MC6809 のソフトウェアエミュレータです。GUI を中心�
 
 - リポジトリ: https://github.com/hha0x617/em6809
 - Issue: https://github.com/hha0x617/em6809/issues
-- リリース: https://github.com/hha0x617/em6809/releases
 - ドキュメント索引: `docs/README.md`
 - 英語ドキュメント: `docs/en/`
 - 日本語ドキュメント: `docs/ja/`
