@@ -69,14 +69,14 @@ These live at `docs/` root (not under `en/` or `ja/`) and are
 may lag behind the code, and exist primarily for future-us /
 contributors deciding whether and how to pick up a feature.
 
-| File                          | What it covers                                                |
-| ----------------------------- | ------------------------------------------------------------- |
-| `TODO.md`                     | High-level TODOs and future-work checklist                    |
-| `boot_tab_todo.md`            | Plan for adding a "Boot" tab to the Settings dialog           |
-| `dsl_actions_future.md`       | Boot-script DSL extensions under consideration                |
-| `os9_block_stub.md`           | OS‑9 block-I/O driver stub + RBF integration sketch           |
-| `settings_persistence.md`     | Settings persistence design (CLI > saved > defaults order)    |
-| `ja/memory_edit_ui.md`        | Memory-dump edit UI design memo (Japanese; design-time notes) |
+| File                          | What it covers                                                              |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `TODO.md`                     | High-level TODOs and future-work checklist                                  |
+| `boot_tab_todo.md`            | Plan for adding a "Boot" tab to the Settings dialog                         |
+| `dsl_actions_future.md`       | Boot-script DSL extensions under consideration                              |
+| `os9_block_stub.md`           | OS‑9 block-I/O driver stub + RBF integration sketch                         |
+| `settings_persistence.md`     | Settings persistence design (CLI > saved > defaults order)                  |
+| `memory_edit_ui.md`           | Memory-dump edit UI design memo — Phase 1 shipped, Phase 2 (ASCII / paste / undo / range) is TODO |
 
 ## How to update these docs
 
