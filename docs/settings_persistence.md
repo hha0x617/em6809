@@ -2,6 +2,12 @@
 
 This document defines how the emulator persists Settings dialog values, how they interact with command‑line options, and how the final effective values are presented in the GUI.
 
+> **Boot scripts can override these values at runtime.**  See
+> `docs/en/config_and_boot_script.md` (and its Japanese companion
+> `docs/ja/config_and_boot_script.md`) for the startup ordering,
+> the interaction matrix, and the known footguns when the two
+> layers disagree.
+
 ## Goals
 - Persist user preferences across runs in a simple, human‑readable format.
 - Resolve configuration deterministically with clear precedence:

@@ -31,6 +31,7 @@ These topics are bilingual.  Pick the language column you prefer.
 | GUI stack notes (eframe / egui)      | `en/gui_stack.md`               | `ja/gui_stack.md`              |
 | OS‑9 / NitrOS‑9 guide                | `en/os9_guide.md`               | `ja/os9_guide.md`              |
 | OS‑9 device map templates            | `en/os9_device_map_templates.md`| `ja/os9_device_map_templates.md` |
+| Config + boot script interaction     | `en/config_and_boot_script.md`  | `ja/config_and_boot_script.md` |
 
 ### One-line summaries
 
@@ -61,6 +62,11 @@ These topics are bilingual.  Pick the language column you prefer.
 - **OS‑9 device map templates** — recommended I/O page layout,
   interrupt vector hints, and the timer-at-`$FF10` quick reference
   with CLI examples.
+- **Config + boot script interaction** — startup ordering of
+  `config.toml` / CLI vs. boot scripts, the interaction matrix
+  (which Action overrides which configuration field), and the
+  known footguns (silent overwrite, no-op against disabled devices,
+  MMU base mismatch).  Read this before authoring a boot script.
 
 ## Design notes & internal memos
 
