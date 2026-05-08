@@ -75,6 +75,8 @@ closure (Breakpoints / Call Stack / Console) を経由して引き回してい�
 | `src/regview/gui/breakpoints_ui.rs` | `show_breakpoints_viewport` | viewport 配線 |
 | `src/regview/gui/call_stack_ui.rs` | `show_call_stack_viewport` | viewport 配線 |
 | `src/settings_native.rs` | `SettingsNativeApp::draw` | Settings ウィンドウ |
+| `src/platform/linux/csd.rs` | `show_header` | Linux クライアントサイド装飾ヘッダ |
+| `src/platform/linux/csd.rs` | `show_settings_header` | Linux Settings ダイアログヘッダ |
 
 各 attribute には本ドキュメントを指す短いコメントを添えてあるので、
 先送り中の移行が grep で発見可能。

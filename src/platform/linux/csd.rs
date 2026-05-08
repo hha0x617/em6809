@@ -2,15 +2,17 @@
 use eframe::egui;
 
 /// Draw a client-side decorated header bar on Linux, handling drag and window buttons.
+// `Panel::show(ctx, ...)` is deprecated; see `docs/en/gui_stack.md`.
 #[cfg(target_os = "linux")]
+#[allow(deprecated)]
 pub fn show_header<F>(ctx: &egui::Context, csd_maximized: &mut bool, mut render_menus: F)
 where
     F: FnMut(&mut egui::Ui),
 {
-    eframe::egui::TopBottomPanel::top("menu_bar_csd")
+    eframe::egui::Panel::top("menu_bar_csd")
         .frame(
             eframe::egui::Frame::default()
-                .fill(ctx.style().visuals.panel_fill)
+                .fill(ctx.global_style().visuals.panel_fill)
                 .inner_margin(egui::Margin {
                     left: 8,
                     right: 8,
@@ -131,14 +133,16 @@ where
         });
 }
 
+// `Panel::show(ctx, ...)` is deprecated; see `docs/en/gui_stack.md`.
 #[cfg(target_os = "linux")]
+#[allow(deprecated)]
 pub fn show_settings_header(ctx: &egui::Context, title: &str) {
     use eframe::egui::{Align2, FontId, Layout, Sense};
 
-    eframe::egui::TopBottomPanel::top("settings_native_header")
+    eframe::egui::Panel::top("settings_native_header")
         .frame(
             eframe::egui::Frame::default()
-                .fill(ctx.style().visuals.panel_fill)
+                .fill(ctx.global_style().visuals.panel_fill)
                 .inner_margin(egui::Margin {
                     left: 8,
                     right: 8,
