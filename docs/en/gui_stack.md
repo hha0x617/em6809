@@ -83,6 +83,8 @@ like `Rounding` → `CornerRadius`, `Margin::same(f32)` → `Margin::same(i8)`,
 | `src/regview/gui/breakpoints_ui.rs` | `show_breakpoints_viewport` | viewport wiring |
 | `src/regview/gui/call_stack_ui.rs` | `show_call_stack_viewport` | viewport wiring |
 | `src/settings_native.rs` | `SettingsNativeApp::draw` | Settings window |
+| `src/platform/linux/csd.rs` | `show_header` | Linux client-side decorated header |
+| `src/platform/linux/csd.rs` | `show_settings_header` | Linux settings dialog header |
 
 Each annotation has a short comment pointing back to this document so
 the deferred migration stays discoverable.
