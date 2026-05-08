@@ -77,7 +77,7 @@ OS‑9 ソースコード (NitrOS‑9 は MIT 系で公開) の理解と asm 修
 ## 準備
 
 - カーネルやドライバの S‑Record（例: `nitros9_kernel.s19`, `drivers.s19`）
-- デバイスマップの雛形: `docs/en/os9_device_map_templates.md`
+- デバイスマップの雛形: [`em6809-core/docs/ja/os9_device_map_templates.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/os9_device_map_templates.md)
 - ブートスクリプトの雛形: `samples/bootscripts/*.boot`
 
 ## ブート手順（例）
@@ -98,7 +98,7 @@ OS‑9 ソースコード (NitrOS‑9 は MIT 系で公開) の理解と asm 修
 
 ## 参考資料
 
-- デバイスマップの作例: `docs/en/os9_device_map_templates.md`
+- デバイスマップの作例: [`em6809-core/docs/ja/os9_device_map_templates.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/os9_device_map_templates.md)
 - ブートスクリプト雛形: `samples/bootscripts/README.md`, `samples/bootscripts/*.boot`
-- 命令カバレッジ: `docs/ja/instruction_status.md`
+- 命令カバレッジ: [`em6809-core/docs/ja/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/instruction_status.md)
 

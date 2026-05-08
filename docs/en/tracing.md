@@ -24,4 +24,4 @@ Operand conventions (summary)
 
 - Load `samples/traces/trace_all.s19` or `samples/traces/trace_all_startfirst.s19` and observe trace/branches in the GUI.
 
-For instruction coverage and flag semantics, see `docs/en/instruction_status.md`.
+For instruction coverage and flag semantics, see [`em6809-core/docs/en/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/instruction_status.md).

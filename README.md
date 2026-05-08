@@ -36,7 +36,7 @@ em6809 is a software emulator for the MC6809. It provides a GUI with register/me
 - Tracing/Disassembly: `docs/en/tracing.md`
 - OS‑9/NitrOS‑9 guide: `docs/en/os9_guide.md`
 - Troubleshooting: `docs/en/troubleshooting.md`
-- Instruction coverage: `docs/en/instruction_status.md`
+- Instruction coverage: [`em6809-core/docs/en/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/instruction_status.md)
 - Register viewer integration (GUI): `docs/en/regview_integration.md`
 - Environment variables (GUI): see `docs/en/regview_integration.md#environment-variables`
 - Config + boot script interaction: `docs/en/config_and_boot_script.md`

@@ -26,12 +26,22 @@ These topics are bilingual.  Pick the language column you prefer.
 | Tracing & disassembly                | `en/tracing.md`                 | `ja/tracing.md`                |
 | Memory dump editing (GUI)            | `en/memory_editing.md`          | `ja/memory_editing.md`         |
 | Troubleshooting (incl. WSL2 / Linux) | `en/troubleshooting.md`         | `ja/troubleshooting.md`        |
-| Instruction coverage                 | `en/instruction_status.md`      | `ja/instruction_status.md`     |
 | Register viewer integration (GUI)    | `en/regview_integration.md`     | `ja/regview_integration.md`    |
 | GUI stack notes (eframe / egui)      | `en/gui_stack.md`               | `ja/gui_stack.md`              |
 | OS‑9 / NitrOS‑9 guide                | `en/os9_guide.md`               | `ja/os9_guide.md`              |
-| OS‑9 device map templates            | `en/os9_device_map_templates.md`| `ja/os9_device_map_templates.md` |
 | Config + boot script interaction     | `en/config_and_boot_script.md`  | `ja/config_and_boot_script.md` |
+
+### Topics now in em6809-core
+
+The CPU-core reference material lives in
+[hha0x617/em6809-core](https://github.com/hha0x617/em6809-core)
+since it describes the emulator core itself, not the GUI host.
+Linked here for discoverability:
+
+| Topic                       | English                                                                     | 日本語                                                                       |
+|-----------------------------|-----------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| MC6809 instruction coverage | [`em6809-core/docs/en/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/instruction_status.md) | [`em6809-core/docs/ja/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/instruction_status.md) |
+| OS‑9 device map templates   | [`em6809-core/docs/en/os9_device_map_templates.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/os9_device_map_templates.md) | [`em6809-core/docs/ja/os9_device_map_templates.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/os9_device_map_templates.md) |
 
 ### One-line summaries
 
@@ -48,8 +58,6 @@ These topics are bilingual.  Pick the language column you prefer.
 - **Troubleshooting** — common pitfalls; the WSL2 / Linux GUI
   workaround for the WSLg ZINK init failure (`LIBGL_ALWAYS_SOFTWARE=1
   GALLIUM_DRIVER=llvmpipe`) lives in this document.
-- **Instruction coverage** — current MC6809 opcode coverage, flag
-  semantics, and addressing-mode handling.
 - **Register viewer integration** — `--features gui` setup, the
   per-instruction snapshot pattern, listing fallback / Hex view,
   Follow PC, self-modifying-code re-disassembly, and context menu.
@@ -59,9 +67,6 @@ These topics are bilingual.  Pick the language column you prefer.
 - **OS‑9 / NitrOS‑9 guide** — current status (**not yet bootable**),
   the four-block roadmap (hardware emulation, OS‑9 artifacts, memory
   map, integration), and the intended end-state workflow.
-- **OS‑9 device map templates** — recommended I/O page layout,
-  interrupt vector hints, and the timer-at-`$FF10` quick reference
-  with CLI examples.
 - **Config + boot script interaction** — startup ordering of
   `config.toml` / CLI vs. boot scripts, the interaction matrix
   (which Action overrides which configuration field), and the

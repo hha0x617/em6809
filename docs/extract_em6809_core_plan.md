@@ -152,6 +152,15 @@ For minimal churn we **leave docs in em6809** initially and add a
 top-level pointer from em6809-core README; revisit later if the
 core grows its own user-facing docs.
 
+> **Update (after Phase 3):** the "revisit later" point landed
+> sooner than expected.  Both `instruction_status.md` and
+> `os9_device_map_templates.md` (EN + JA) ended up moving to
+> [em6809-core/docs/](https://github.com/hha0x617/em6809-core/tree/main/docs)
+> together with the AI-collaboration provenance notice on the new
+> README.  em6809's `docs/README.md` retains an outbound link
+> table for them.  See em6809-core PR #1 and the matching em6809
+> cleanup PR for the migration commits.
+
 ## API boundary
 
 Today every core module is `pub mod foo;` in `em6809/src/lib.rs`,

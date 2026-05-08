@@ -36,7 +36,7 @@ em6809 は MC6809 のソフトウェアエミュレータです。GUI を中心�
 - トレース/逆アセンブル: `docs/ja/tracing.md`
 - OS‑9/NitrOS‑9 ガイド: `docs/ja/os9_guide.md`
 - トラブルシューティング: `docs/ja/troubleshooting.md`
-- 命令カバレッジ: `docs/ja/instruction_status.md`
+- 命令カバレッジ: [`em6809-core/docs/ja/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/instruction_status.md)
 - レジスタビューア連携（GUI）: `docs/ja/regview_integration.md`
 - 設定とブートスクリプトの相互作用: `docs/ja/config_and_boot_script.md`
 - GUI スタックメモ（eframe / egui、先送りした移行）: `docs/ja/gui_stack.md`

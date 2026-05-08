@@ -78,7 +78,7 @@ is hardest to predict.
 ## Preparation
 
 - S‑Records for kernel and drivers (e.g., `nitros9_kernel.s19`, `drivers.s19`)
-- Device map templates: `docs/en/os9_device_map_templates.md`
+- Device map templates: [`em6809-core/docs/en/os9_device_map_templates.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/os9_device_map_templates.md)
 - Boot script templates: `samples/bootscripts/*.boot`
 
 ## Boot flow (example)
@@ -99,6 +99,6 @@ is hardest to predict.
 
 ## References
 
-- Device map examples: `docs/en/os9_device_map_templates.md`
+- Device map examples: [`em6809-core/docs/en/os9_device_map_templates.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/os9_device_map_templates.md)
 - Boot scripts: `samples/bootscripts/README.md`, `samples/bootscripts/*.boot`
-- Instruction coverage: `docs/en/instruction_status.md`
+- Instruction coverage: [`em6809-core/docs/en/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/en/instruction_status.md)
