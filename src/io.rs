@@ -968,21 +968,32 @@ impl<B: Bus> IoBus<B> {
             }
         }
     }
-    pub fn with_console_mut<F: FnOnce(&mut Mc6850Dev)>(&mut self, f: F) {
+    /// Run `f` against the attached console device, if any.  Returns
+    /// `true` when the closure ran (a console was attached) and
+    /// `false` when no console is attached on this bus — letting
+    /// callers (notably the boot-script runner) detect the
+    /// silent-no-op case where an Action targets a device that
+    /// configuration left unattached.  See
+    /// `docs/en/config_and_boot_script.md` for the rationale.
+    pub fn with_console_mut<F: FnOnce(&mut Mc6850Dev)>(&mut self, f: F) -> bool {
         for d in self.devices.iter_mut() {
             if let Some(c) = d.as_any_mut().downcast_mut::<Mc6850Dev>() {
                 f(c);
-                return;
+                return true;
             }
         }
+        false
     }
-    pub fn with_block_mut<F: FnOnce(&mut BlockDev)>(&mut self, f: F) {
+    /// Run `f` against the attached block device, if any.  Same
+    /// detection semantics as [`Self::with_console_mut`].
+    pub fn with_block_mut<F: FnOnce(&mut BlockDev)>(&mut self, f: F) -> bool {
         for d in self.devices.iter_mut() {
             if let Some(b) = d.as_any_mut().downcast_mut::<BlockDev>() {
                 f(b);
-                return;
+                return true;
             }
         }
+        false
     }
     pub fn inner_any_mut(&mut self) -> &mut dyn Any {
         self.inner.as_any_mut()
