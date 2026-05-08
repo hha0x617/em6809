@@ -24,5 +24,5 @@
 
 - `samples/traces/trace_all.s19` や `samples/traces/trace_all_startfirst.s19` をロードし、GUI でトレース/分岐を確認します。
 
-命令カバレッジやフラグの扱いは `docs/ja/instruction_status.md` を参照してください。
+命令カバレッジやフラグの扱いは [`em6809-core/docs/ja/instruction_status.md`](https://github.com/hha0x617/em6809-core/blob/main/docs/ja/instruction_status.md) を参照してください。
 
