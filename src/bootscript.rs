@@ -225,11 +225,24 @@ fn parse_hex_or_dec_u64(s: &str) -> Option<u64> {
 pub struct BootSequencer {
     triggers: Vec<Trigger>,
     step: u64,
+    /// Number of times a console-targeting Action ran against a bus
+    /// with no console attached.  Drives the one-shot warning for
+    /// footgun B in `docs/en/config_and_boot_script.md`.  Counter
+    /// (rather than a bool) so unit tests can assert the warning
+    /// path fires the expected number of times.
+    console_missing_count: u64,
+    /// Likewise for block-targeting Actions.
+    block_missing_count: u64,
 }
 
 impl BootSequencer {
     pub fn new(triggers: Vec<Trigger>) -> Self {
-        Self { triggers, step: 0 }
+        Self {
+            triggers,
+            step: 0,
+            console_missing_count: 0,
+            block_missing_count: 0,
+        }
     }
     pub fn on_pre_step<B: Bus + ?Sized>(
         &mut self,
@@ -242,7 +255,7 @@ impl BootSequencer {
         for t in ts.iter() {
             match t {
                 Trigger::OnPc(match_pc, act) if *match_pc == pc => {
-                    apply_action(bus, regs_base, act, Some(cpu));
+                    self.apply_action(bus, regs_base, act, Some(cpu));
                 }
                 _ => {}
             }
@@ -254,98 +267,169 @@ impl BootSequencer {
         for t in ts.iter() {
             match t {
                 Trigger::OnStep(n, act) if *n == self.step => {
-                    apply_action(bus, regs_base, act, None);
+                    self.apply_action(bus, regs_base, act, None);
                 }
                 _ => {}
             }
         }
     }
+    /// Total number of times a console-targeting Action found no
+    /// console on the bus.  The first occurrence emits a warning to
+    /// stderr; subsequent occurrences are silent (counter still
+    /// increments).  Exposed for tests and diagnostics.
+    pub fn console_missing_count(&self) -> u64 {
+        self.console_missing_count
+    }
+    /// Same as [`Self::console_missing_count`] for block devices.
+    pub fn block_missing_count(&self) -> u64 {
+        self.block_missing_count
+    }
+    fn note_console_missing(&mut self, action_name: &str) {
+        if self.console_missing_count == 0 {
+            eprintln!(
+                "[bootscript] warning: {action_name} action targets the console, \
+                 but no console device is attached on this bus; the action is a no-op. \
+                 Enable the console in your settings or pass --console <ADDR>. \
+                 (Further occurrences silenced; see docs/en/config_and_boot_script.md.)"
+            );
+        }
+        self.console_missing_count = self.console_missing_count.saturating_add(1);
+    }
+    fn note_block_missing(&mut self, action_name: &str) {
+        if self.block_missing_count == 0 {
+            eprintln!(
+                "[bootscript] warning: {action_name} action targets the block device, \
+                 but no block device is attached on this bus; the action is a no-op. \
+                 Enable the block device in your settings or pass --block <ADDR>. \
+                 (Further occurrences silenced; see docs/en/config_and_boot_script.md.)"
+            );
+        }
+        self.block_missing_count = self.block_missing_count.saturating_add(1);
+    }
 }
 
-fn apply_action<B: Bus + ?Sized>(
-    bus: &mut B,
-    regs_base: u16,
-    act: &Action,
-    cpu_opt: Option<&mut Cpu>,
-) {
-    match act {
-        Action::Mode(sys) => {
-            bus.write8(regs_base + 0x11, if *sys { 1 } else { 0 });
-        }
-        Action::Prot(v) => {
-            bus.write8(regs_base + 0x12, *v);
-        }
-        Action::Map(page, frame) => {
-            bus.write8(regs_base + ((*page as u16) & 0x0F), (*frame & 0xFF) as u8);
-        }
-        Action::Attr(page, val) => {
-            bus.write8(regs_base + 0x18 + ((*page as u16) & 0x0F), *val);
-        }
-        Action::ConCtrl(v) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_console_mut(|c| c.set_ctrl(*v));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_console_mut(|c| c.set_ctrl(*v));
+impl BootSequencer {
+    fn apply_action<B: Bus + ?Sized>(
+        &mut self,
+        bus: &mut B,
+        regs_base: u16,
+        act: &Action,
+        cpu_opt: Option<&mut Cpu>,
+    ) {
+        match act {
+            Action::Mode(sys) => {
+                bus.write8(regs_base + 0x11, if *sys { 1 } else { 0 });
             }
-        }
-        Action::ConRxWm(n) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_console_mut(|c| c.set_rx_watermark(*n));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_console_mut(|c| c.set_rx_watermark(*n));
+            Action::Prot(v) => {
+                bus.write8(regs_base + 0x12, *v);
             }
-        }
-        Action::ConIrqHold(n) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_console_mut(|c| c.set_irq_hold_cycles(*n));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_console_mut(|c| c.set_irq_hold_cycles(*n));
+            Action::Map(page, frame) => {
+                bus.write8(regs_base + ((*page as u16) & 0x0F), (*frame & 0xFF) as u8);
             }
-        }
-        Action::ConFirq(on) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_console_mut(|c| c.set_firq(*on));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_console_mut(|c| c.set_firq(*on));
+            Action::Attr(page, val) => {
+                bus.write8(regs_base + 0x18 + ((*page as u16) & 0x0F), *val);
             }
-        }
-        Action::IrqMask(on) => {
-            if let Some(cpu) = cpu_opt {
-                if *on {
-                    cpu.r.cc |= 0x10;
+            Action::ConCtrl(v) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_console_mut(|c| c.set_ctrl(*v))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_console_mut(|c| c.set_ctrl(*v))
                 } else {
-                    cpu.r.cc &= !0x10;
+                    false
+                };
+                if !attached {
+                    self.note_console_missing("con_ctrl");
                 }
             }
-        }
-        Action::FirqMask(on) => {
-            if let Some(cpu) = cpu_opt {
-                if *on {
-                    cpu.r.cc |= 0x40;
+            Action::ConRxWm(n) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_console_mut(|c| c.set_rx_watermark(*n))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_console_mut(|c| c.set_rx_watermark(*n))
                 } else {
-                    cpu.r.cc &= !0x40;
+                    false
+                };
+                if !attached {
+                    self.note_console_missing("con_rx_wm");
                 }
             }
-        }
-        Action::BlkIrq(on) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_block_mut(|b| b.set_irq_enable(*on));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_block_mut(|b| b.set_irq_enable(*on));
+            Action::ConIrqHold(n) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_console_mut(|c| c.set_irq_hold_cycles(*n))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_console_mut(|c| c.set_irq_hold_cycles(*n))
+                } else {
+                    false
+                };
+                if !attached {
+                    self.note_console_missing("con_irq_hold");
+                }
             }
-        }
-        Action::BlkFirq(on) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_block_mut(|b| b.set_firq(*on));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_block_mut(|b| b.set_firq(*on));
+            Action::ConFirq(on) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_console_mut(|c| c.set_firq(*on))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_console_mut(|c| c.set_firq(*on))
+                } else {
+                    false
+                };
+                if !attached {
+                    self.note_console_missing("con_firq");
+                }
             }
-        }
-        Action::BlkIrqHold(n) => {
-            if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
-                iom.with_block_mut(|b| b.set_irq_hold_cycles(*n));
-            } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
-                iom.with_block_mut(|b| b.set_irq_hold_cycles(*n));
+            Action::IrqMask(on) => {
+                if let Some(cpu) = cpu_opt {
+                    if *on {
+                        cpu.r.cc |= 0x10;
+                    } else {
+                        cpu.r.cc &= !0x10;
+                    }
+                }
+            }
+            Action::FirqMask(on) => {
+                if let Some(cpu) = cpu_opt {
+                    if *on {
+                        cpu.r.cc |= 0x40;
+                    } else {
+                        cpu.r.cc &= !0x40;
+                    }
+                }
+            }
+            Action::BlkIrq(on) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_block_mut(|b| b.set_irq_enable(*on))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_block_mut(|b| b.set_irq_enable(*on))
+                } else {
+                    false
+                };
+                if !attached {
+                    self.note_block_missing("blk_irq");
+                }
+            }
+            Action::BlkFirq(on) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_block_mut(|b| b.set_firq(*on))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_block_mut(|b| b.set_firq(*on))
+                } else {
+                    false
+                };
+                if !attached {
+                    self.note_block_missing("blk_firq");
+                }
+            }
+            Action::BlkIrqHold(n) => {
+                let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
+                    iom.with_block_mut(|b| b.set_irq_hold_cycles(*n))
+                } else if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Mc6829>>() {
+                    iom.with_block_mut(|b| b.set_irq_hold_cycles(*n))
+                } else {
+                    false
+                };
+                if !attached {
+                    self.note_block_missing("blk_irq_hold");
+                }
             }
         }
     }
@@ -402,5 +486,138 @@ pub fn emit_boot_template(name: &str) -> String {
              # on_step N mode user|sys\n"
                 .to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build an IoBus<Memory> with no devices attached.  Console- and
+    /// block-targeting Actions must trigger the silent-no-op guard
+    /// against this bus.
+    fn empty_iobus() -> IoBus<Memory> {
+        IoBus::new(Memory::new())
+    }
+
+    fn fire_on_pc(seq: &mut BootSequencer, bus: &mut IoBus<Memory>, pc: u16) {
+        let mut cpu = Cpu::new();
+        seq.on_pre_step(bus, 0, pc, &mut cpu);
+    }
+
+    #[test]
+    fn con_ctrl_against_no_console_increments_counter_and_skips() {
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::ConCtrl(0x11))]);
+
+        // Fire once: counter goes 0 -> 1, warning is emitted on stderr.
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+        assert_eq!(seq.console_missing_count(), 1);
+
+        // Fire again: counter increments but no second stderr warning.
+        // (The warning suppression is verified by inspection of
+        //  `note_console_missing`; here we just assert the counter
+        //  keeps climbing as expected.)
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+        assert_eq!(seq.console_missing_count(), 2);
+    }
+
+    #[test]
+    fn all_console_actions_are_guarded() {
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![
+            Trigger::OnPc(0xE000, Action::ConCtrl(0x11)),
+            Trigger::OnPc(0xE001, Action::ConRxWm(4)),
+            Trigger::OnPc(0xE002, Action::ConIrqHold(8)),
+            Trigger::OnPc(0xE003, Action::ConFirq(true)),
+        ]);
+
+        for pc in [0xE000_u16, 0xE001, 0xE002, 0xE003] {
+            fire_on_pc(&mut seq, &mut bus, pc);
+        }
+
+        // Every console-class Action should have hit the guard.
+        assert_eq!(seq.console_missing_count(), 4);
+        // Block guard untouched.
+        assert_eq!(seq.block_missing_count(), 0);
+    }
+
+    #[test]
+    fn blk_irq_against_no_block_increments_counter_and_skips() {
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::BlkIrq(true))]);
+
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+        assert_eq!(seq.block_missing_count(), 1);
+        assert_eq!(seq.console_missing_count(), 0);
+
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+        assert_eq!(seq.block_missing_count(), 2);
+    }
+
+    #[test]
+    fn all_block_actions_are_guarded() {
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![
+            Trigger::OnPc(0xE000, Action::BlkIrq(true)),
+            Trigger::OnPc(0xE001, Action::BlkFirq(true)),
+            Trigger::OnPc(0xE002, Action::BlkIrqHold(8)),
+        ]);
+
+        for pc in [0xE000_u16, 0xE001, 0xE002] {
+            fire_on_pc(&mut seq, &mut bus, pc);
+        }
+
+        assert_eq!(seq.block_missing_count(), 3);
+        assert_eq!(seq.console_missing_count(), 0);
+    }
+
+    #[test]
+    fn mmu_actions_do_not_trigger_console_or_block_guards() {
+        // Footgun B is about console / block missing on the bus.
+        // MMU-class Actions write directly via `bus.write8(regs_base + offset, ...)`
+        // and have their own (deferred) guard for footgun C.
+        // Confirm here that they do *not* increment the B counters.
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![
+            Trigger::OnPc(0xE000, Action::Mode(true)),
+            Trigger::OnPc(0xE001, Action::Prot(0x0B)),
+            Trigger::OnPc(0xE002, Action::Map(0x0C, 0xD0)),
+            Trigger::OnPc(0xE003, Action::Attr(0x00, 0x04)),
+        ]);
+
+        for pc in [0xE000_u16, 0xE001, 0xE002, 0xE003] {
+            fire_on_pc(&mut seq, &mut bus, pc);
+        }
+
+        assert_eq!(seq.console_missing_count(), 0);
+        assert_eq!(seq.block_missing_count(), 0);
+    }
+
+    #[test]
+    fn console_action_with_attached_console_does_not_warn() {
+        let mut bus = empty_iobus();
+        // Attach a console at base 0xFF00 so the with_console_mut
+        // closure runs and the guard stays quiet.
+        bus.ensure_console(true, 0xFF00);
+
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::ConCtrl(0x11))]);
+
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+
+        assert_eq!(seq.console_missing_count(), 0);
+    }
+
+    #[test]
+    fn block_action_with_attached_block_does_not_warn() {
+        let mut bus = empty_iobus();
+        bus.ensure_block(true, 0xFF20);
+
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::BlkIrq(true))]);
+
+        fire_on_pc(&mut seq, &mut bus, 0xE000);
+
+        assert_eq!(seq.block_missing_count(), 0);
     }
 }
