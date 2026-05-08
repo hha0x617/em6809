@@ -233,6 +233,15 @@ pub struct BootSequencer {
     console_missing_count: u64,
     /// Likewise for block-targeting Actions.
     block_missing_count: u64,
+    /// Number of times an MMU-class Action (Mode / Prot / Map /
+    /// Attr) ran against a bus with no MMU on it.  Footgun C in
+    /// `docs/en/config_and_boot_script.md`: the previous behaviour
+    /// was to issue `bus.write8(mmu_regs_base + offset, value)`
+    /// unconditionally, which corrupted plain RAM when MMU was off
+    /// (e.g., `prot 0xFF` with the default `mmu_regs_base = 0xFFA0`
+    /// against an `IoBus<Memory>` would write `0xFF` into the byte
+    /// at `0xFFB2`).  We now skip the write and warn once.
+    mmu_missing_count: u64,
 }
 
 impl BootSequencer {
@@ -242,6 +251,7 @@ impl BootSequencer {
             step: 0,
             console_missing_count: 0,
             block_missing_count: 0,
+            mmu_missing_count: 0,
         }
     }
     pub fn on_pre_step<B: Bus + ?Sized>(
@@ -284,6 +294,13 @@ impl BootSequencer {
     pub fn block_missing_count(&self) -> u64 {
         self.block_missing_count
     }
+    /// Total number of times an MMU-class Action found no MMU on
+    /// the bus.  The first occurrence emits a warning to stderr;
+    /// subsequent occurrences are silent (counter still
+    /// increments).  Exposed for tests and diagnostics.
+    pub fn mmu_missing_count(&self) -> u64 {
+        self.mmu_missing_count
+    }
     fn note_console_missing(&mut self, action_name: &str) {
         if self.console_missing_count == 0 {
             eprintln!(
@@ -306,6 +323,28 @@ impl BootSequencer {
         }
         self.block_missing_count = self.block_missing_count.saturating_add(1);
     }
+    fn note_mmu_missing(&mut self, action_name: &str, regs_base: u16) {
+        if self.mmu_missing_count == 0 {
+            eprintln!(
+                "[bootscript] warning: {action_name} action requires an MMU on the bus, \
+                 but none is attached.  The write to ${regs_base:04X}+offset would have \
+                 hit plain RAM; skipping to avoid memory corruption.  Enable the MMU in \
+                 your settings or pass --mmu (and --mmu-reg-base if not the default). \
+                 (Further occurrences silenced; see docs/en/config_and_boot_script.md.)"
+            );
+        }
+        self.mmu_missing_count = self.mmu_missing_count.saturating_add(1);
+    }
+    /// True iff the bus has an MC6829 MMU somewhere we can route
+    /// `bus.write8(regs_base + offset, ...)` through legitimately.
+    /// In production the bus is one of `IoBus<Memory>`,
+    /// `IoBus<Mc6829>`, `Mc6829`, or `Memory` (see
+    /// `src/devices.rs::build_bus`); only the latter two with
+    /// `Mc6829` somewhere route MMU writes correctly.
+    fn bus_has_mmu<B: Bus + ?Sized>(bus: &mut B) -> bool {
+        let any = bus.as_any_mut();
+        any.is::<Mc6829>() || any.is::<IoBus<Mc6829>>()
+    }
 }
 
 impl BootSequencer {
@@ -318,16 +357,32 @@ impl BootSequencer {
     ) {
         match act {
             Action::Mode(sys) => {
-                bus.write8(regs_base + 0x11, if *sys { 1 } else { 0 });
+                if Self::bus_has_mmu(bus) {
+                    bus.write8(regs_base + 0x11, if *sys { 1 } else { 0 });
+                } else {
+                    self.note_mmu_missing("mode", regs_base);
+                }
             }
             Action::Prot(v) => {
-                bus.write8(regs_base + 0x12, *v);
+                if Self::bus_has_mmu(bus) {
+                    bus.write8(regs_base + 0x12, *v);
+                } else {
+                    self.note_mmu_missing("prot", regs_base);
+                }
             }
             Action::Map(page, frame) => {
-                bus.write8(regs_base + ((*page as u16) & 0x0F), (*frame & 0xFF) as u8);
+                if Self::bus_has_mmu(bus) {
+                    bus.write8(regs_base + ((*page as u16) & 0x0F), (*frame & 0xFF) as u8);
+                } else {
+                    self.note_mmu_missing("map", regs_base);
+                }
             }
             Action::Attr(page, val) => {
-                bus.write8(regs_base + 0x18 + ((*page as u16) & 0x0F), *val);
+                if Self::bus_has_mmu(bus) {
+                    bus.write8(regs_base + 0x18 + ((*page as u16) & 0x0F), *val);
+                } else {
+                    self.note_mmu_missing("attr", regs_base);
+                }
             }
             Action::ConCtrl(v) => {
                 let attached = if let Some(iom) = bus.as_any_mut().downcast_mut::<IoBus<Memory>>() {
@@ -574,10 +629,10 @@ mod tests {
 
     #[test]
     fn mmu_actions_do_not_trigger_console_or_block_guards() {
-        // Footgun B is about console / block missing on the bus.
-        // MMU-class Actions write directly via `bus.write8(regs_base + offset, ...)`
-        // and have their own (deferred) guard for footgun C.
-        // Confirm here that they do *not* increment the B counters.
+        // Footgun B (console / block missing) and footgun C (MMU
+        // missing) are tracked on independent counters.  Make sure
+        // an MMU-class Action against a bus without MMU only trips
+        // the C counter, never the B ones.
         let mut bus = empty_iobus();
         let mut seq = BootSequencer::new(vec![
             Trigger::OnPc(0xE000, Action::Mode(true)),
@@ -592,6 +647,8 @@ mod tests {
 
         assert_eq!(seq.console_missing_count(), 0);
         assert_eq!(seq.block_missing_count(), 0);
+        // Footgun C guard fires once per Action.
+        assert_eq!(seq.mmu_missing_count(), 4);
     }
 
     #[test]
@@ -619,5 +676,107 @@ mod tests {
         fire_on_pc(&mut seq, &mut bus, 0xE000);
 
         assert_eq!(seq.block_missing_count(), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // Footgun C: MMU base validation guard.
+    // -------------------------------------------------------------------
+
+    /// Build an `IoBus<Mc6829>` with a real MMU on the bus, so
+    /// `bus_has_mmu` returns true and MMU-class Actions write
+    /// through legitimately.
+    fn mmu_iobus(regs_base: u16) -> IoBus<Mc6829> {
+        IoBus::new(Mc6829::new(64 * 1024, regs_base))
+    }
+
+    /// Standard test base for the MMU register page.  Matches the
+    /// CLI default (`--mmu-reg-base 0xFFA0`).
+    const TEST_REGS_BASE: u16 = 0xFFA0;
+
+    fn fire_on_pc_with_base(seq: &mut BootSequencer, bus: &mut dyn Bus, regs_base: u16, pc: u16) {
+        let mut cpu = Cpu::new();
+        seq.on_pre_step(bus, regs_base, pc, &mut cpu);
+    }
+
+    #[test]
+    fn prot_against_no_mmu_increments_counter_and_skips_write() {
+        // Repro the corruption case from
+        // `docs/en/config_and_boot_script.md`: with the default
+        // `mmu_regs_base = 0xFFA0`, a `prot 0xFF` against a bus
+        // without MMU would have written 0xFF into RAM at 0xFFB2
+        // (= 0xFFA0 + 0x12).  Confirm the byte is left untouched
+        // and the C counter increments by exactly 1.
+        let mut bus = empty_iobus();
+        let target = TEST_REGS_BASE.wrapping_add(0x12);
+        let before = bus.read8(target);
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::Prot(0xFF))]);
+
+        fire_on_pc_with_base(&mut seq, &mut bus, TEST_REGS_BASE, 0xE000);
+
+        assert_eq!(seq.mmu_missing_count(), 1);
+        assert_eq!(
+            bus.read8(target),
+            before,
+            "RAM at ${target:04X} must be unchanged when MMU is missing"
+        );
+    }
+
+    #[test]
+    fn all_mmu_actions_are_guarded_against_no_mmu() {
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![
+            Trigger::OnPc(0xE000, Action::Mode(true)),
+            Trigger::OnPc(0xE001, Action::Prot(0x0B)),
+            Trigger::OnPc(0xE002, Action::Map(0x0C, 0xD0)),
+            Trigger::OnPc(0xE003, Action::Attr(0x00, 0x04)),
+        ]);
+
+        for pc in [0xE000_u16, 0xE001, 0xE002, 0xE003] {
+            fire_on_pc_with_base(&mut seq, &mut bus, TEST_REGS_BASE, pc);
+        }
+
+        assert_eq!(seq.mmu_missing_count(), 4);
+        assert_eq!(seq.console_missing_count(), 0);
+        assert_eq!(seq.block_missing_count(), 0);
+    }
+
+    #[test]
+    fn mmu_action_with_mmu_present_does_not_warn() {
+        let mut bus = mmu_iobus(TEST_REGS_BASE);
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::Prot(0x0B))]);
+
+        fire_on_pc_with_base(&mut seq, &mut bus, TEST_REGS_BASE, 0xE000);
+        fire_on_pc_with_base(&mut seq, &mut bus, TEST_REGS_BASE, 0xE000);
+
+        // Both writes routed through the real MMU.  No warning.
+        assert_eq!(seq.mmu_missing_count(), 0);
+    }
+
+    #[test]
+    fn mmu_actions_with_bare_mc6829_bus_do_not_warn() {
+        // The other Bus variant `build_bus` can return when MMU is
+        // enabled but no I/O devices are requested: a bare
+        // `Mc6829` without an `IoBus` wrapper.  Confirm
+        // `bus_has_mmu` recognises it too.
+        let mut mmu = Mc6829::new(64 * 1024, TEST_REGS_BASE);
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::Mode(true))]);
+
+        fire_on_pc_with_base(&mut seq, &mut mmu, TEST_REGS_BASE, 0xE000);
+
+        assert_eq!(seq.mmu_missing_count(), 0);
+    }
+
+    #[test]
+    fn mmu_guard_fires_once_per_warning_class_then_silently_counts() {
+        // Sanity check: counter keeps climbing even after the
+        // initial stderr warning is suppressed.
+        let mut bus = empty_iobus();
+        let mut seq = BootSequencer::new(vec![Trigger::OnPc(0xE000, Action::Mode(true))]);
+
+        for _ in 0..10 {
+            fire_on_pc_with_base(&mut seq, &mut bus, TEST_REGS_BASE, 0xE000);
+        }
+
+        assert_eq!(seq.mmu_missing_count(), 10);
     }
 }
