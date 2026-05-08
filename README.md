@@ -147,7 +147,8 @@ here.
 ## Contributing and Policies
 
 - Development/Operations: `AGENTS.md`
-- Code of Conduct/Security: `CODE_OF_CONDUCT.md` / `SECURITY.md` (if present)
+- Code of Conduct: `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1)
+- Security: `SECURITY.md`
 
 ## Trademarks
 
