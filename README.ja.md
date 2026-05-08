@@ -38,6 +38,7 @@ em6809 は MC6809 のソフトウェアエミュレータです。GUI を中心�
 - トラブルシューティング: `docs/ja/troubleshooting.md`
 - 命令カバレッジ: `docs/ja/instruction_status.md`
 - レジスタビューア連携（GUI）: `docs/ja/regview_integration.md`
+- 設定とブートスクリプトの相互作用: `docs/ja/config_and_boot_script.md`
 - GUI スタックメモ（eframe / egui、先送りした移行）: `docs/ja/gui_stack.md`
  - GUI の環境変数（フォント/言語）: `docs/ja/usage.md`（「環境変数」節）
 

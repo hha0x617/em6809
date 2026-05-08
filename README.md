@@ -39,6 +39,7 @@ em6809 is a software emulator for the MC6809. It provides a GUI with register/me
 - Instruction coverage: `docs/en/instruction_status.md`
 - Register viewer integration (GUI): `docs/en/regview_integration.md`
 - Environment variables (GUI): see `docs/en/regview_integration.md#environment-variables`
+- Config + boot script interaction: `docs/en/config_and_boot_script.md`
 - GUI stack notes (eframe / egui, deferred migrations): `docs/en/gui_stack.md`
 
 ### Recent GUI viewer enhancements

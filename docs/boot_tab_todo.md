@@ -4,6 +4,12 @@ This document captures the background, open issues, proposed solutions,
 and policy questions for adding a "Boot" (boot-script) tab to the
 Settings dialog.
 
+> For how boot scripts interact with `config.toml` / CLI flags at
+> runtime — startup ordering, interaction matrix, and known
+> footguns — see `docs/en/config_and_boot_script.md` (English,
+> canonical) and `docs/ja/config_and_boot_script.md` (Japanese
+> companion).
+
 ## Why this is not yet implemented
 
 - Conceptual separation: Settings handles "runtime configuration"
