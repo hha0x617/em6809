@@ -139,7 +139,8 @@ GUI 機能の追加は本リポジトリでは予定していません。
 ## 貢献とポリシー
 
 - 開発/運用ルール: `AGENTS.md`
-- 行動規範/セキュリティ: `CODE_OF_CONDUCT.md` / `SECURITY.md`（存在する場合）
+- 行動規範: `CODE_OF_CONDUCT.md`（Contributor Covenant 2.1 準拠）
+- セキュリティ: `SECURITY.md`
 
 ## 商標について
 
