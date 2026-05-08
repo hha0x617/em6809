@@ -83,6 +83,7 @@ contributors deciding whether and how to pick up a feature.
 | `os9_block_stub.md`           | OS‑9 block-I/O driver stub + RBF integration sketch                         |
 | `settings_persistence.md`     | Settings persistence design (CLI > saved > defaults order)                  |
 | `memory_edit_ui.md`           | Memory-dump edit UI design memo — Phase 1 shipped, Phase 2 (ASCII / paste / undo / range) is TODO |
+| `extract_em6809_core_plan.md` | Plan for extracting the headless emulator core into a separate `em6809-core` repo (motivation, module split, 3-phase migration) |
 
 ## How to update these docs
 
